@@ -1650,35 +1650,34 @@ static void mtx_task(void) {
     ui_clear(fbShow, 0x0000);
     char g[4];
 
-    // 2) clock base: each HH:MM dot is the radio "selected" circle (●) in gold.
-    // This is the resting mark left on the digits; a rain head passing over a cell
-    // (step 3) paints the rain glyph on top, so the character reads as rain while
-    // it passes and falls back to the circle once the head moves on.
+    // 2) clock base: draw the radio "unselected" circle (○, gold) only on digit
+    // cells NOT currently under a rain drop. A cell the drop (head..tail) covers is
+    // left to step 3 so it shows the rain glyph — the rain sweeps through and the
+    // circle is only what remains once the drop has fully passed.
     if (have_clock) {
         for (uint8_t c = 0; c < cols; c++) {
             for (uint8_t r = 0; r < rows; r++) {
                 if (!mtx_tmask[c][r]) continue;
+                int16_t rel = mtx_head[c] - (int16_t)r;                   // 0 = head .. trail = tail
+                if (rel >= 0 && rel <= (int16_t)mtx_trail[c]) continue;   // drop covers it -> rain
                 ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
-                              LCD_MENU_RADIO_IND, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
+                              LCD_MENU_RADIO_OFF, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
             }
         }
     }
 
-    // 3) rain: head (bright) + fading trail. Over a clock cell only the HEAD is
-    // drawn — so a passing head lights that digit cell white, then it falls back
-    // to gold once the head moves on; the trail leaves the gold base untouched.
+    // 3) rain: head (bright) + fading trail, drawn everywhere, clock cells included
+    // — a drop passing a digit shows the normal rain glyph there, not the circle.
     for (uint8_t c = 0; c < cols; c++) {
         for (uint8_t k = 0; k <= mtx_trail[c]; k++) {
             int16_t r = (int16_t)(mtx_head[c] - k);
             if (r < 0 || r >= rows) continue;
-            bool is_clock = have_clock && mtx_tmask[c][r];
-            if (is_clock && k != 0) continue;                    // trail keeps the gold base
             mtx_utf8(mtx_glyph[c][r], g);
             int16_t  x = (int16_t)(c * MTX_CELL_W);
             int16_t  y = (int16_t)(r * MTX_CELL_H);
             uint16_t fg;
             uint8_t  a;
-            if (k == 0) { fg = MTX_HEAD_FG; a = 255; }           // head: bright (lights clock cells too)
+            if (k == 0) { fg = MTX_HEAD_FG; a = 255; }
             else        { fg = MTX_TAIL_FG; a = (uint8_t)(((uint16_t)(mtx_trail[c] - k) * 255u) / mtx_trail[c]); }
             ui_text_alpha(fbShow, x, y, g, fg, 0x0000, a);
         }
