@@ -10,6 +10,19 @@
 #    include "rgb_matrix.h"
 #endif
 
+// CapsLock colour / RGB scope are stored in the Vial "layout options" word (same
+// storage the Vial GUI writes). via_get/set_layout_options persist to eeprom;
+// user_eeconfig_init re-parses that word and re-applies indicator colour, RGB
+// scope and debounce. Editing these from the menu keeps GUI and LCD in sync.
+#include "via.h"
+extern void user_eeconfig_init(void);
+
+// Bit layout inside the layout options word (see user_rawhid.c: user_eeconfig_init
+// reads 3 bits at a time, LSB first). bits[0:2]=CapsLock colour, bits[3:5]=scope.
+#define LO_CAPS_SHIFT  0u
+#define LO_SCOPE_SHIFT 3u
+#define LO_FIELD_MASK  0x07u
+
 // ---- effect ids (must match c1_display effect enum) -------------------------
 enum {
     EFF_SLIDE = 0,
@@ -55,6 +68,8 @@ enum {
     VG_RGB_HUE,  // rgb hue level        [0, RGB_HUE_LEVELS)
     VG_RGB_SAT,  // rgb saturation level [0, RGB_SAT_LEVELS)
     VG_RGB_SPD,  // rgb speed level      [0, RGB_SPD_LEVELS)
+    VG_CAPS_COLOR, // capslock indicator colour: index 0..7 (layout options bits[0:2])
+    VG_RGB_SCOPE,  // which leds light: 0=both 1=switches 2=underglow (bits[3:5])
 };
 
 #ifdef RGB_MATRIX_ENABLE
@@ -104,6 +119,8 @@ static uint8_t group_get(uint8_t g) {
         case VG_RGB_HUE:   return hue_to_level(rgb_matrix_get_hue(),   RGB_HUE_LEVELS);
         case VG_RGB_SAT:   return lin_to_level(rgb_matrix_get_sat(),   RGB_SAT_LEVELS, 255);
         case VG_RGB_SPD:   return lin_to_level(rgb_matrix_get_speed(), RGB_SPD_LEVELS, 255);
+        case VG_CAPS_COLOR: return (uint8_t)((via_get_layout_options() >> LO_CAPS_SHIFT)  & LO_FIELD_MASK);
+        case VG_RGB_SCOPE:  return (uint8_t)((via_get_layout_options() >> LO_SCOPE_SHIFT) & LO_FIELD_MASK);
 #endif
         default:           return 0xFF;
     }
@@ -128,6 +145,20 @@ static void group_set(uint8_t g, uint8_t v) {
         case VG_RGB_HUE:   rgb_matrix_sethsv(level_to_hue(v, RGB_HUE_LEVELS), rgb_matrix_get_sat(), rgb_matrix_get_val()); break;
         case VG_RGB_SAT:   rgb_matrix_sethsv(rgb_matrix_get_hue(), level_to_lin(v, RGB_SAT_LEVELS, 255), rgb_matrix_get_val()); break;
         case VG_RGB_SPD:   rgb_matrix_set_speed(level_to_lin(v, RGB_SPD_LEVELS, 255)); break;
+        case VG_CAPS_COLOR: {
+            uint32_t lo = via_get_layout_options();
+            lo = (lo & ~((uint32_t)LO_FIELD_MASK << LO_CAPS_SHIFT)) | (((uint32_t)v & LO_FIELD_MASK) << LO_CAPS_SHIFT);
+            via_set_layout_options(lo); // persists to eeprom
+            user_eeconfig_init();       // re-parse + apply immediately
+            break;
+        }
+        case VG_RGB_SCOPE: {
+            uint32_t lo = via_get_layout_options();
+            lo = (lo & ~((uint32_t)LO_FIELD_MASK << LO_SCOPE_SHIFT)) | (((uint32_t)v & LO_FIELD_MASK) << LO_SCOPE_SHIFT);
+            via_set_layout_options(lo);
+            user_eeconfig_init();
+            break;
+        }
 #endif
         default: break;
     }
@@ -168,7 +199,7 @@ static void u8_to_str(uint16_t n, char *out) {
 // Rough budget: root + effect submenus + value pickers (ghost/zoom/dir/iv/hold/
 // twn/ft) + the small RGB submenu. Large RGB lists (effect/hue/val/...) are
 // *generated* (see below) and cost no pool slots. Keep headroom.
-#define MENU_ITEM_POOL 80
+#define MENU_ITEM_POOL 96
 
 static menu_item_t item_pool[MENU_ITEM_POOL];
 static uint8_t     item_pool_used;
@@ -261,6 +292,8 @@ enum {
     MI_RGB_HUE,
     MI_RGB_SAT,
     MI_RGB_SPD,
+    MI_RGB_CAPS,
+    MI_RGB_SCOPE,
 };
 
 // dynamic value-picker ids: unique per (group, index)
@@ -355,6 +388,15 @@ static void gen_rgb_hue(uint8_t idx, menu_item_t *out, char *label) {
     label[k] = 0;
     fill_radio(out, MI_DYN(VG_RGB_HUE, idx), label, VG_RGB_HUE, idx);
 }
+
+// Fixed radio lists for the CapsLock colour and the RGB scope. Order/index must
+// match the Vial layout-options encoding parsed in user_rawhid.c:
+//   caps colour index -> indicator_hue_preset[] (0=white .. 7=disabled)
+//   scope: 0=both, 1=switches only, 2=underglow only
+static const char *const caps_color_labels[] = {
+    "WHITE", "RED", "YELLOW", "GREEN", "CYAN", "BLUE", "VIOLET", "OFF",
+};
+#define CAPS_COLOR_COUNT (sizeof(caps_color_labels) / sizeof(caps_color_labels[0]))
 #endif // RGB_MATRIX_ENABLE
 
 static void build_enum_node(menu_node_id_t nid, uint8_t group, uint8_t count, const char *const *labels) {
@@ -438,6 +480,9 @@ void menu_model_init(void) {
     node_add(MN_RGB, MI_RGB_HUE,    "HUE",    MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_HUE);
     node_add(MN_RGB, MI_RGB_SAT,    "SAT",    MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_SAT);
     node_add(MN_RGB, MI_RGB_SPD,    "SPEED",  MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_SPD);
+    // CapsLock indicator colour + which LEDs light up (persisted in layout options).
+    node_add(MN_RGB, MI_RGB_CAPS,   "CAPS",   MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_CAPS);
+    node_add(MN_RGB, MI_RGB_SCOPE,  "RGB FOR",MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_SCOPE);
 
     // Large / continuous RGB lists are generated on demand (no pool cost).
     rgb_mode_order_init(); // sort the effect list alphabetically for display
@@ -446,6 +491,15 @@ void menu_model_init(void) {
     node_set_gen(MN_RGB_HUE,    RGB_HUE_LEVELS,          gen_rgb_hue);
     node_set_gen(MN_RGB_SAT,    RGB_SAT_LEVELS,          gen_rgb_sat);
     node_set_gen(MN_RGB_SPD,    RGB_SPD_LEVELS,          gen_rgb_spd);
+
+    // Small fixed radio lists (static pool, like ghost/zoom/whirl above).
+    build_enum_node(MN_RGB_CAPS,  VG_CAPS_COLOR, (uint8_t)CAPS_COLOR_COUNT, caps_color_labels);
+    // RGB scope: keep display order Both/Switch/Glow, but swap the value each label
+    // maps to (SWITCH->2, GLOW->1) so the on-screen label matches the LEDs that
+    // actually light on this board.
+    node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 0), "BOTH",   MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 0, 0);
+    node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 2), "SWITCH", MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 2, 0);
+    node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 1), "GLOW",   MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 1, 0);
 #endif
 }
 

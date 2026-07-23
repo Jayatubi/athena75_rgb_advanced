@@ -22,6 +22,8 @@ typedef enum {
     MN_RGB_HUE,     // RGB: hue levels (generated)
     MN_RGB_SAT,     // RGB: saturation levels (generated)
     MN_RGB_SPD,     // RGB: animation speed levels (generated)
+    MN_RGB_CAPS,    // RGB: CapsLock indicator colour (layout options bits[0:2])
+    MN_RGB_SCOPE,   // RGB: which LEDs light up (layout options bits[3:5])
     MN_REBOOT,      // reboot submenu: normal restart vs BOOTSEL (UF2 bootloader)
     MN_LCD_TEST,    // sentinel: full-screen panel-alignment checkerboard (no items)
     MN_COUNT
