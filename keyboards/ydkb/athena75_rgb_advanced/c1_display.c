@@ -1523,6 +1523,7 @@ int16_t lcd_capture_dim(void) { return ANIM_SIZE; }
 #define MTX_TAIL_FG  0x07E0                   // trail: pure green (alpha fades it)
 #define MTX_CLOCK_FG 0xFEA0                   // clock watermark: bright gold (contrasts the green)
 #define MTX_CLOCK_A  255                      // clock glyph alpha
+#define MTX_CLOCK_DOT "\xE2\x80\xA2"          // U+2022 • bullet: the digit's resting dot
 
 // Host-synced wall clock (no RTC on the board). The time is always base + (now
 // uptime - sync uptime) -- never a delta accumulation. At boot base = 00:00 and
@@ -1650,10 +1651,10 @@ static void mtx_task(void) {
     ui_clear(fbShow, 0x0000);
     char g[4];
 
-    // 2) clock base: draw the radio "unselected" circle (○, gold) only on digit
-    // cells NOT currently under a rain drop. A cell the drop (head..tail) covers is
-    // left to step 3 so it shows the rain glyph — the rain sweeps through and the
-    // circle is only what remains once the drop has fully passed.
+    // 2) clock base: draw the resting dot (•, gold) only on digit cells NOT
+    // currently under a rain drop. A cell the drop (head..tail) covers is left to
+    // step 3 so it shows the rain glyph — the rain sweeps through and the dot is
+    // only what remains once the drop has fully passed.
     if (have_clock) {
         for (uint8_t c = 0; c < cols; c++) {
             for (uint8_t r = 0; r < rows; r++) {
@@ -1661,7 +1662,7 @@ static void mtx_task(void) {
                 int16_t rel = mtx_head[c] - (int16_t)r;                   // 0 = head .. trail = tail
                 if (rel >= 0 && rel <= (int16_t)mtx_trail[c]) continue;   // drop covers it -> rain
                 ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
-                              LCD_MENU_RADIO_OFF, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
+                              MTX_CLOCK_DOT, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
             }
         }
     }
