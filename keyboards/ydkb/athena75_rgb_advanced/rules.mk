@@ -16,7 +16,7 @@ QUANTUM_PAINTER_DRIVERS  = gc9107_spi surface
 
 # Display data (boot splash is loaded from the flash boot slot, not compiled in)
 SRC +=  gfx/menu_font.c \
-        menu.c menu_model.c ui_scene.c
+        menu.c menu_model.c ui_scene.c dialog.c
 
 # 16M FLASH
 # LDFLAGS += -Xlinker --defsym=FLASH_LEN=16384k

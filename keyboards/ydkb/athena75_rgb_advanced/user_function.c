@@ -24,6 +24,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "c1.h"
 #include "config.h"
 #include "menu.h"
+#include "dialog.h"
 
 void reboot(bool bootloader)
 {
@@ -97,19 +98,30 @@ void menu_input_reset(void) {
     gif_rpt_armed   = false;
 }
 
+// The firmware-flash confirmation is just a generic dialog: FLASH (default focus,
+// reboots to the UF2 bootloader) and CANCEL (negative -> Esc / 10s timeout). The
+// host (host_tool upload) raises it over raw-HID before flashing.
+static void flash_do_accept(void) { reboot(true); } // -> BOOTSEL (does not return)
+
+void flash_prompt_request(void) {
+    static const dialog_desc_t d = {
+        .title      = "FLASH FW",
+        .message    = "Update firmware?",
+        .buttons    = { { "FLASH", flash_do_accept }, { "CANCEL", NULL } },
+        .n_buttons  = 2,
+        .def_focus  = 0,                 // default: FLASH
+        .negative   = 1,                 // Esc / timeout: CANCEL
+        .timeout_ms = LCD_FLASH_PROMPT_MS,
+    };
+    dialog_open(&d);
+}
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    // Host flash-confirm prompt: swallow all input while it is up. Enter accepts
-    // (reboot into the UF2 bootloader so the host can flash); Esc cancels; a 10s
-    // no-input timeout also cancels (handled on core1). Checked before the menu so
-    // the prompt takes over regardless of what was on screen.
-    if (flash_prompt_is_active()) {
-        if (record->event.pressed) {
-            if (keycode == KC_ENTER || keycode == KC_KP_ENTER) {
-                reboot(true);            // accept -> BOOTSEL (does not return)
-            } else if (keycode == KC_ESCAPE) {
-                flash_prompt_cancel();   // decline
-            }
-        }
+    // Modal dialog: swallow all input while it is up and feed it the keys (focus
+    // move / activate / cancel). Checked before the menu so it takes over whatever
+    // is on screen.
+    if (dialog_is_active()) {
+        dialog_process_key(keycode, record->event.pressed);
         return false;
     }
 
@@ -181,6 +193,11 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 }
 
 void housekeeping_task_user(void) {
+    if (dialog_is_active()) {
+        dialog_task();          // drives the idle timeout (fires the negative button)
+        return;
+    }
+
     if (menu_is_active()) {
         menu_housekeeping_task();
         return;

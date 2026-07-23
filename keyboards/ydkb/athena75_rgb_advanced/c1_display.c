@@ -10,6 +10,7 @@
 #include "ui.h"
 #include "menu.h"
 #include "menu_model.h"
+#include "dialog.h"
 
 #include "color.h"
 #include "config.h"
@@ -27,13 +28,6 @@ painter_device_t display;
 static bool now_lcd_off = 0;
 static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
 
-// Host-initiated firmware-flash confirmation prompt (host_tool upload). core0
-// (raw-HID) raises it before requesting BOOTSEL; core1 force-wakes the panel,
-// interrupts whatever is on screen and draws a menu-styled dialog; core0 then
-// intercepts input. Enter = accept (reboot to BOOTSEL), Esc / 10s timeout =
-// cancel. A single volatile byte (single-byte writes are atomic on M0+): core0
-// sets it, core0 clears it on Esc, core1 clears it on timeout.
-static volatile uint8_t flash_prompt = 0; // 0 = idle, 1 = prompt up
 
 // ---- MCU real-time tweening ----
 // Flash slot holds only keyframes (RLE QGF). core1 decodes two keyframes into
@@ -562,15 +556,10 @@ void display_init(void)
 }
 bool lcd_is_on(void)
 {
-    // The flash prompt must run even from a manually powered-off panel, so keep
-    // the core1 render loop alive while it is up (it force-wakes the panel).
-    return (boot_displaying || (now_lcd_off == 0) || flash_prompt != 0);
+    // A modal dialog must run even from a manually powered-off panel, so keep the
+    // core1 render loop alive while one is up (it force-wakes the panel).
+    return (boot_displaying || (now_lcd_off == 0) || dialog_is_active());
 }
-
-// ---- Host firmware-flash confirmation prompt (core0 API, see c1.h) -----------
-void flash_prompt_request(void)   { flash_prompt = 1; }
-bool flash_prompt_is_active(void) { return flash_prompt != 0; }
-void flash_prompt_cancel(void)    { flash_prompt = 0; }
 
 ////////////////////////////////////////////////////////////////////////////////
 // MCU real-time tweening: read uncompressed keyframes straight from XIP flash,
@@ -1696,11 +1685,13 @@ static void mtx_task(void) {
     ui_present(fbShow);
 }
 
-// ---- Host firmware-flash confirmation prompt (core1 render) ------------------
-// A self-contained, menu-styled dialog (same palette/frame/title-bar as the menu)
-// drawn straight into fbShow; not part of the retained-mode scene. text_a fades
-// the text in on entrance for a bit of polish.
-static void flash_prompt_render(uint8_t sec_left, uint8_t text_a) {
+// ---- Generic modal dialog (core1 render) ------------------------------------
+// Draws the active dialog (dialog.c) straight into fbShow in the menu's style
+// (same frame / white title bar / palette); not part of the retained-mode scene.
+// Buttons stack vertically, one per row; the focused row gets the menu highlight
+// box, a "negative" button reads red. text_a fades the whole thing in on entry.
+static void dialog_render(uint8_t text_a) {
+    const dialog_desc_t *d = dialog_desc();
     uint8_t      *fb = fbShow;
     const int16_t W  = ui_vw();
     const int16_t H  = ui_vh();
@@ -1709,66 +1700,74 @@ static void flash_prompt_render(uint8_t sec_left, uint8_t text_a) {
 
     ui_clear(fb, 0x0000);
     ui_wire_rect(fb, 0, 0, W, H, 0x4208);           // outer frame
-    ui_fill_rect(fb, B, B, (int16_t)(W - 2 * B), TB, 0xFFFF);   // white title bar
-    ui_hline(fb, B, (int16_t)(B + TB), (int16_t)(W - 2 * B), 0x4208); // separator
+    ui_fill_rect(fb, B, B, (int16_t)(W - 2 * B), TB, 0xFFFF);          // white title bar
+    ui_hline(fb, B, (int16_t)(B + TB), (int16_t)(W - 2 * B), 0x4208);  // separator
 
-    // centred black title on the bar
-    const char *title = "FLASH FW";
-    ui_text_alpha(fb, (int16_t)((W - ui_text_width(title)) / 2), (int16_t)(B + 1),
-                  title, 0x0000, 0xFFFF, 255);
+    if (d->title)
+        ui_text_alpha(fb, (int16_t)((W - ui_text_width(d->title)) / 2), (int16_t)(B + 1),
+                      d->title, 0x0000, 0xFFFF, 255);   // centred black title on the bar
 
-    int16_t xl = (int16_t)(LCD_MENU_PAD_X + B + 2);            // left column
-    int16_t y  = (int16_t)(B + TB + 6);
+    int16_t y = (int16_t)(B + TB + 6);
+    if (d->message) {
+        ui_text_alpha(fb, (int16_t)((W - ui_text_width(d->message)) / 2), y,
+                      d->message, 0xFFFF, 0x0000, text_a);
+    }
+    y += 20;
 
-    const char *msg = "Update firmware?";
-    ui_text_alpha(fb, (int16_t)((W - ui_text_width(msg)) / 2), y, msg, 0xFFFF, 0x0000, text_a);
-    y += 22;
+    // Buttons: centred, one per row; focused row highlighted, negative reads red.
+    uint8_t focus = dialog_focus();
+    for (uint8_t i = 0; i < d->n_buttons; i++) {
+        const char *lbl = d->buttons[i].label ? d->buttons[i].label : "";
+        if (i == focus) {
+            ui_fill_rect(fb, (int16_t)(B + 1), (int16_t)(y - 2),
+                         (int16_t)(W - 2 * B - 2), LCD_MENU_ITEM_H, 0x1082);
+            ui_wire_rect(fb, B, (int16_t)(y - 2),
+                         (int16_t)(W - 2 * B), LCD_MENU_ITEM_H, 0xFFFF);
+        }
+        uint16_t fg = (i == d->negative) ? 0xF9A0 : 0xFFFF;
+        ui_text_alpha(fb, (int16_t)((W - ui_text_width(lbl)) / 2), y, lbl, fg, 0x0000, text_a);
+        y += LCD_MENU_ITEM_H;
+    }
 
-    // ENTER = flash  (green accent, like the menu's radio mark)
-    ui_text_alpha(fb, xl, y, LCD_MENU_ARROW_R " ENTER", LCD_MENU_RADIO_FG, 0x0000, text_a);
-    ui_text_alpha(fb, (int16_t)(W - xl - ui_text_width("flash")), y, "flash", 0xFFFF, 0x0000, text_a);
-    y += 16;
-    // ESC = cancel  (red accent)
-    ui_text_alpha(fb, xl, y, LCD_MENU_ARROW_R " ESC", 0xF9A0, 0x0000, text_a);
-    ui_text_alpha(fb, (int16_t)(W - xl - ui_text_width("cancel")), y, "cancel", 0xFFFF, 0x0000, text_a);
-
-    // countdown (dim grey), bottom
-    char buf[16];
-    uint8_t i = 0;
-    for (const char *p = "cancel in "; *p; p++) buf[i++] = *p;
-    if (sec_left >= 10) buf[i++] = (char)('0' + sec_left / 10);
-    buf[i++] = (char)('0' + sec_left % 10);
-    buf[i++] = 's';
-    buf[i]   = 0;
-    ui_text_alpha(fb, (int16_t)((W - ui_text_width(buf)) / 2),
-                  (int16_t)(H - B - 13), buf, 0x8410, 0x0000, text_a);
+    // Countdown (dim grey, bottom) — only when the dialog has a timeout.
+    if (d->timeout_ms) {
+        uint8_t sec = (uint8_t)((dialog_remaining_ms() + 999) / 1000);
+        char buf[16];
+        uint8_t k = 0;
+        for (const char *p = "auto in "; *p; p++) buf[k++] = *p;
+        if (sec >= 10) buf[k++] = (char)('0' + sec / 10);
+        buf[k++] = (char)('0' + sec % 10);
+        buf[k++] = 's';
+        buf[k]   = 0;
+        ui_text_alpha(fb, (int16_t)((W - ui_text_width(buf)) / 2),
+                      (int16_t)(H - B - 13), buf, 0x8410, 0x0000, text_a);
+    }
 
     ui_present(fb);
 }
 
-// Drive the prompt: entrance (force-wake), per-tick render, 10s auto-cancel and
+// Drive the dialog on core1: entrance (force-wake + fade), per-tick render, and
 // teardown (restore the panel we interrupted, then hand back to the renderer).
+// The dialog's own logic (focus/timeout/actions) runs on core0 (dialog.c).
 // Returns true while it owns the frame (including the single teardown tick).
-static bool flash_prompt_tick(void) {
-    static bool     on   = false;
-    static bool     woke = false;
-    static uint32_t t0   = 0;
+static bool dialog_render_tick(void) {
+    static bool     on    = false;
+    static bool     woke  = false;
+    static uint32_t tshow = 0;
 
-    if (flash_prompt) {
+    if (dialog_is_active()) {
         if (!on) {                                  // entrance
-            on   = true;
-            t0   = timer_read32();
-            woke = false;
+            on    = true;
+            tshow = timer_read32();
+            woke  = false;
             if (now_lcd_off || lcd_idle_off) { lcd_switch(true); woke = true; }
         }
-        uint32_t el = timer_elapsed32(t0);
-        if (el >= LCD_FLASH_PROMPT_MS) { flash_prompt = 0; el = LCD_FLASH_PROMPT_MS; } // timeout
-        uint8_t sec = (uint8_t)((LCD_FLASH_PROMPT_MS - el + 999) / 1000);
-        uint8_t ta  = (el >= LCD_MENU_FADE_MS) ? 255 : (uint8_t)(el * 255u / LCD_MENU_FADE_MS);
-        flash_prompt_render(sec, ta);
+        uint32_t el = timer_elapsed32(tshow);
+        uint8_t  ta = (el >= LCD_MENU_FADE_MS) ? 255 : (uint8_t)(el * 255u / LCD_MENU_FADE_MS);
+        dialog_render(ta);
         return true;
     }
-    if (on) {                                       // teardown after Esc / timeout
+    if (on) {                                       // teardown after a button fired
         on = false;
         if (woke) lcd_switch(false);                // restore the off state we broke into
         anim_step  = -1;                            // restart the tween renderer
@@ -1793,10 +1792,10 @@ void display_task_user(void)
     }
     lcd_capture_frozen = false;
 
-    // Host firmware-flash confirmation prompt: highest priority. It force-wakes
-    // the panel and interrupts every mode (slide/matrix/menu), so it runs before
-    // the lcd_off early-out and the idle-sleep logic below.
-    if (flash_prompt_tick()) return;
+    // Modal dialog: highest priority. It force-wakes the panel and interrupts
+    // every mode (slide/matrix/menu), so it runs before the lcd_off early-out and
+    // the idle-sleep logic below.
+    if (dialog_render_tick()) return;
 
     if (!boot_displaying && user_eeconfig.lcd_off) return;
 
