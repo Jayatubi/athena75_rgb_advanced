@@ -27,6 +27,14 @@ painter_device_t display;
 static bool now_lcd_off = 0;
 static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
 
+// Host-initiated firmware-flash confirmation prompt (host_tool upload). core0
+// (raw-HID) raises it before requesting BOOTSEL; core1 force-wakes the panel,
+// interrupts whatever is on screen and draws a menu-styled dialog; core0 then
+// intercepts input. Enter = accept (reboot to BOOTSEL), Esc / 10s timeout =
+// cancel. A single volatile byte (single-byte writes are atomic on M0+): core0
+// sets it, core0 clears it on Esc, core1 clears it on timeout.
+static volatile uint8_t flash_prompt = 0; // 0 = idle, 1 = prompt up
+
 // ---- MCU real-time tweening ----
 // Flash slot holds only keyframes (RLE QGF). core1 decodes two keyframes into
 // RAM and synthesizes the in-between frames each tick, then streams to the panel.
@@ -554,8 +562,15 @@ void display_init(void)
 }
 bool lcd_is_on(void)
 {
-    return (boot_displaying || (now_lcd_off == 0));
+    // The flash prompt must run even from a manually powered-off panel, so keep
+    // the core1 render loop alive while it is up (it force-wakes the panel).
+    return (boot_displaying || (now_lcd_off == 0) || flash_prompt != 0);
 }
+
+// ---- Host firmware-flash confirmation prompt (core0 API, see c1.h) -----------
+void flash_prompt_request(void)   { flash_prompt = 1; }
+bool flash_prompt_is_active(void) { return flash_prompt != 0; }
+void flash_prompt_cancel(void)    { flash_prompt = 0; }
 
 ////////////////////////////////////////////////////////////////////////////////
 // MCU real-time tweening: read uncompressed keyframes straight from XIP flash,
@@ -1681,6 +1696,88 @@ static void mtx_task(void) {
     ui_present(fbShow);
 }
 
+// ---- Host firmware-flash confirmation prompt (core1 render) ------------------
+// A self-contained, menu-styled dialog (same palette/frame/title-bar as the menu)
+// drawn straight into fbShow; not part of the retained-mode scene. text_a fades
+// the text in on entrance for a bit of polish.
+static void flash_prompt_render(uint8_t sec_left, uint8_t text_a) {
+    uint8_t      *fb = fbShow;
+    const int16_t W  = ui_vw();
+    const int16_t H  = ui_vh();
+    const int16_t B  = LCD_MENU_BORDER;
+    const int16_t TB = 15;                          // title-bar height (matches the menu)
+
+    ui_clear(fb, 0x0000);
+    ui_wire_rect(fb, 0, 0, W, H, 0x4208);           // outer frame
+    ui_fill_rect(fb, B, B, (int16_t)(W - 2 * B), TB, 0xFFFF);   // white title bar
+    ui_hline(fb, B, (int16_t)(B + TB), (int16_t)(W - 2 * B), 0x4208); // separator
+
+    // centred black title on the bar
+    const char *title = "FLASH FW";
+    ui_text_alpha(fb, (int16_t)((W - ui_text_width(title)) / 2), (int16_t)(B + 1),
+                  title, 0x0000, 0xFFFF, 255);
+
+    int16_t xl = (int16_t)(LCD_MENU_PAD_X + B + 2);            // left column
+    int16_t y  = (int16_t)(B + TB + 6);
+
+    const char *msg = "Update firmware?";
+    ui_text_alpha(fb, (int16_t)((W - ui_text_width(msg)) / 2), y, msg, 0xFFFF, 0x0000, text_a);
+    y += 22;
+
+    // ENTER = flash  (green accent, like the menu's radio mark)
+    ui_text_alpha(fb, xl, y, LCD_MENU_ARROW_R " ENTER", LCD_MENU_RADIO_FG, 0x0000, text_a);
+    ui_text_alpha(fb, (int16_t)(W - xl - ui_text_width("flash")), y, "flash", 0xFFFF, 0x0000, text_a);
+    y += 16;
+    // ESC = cancel  (red accent)
+    ui_text_alpha(fb, xl, y, LCD_MENU_ARROW_R " ESC", 0xF9A0, 0x0000, text_a);
+    ui_text_alpha(fb, (int16_t)(W - xl - ui_text_width("cancel")), y, "cancel", 0xFFFF, 0x0000, text_a);
+
+    // countdown (dim grey), bottom
+    char buf[16];
+    uint8_t i = 0;
+    for (const char *p = "cancel in "; *p; p++) buf[i++] = *p;
+    if (sec_left >= 10) buf[i++] = (char)('0' + sec_left / 10);
+    buf[i++] = (char)('0' + sec_left % 10);
+    buf[i++] = 's';
+    buf[i]   = 0;
+    ui_text_alpha(fb, (int16_t)((W - ui_text_width(buf)) / 2),
+                  (int16_t)(H - B - 13), buf, 0x8410, 0x0000, text_a);
+
+    ui_present(fb);
+}
+
+// Drive the prompt: entrance (force-wake), per-tick render, 10s auto-cancel and
+// teardown (restore the panel we interrupted, then hand back to the renderer).
+// Returns true while it owns the frame (including the single teardown tick).
+static bool flash_prompt_tick(void) {
+    static bool     on   = false;
+    static bool     woke = false;
+    static uint32_t t0   = 0;
+
+    if (flash_prompt) {
+        if (!on) {                                  // entrance
+            on   = true;
+            t0   = timer_read32();
+            woke = false;
+            if (now_lcd_off || lcd_idle_off) { lcd_switch(true); woke = true; }
+        }
+        uint32_t el = timer_elapsed32(t0);
+        if (el >= LCD_FLASH_PROMPT_MS) { flash_prompt = 0; el = LCD_FLASH_PROMPT_MS; } // timeout
+        uint8_t sec = (uint8_t)((LCD_FLASH_PROMPT_MS - el + 999) / 1000);
+        uint8_t ta  = (el >= LCD_MENU_FADE_MS) ? 255 : (uint8_t)(el * 255u / LCD_MENU_FADE_MS);
+        flash_prompt_render(sec, ta);
+        return true;
+    }
+    if (on) {                                       // teardown after Esc / timeout
+        on = false;
+        if (woke) lcd_switch(false);                // restore the off state we broke into
+        anim_step  = -1;                            // restart the tween renderer
+        mtx_seeded = false;                         // re-seed MATRIX if that's the mode
+        return true;
+    }
+    return false;
+}
+
 void display_task_user(void)
 {
     // Screenshot freeze: hold the shown frame so core0 can read it tear-free.
@@ -1695,6 +1792,11 @@ void display_task_user(void)
         lcd_capture_freeze = false; // host gone: resume
     }
     lcd_capture_frozen = false;
+
+    // Host firmware-flash confirmation prompt: highest priority. It force-wakes
+    // the panel and interrupts every mode (slide/matrix/menu), so it runs before
+    // the lcd_off early-out and the idle-sleep logic below.
+    if (flash_prompt_tick()) return;
 
     if (!boot_displaying && user_eeconfig.lcd_off) return;
 

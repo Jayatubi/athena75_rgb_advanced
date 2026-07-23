@@ -48,6 +48,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // the MATRIX rain's dimmed HH:MM watermark. Re-sync on connect / periodically.
 #define CLK_CMD  0x5E
 
+// Raw-HID flash-confirm prompt (0xFD 0x5F 0xF1 0x55). host_tool upload raises this
+// before flashing: the LCD wakes, interrupts the current screen and asks the user
+// to accept (Enter -> BOOTSEL) or cancel (Esc / 10s timeout). Magic bytes guard it.
+#define FLASH_CMD 0x5F
+#define FLASH_M0  0xF1
+#define FLASH_M1  0x55
+
 #ifndef LED_TYPE
 #define LED_TYPE rgb_led_t
 #endif
@@ -154,6 +161,13 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             // 0xFD 0x5E HH MM SS: set the wall clock (MATRIX HH:MM watermark).
             if (data[2] < 24 && data[3] < 60 && data[4] < 60) {
                 lcd_clock_set(data[2], data[3], data[4]);
+            }
+        } else if (data[1] == FLASH_CMD) {
+            // 0xFD 0x5F 0xF1 0x55: raise the on-screen flash-confirm prompt so the
+            // user can accept (Enter -> BOOTSEL) or cancel before the host flashes.
+            // The two magic bytes guard against an accidental trigger.
+            if (data[2] == FLASH_M0 && data[3] == FLASH_M1) {
+                flash_prompt_request();
             }
         }
     }

@@ -98,6 +98,21 @@ void menu_input_reset(void) {
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // Host flash-confirm prompt: swallow all input while it is up. Enter accepts
+    // (reboot into the UF2 bootloader so the host can flash); Esc cancels; a 10s
+    // no-input timeout also cancels (handled on core1). Checked before the menu so
+    // the prompt takes over regardless of what was on screen.
+    if (flash_prompt_is_active()) {
+        if (record->event.pressed) {
+            if (keycode == KC_ENTER || keycode == KC_KP_ENTER) {
+                reboot(true);            // accept -> BOOTSEL (does not return)
+            } else if (keycode == KC_ESCAPE) {
+                flash_prompt_cancel();   // decline
+            }
+        }
+        return false;
+    }
+
     if (menu_is_active()) {
         menu_process_key(keycode, record->event.pressed);
         return false;

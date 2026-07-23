@@ -59,6 +59,14 @@ uint8_t  menu_bind_get_display(void);
 // MATRIX rain's dimmed HH:MM watermark.
 void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss);
 
+// Host firmware-flash confirmation prompt (raw-HID 0xFD 0x5F ...). The host asks
+// before flashing; core1 force-wakes the panel and shows a menu-styled dialog,
+// core0 intercepts input. Enter = accept (reboot to BOOTSEL), Esc / 10s timeout
+// = cancel. request() raises it (core0/HID); is_active()/cancel() drive input.
+void flash_prompt_request(void);
+bool flash_prompt_is_active(void);
+void flash_prompt_cancel(void);
+
 /* user config saved in eeprom */
 typedef union {
     uint32_t raw;

@@ -1,14 +1,18 @@
 // Copyright 2026 YANG
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// upload: put the Athena75 RGB (advanced) into the RP2040 UF2 bootloader over USB
-// (raw-HID 0xFD 0x5D 0xB0 0x07) and copy a UF2 onto the RPI-RP2 drive. Any UF2
-// works because each carries its own target flash address (firmware / boot anim /
-// keyframes). Native only (Windows SetupAPI+hid.dll, macOS IOKit) - no deps.
+// upload: flash a UF2 to the Athena75 RGB (advanced) over USB. By default it does
+// NOT force BOOTSEL: it raises an on-screen "Update firmware?" prompt (raw-HID
+// 0xFD 0x5F ...) so the user can accept (Enter -> BOOTSEL) or decline (Esc / 10s
+// timeout) before their session is interrupted. On accept the board re-enumerates
+// as RPI-RP2 and the chosen UF2 is copied over. Any UF2 works because each carries
+// its own target flash address (firmware / boot anim / keyframes). Native only
+// (Windows SetupAPI+hid.dll, macOS IOKit) - no deps.
 //
 // Usage:
-//   host_tool upload                     BOOTSEL + upload the default firmware UF2
-//   host_tool upload path/to/x.uf2       upload a specific UF2
+//   host_tool upload                     prompt on the LCD, then upload the default UF2
+//   host_tool upload path/to/x.uf2       upload a specific UF2 (still prompts first)
+//   host_tool upload --force             skip the prompt; BOOTSEL immediately (old behaviour)
 //   host_tool upload --no-hid            skip the HID trigger; wait for manual BOOTSEL
 //   host_tool upload --timeout 60        seconds to wait for the RPI-RP2 drive (def 90)
 
@@ -34,6 +38,30 @@ static int hid_bootsel(void) {
     // The board resets mid-write, so a failed write still means "entering BOOTSEL".
     hid_write(d, rep);
     printf(">> BOOTSEL command sent; device should re-enumerate as RPI-RP2\n");
+    hid_close(d);
+    return 1;
+}
+
+// Ask the board to show the on-screen flash-confirm prompt (does not reboot).
+static int hid_flash_request(void) {
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) {
+        printf("!! device %04x:%04x not found on USB (already in BOOTSEL?)\n",
+               ATHENA_VID, ATHENA_PID);
+        return 0;
+    }
+    uint8_t rep[ATHENA_REPORT_LEN] = {0};
+    rep[0] = ATHENA_CMD; rep[1] = ATHENA_FLASH_CMD; rep[2] = ATHENA_FLASH_M0; rep[3] = ATHENA_FLASH_M1;
+    hid_write(d, rep);
+    hid_close(d);
+    return 1;
+}
+
+// True while the board is still enumerated as a keyboard (i.e. it has NOT rebooted
+// into BOOTSEL). Used to detect a declined / timed-out prompt without hanging.
+static int device_present(void) {
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) return 0;
     hid_close(d);
     return 1;
 }
@@ -67,9 +95,10 @@ static int copy_uf2(const char *uf2, const char *drive) {
 
 int cmd_upload(int argc, char **argv) {
     const char *uf2 = NULL;
-    int no_hid = 0, timeout = 90;
+    int no_hid = 0, force = 0, timeout = 90;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-hid")) no_hid = 1;
+        else if (!strcmp(argv[i], "--force")) force = 1;
         else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) timeout = atoi(argv[++i]);
         else if (argv[i][0] != '-') uf2 = argv[i];
         else { printf("unknown arg: %s\n", argv[i]); return 2; }
@@ -85,14 +114,31 @@ int cmd_upload(int argc, char **argv) {
     fclose(f);
     printf(">> uf2: %s (%ld bytes)\n", uf2, sz);
 
-    if (!no_hid) hid_bootsel();
-    else printf(">> --no-hid: enter BOOTSEL manually now (double-tap reset / menu REBOOT>BOOTSEL)\n");
+    // Trigger. Default asks on-screen first; --force reboots immediately; --no-hid
+    // leaves it to the user. The prompt path never reboots until the user accepts.
+    int prompt = !no_hid && !force;
+    if (no_hid) {
+        printf(">> --no-hid: enter BOOTSEL manually now (double-tap reset / menu REBOOT>BOOTSEL)\n");
+    } else if (force) {
+        hid_bootsel();
+    } else {
+        if (!hid_flash_request()) return 1;
+        printf(">> asked the keyboard to confirm on its LCD.\n");
+        printf(">> on the keyboard: Enter = flash, Esc = cancel (auto-cancels in 10s)...\n");
+    }
 
     printf(">> waiting for RPI-RP2 drive (up to %ds)...\n", timeout);
     char drive[512] = {0};
     int found = 0;
     for (int t = 0; t < timeout; t++) {
         if (sys_find_rp2(drive, sizeof drive)) { found = 1; break; }
+        // Prompt path: if the user declined or let it time out, the board stays a
+        // keyboard (it never reboots). Once past the on-device window, seeing it
+        // still enumerated means "no" - stop instead of hanging out the timeout.
+        if (prompt && t >= 13 && device_present()) {
+            printf(">> flash declined or timed out on the keyboard - aborting.\n");
+            return 1;
+        }
         sys_msleep(1000);
     }
     if (!found) {

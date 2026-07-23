@@ -29,3 +29,10 @@
 
 // Wall-clock sync: 0xFD 0x5E HH MM SS.
 #define ATHENA_CLK_CMD    0x5E
+
+// Flash-confirm prompt: 0xFD 0x5F 0xF1 0x55. Asks the board to show an on-screen
+// "Update firmware?" dialog; the user accepts (Enter -> BOOTSEL) or cancels (Esc /
+// 10s timeout). On accept the board reboots and re-enumerates as RPI-RP2.
+#define ATHENA_FLASH_CMD  0x5F
+#define ATHENA_FLASH_M0   0xF1
+#define ATHENA_FLASH_M1   0x55
