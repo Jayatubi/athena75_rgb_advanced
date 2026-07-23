@@ -19,11 +19,16 @@
 #define ATHENA_BSEL_M0    0xB0
 #define ATHENA_BSEL_M1    0x07
 
-// LCD screenshot: 0xFD 0x5C <sub> ...  (sub: 0=begin, 1=read chunk, 2=end).
+// LCD screenshot: 0xFD 0x5C <sub> ...  (sub: 0=begin, 1=read chunk, 2=end,
+// 3=stream). STREAM is one-shot: the device pushes every chunk back-to-back as its
+// own IN report (each [FD 5C 03 idxHi idxLo <27B>]), ending with a STREAM_DONE
+// marker report - ~2x faster than per-chunk BEGIN/READ round-trips.
 #define ATHENA_CAP_CMD    0x5C
 #define ATHENA_CAP_BEGIN  0x00
 #define ATHENA_CAP_READ   0x01
 #define ATHENA_CAP_END    0x02
+#define ATHENA_CAP_STREAM      0x03
+#define ATHENA_CAP_STREAM_DONE 0x04
 #define ATHENA_CAP_CHUNK  27        // payload bytes per read report (5B header)
 #define ATHENA_CAP_FMT_RGB565 2
 

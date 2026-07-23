@@ -54,6 +54,9 @@ hid_dev *hid_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usag
                         dev->h = h;
                         dev->in_len = caps.InputReportByteLength;
                         dev->out_len = caps.OutputReportByteLength;
+                        // Deep input queue so a streamed burst (screenshot) doesn't
+                        // overflow the driver's default 32-report ring and drop chunks.
+                        HidD_SetNumInputBuffers(h, 512);
                     }
                 }
                 if (ppd) HidD_FreePreparsedData(ppd);

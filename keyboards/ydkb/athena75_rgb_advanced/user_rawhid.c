@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "ch.h"
 #include "quantum.h"
 #include "via.h"
+#include "raw_hid.h"
 #include "c1.h"
 #include "bootloader.h"
 #include "hardware/watchdog.h"
@@ -33,6 +34,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define CAP_SUB_BEGIN  0x00 // freeze + return metadata (w,h,format,total,chunk)
 #define CAP_SUB_READ   0x01 // args: chunk index (BE16) -> 27B of the frame
 #define CAP_SUB_END    0x02 // release the freeze
+#define CAP_SUB_STREAM 0x03 // one-shot: push every chunk back-to-back (no per-chunk req)
+#define CAP_SUB_STREAM_DONE 0x04 // trailing marker report after the last streamed chunk
 #define CAP_CHUNK      27   // payload bytes per 32B report (5B header)
 #define CAP_FMT_RGB565 2    // big-endian RGB565 pairs
 
@@ -146,6 +149,27 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
                     memset(&data[5], 0, CAP_CHUNK);         // zero-fill a short last chunk
                     lcd_capture_read(off, &data[5], CAP_CHUNK);
                     break;                                  // data[3..4] echo the index
+                }
+                case CAP_SUB_STREAM: {
+                    // One request, all chunks: push each chunk as its own IN report
+                    // without waiting for a per-chunk request. The freeze is already
+                    // held from CAP_SUB_BEGIN. raw_hid_send() blocks per report (the
+                    // IN endpoint drains ~1/ms), so core0 is busy here for ~nchunks
+                    // ms — fine for a deliberate, infrequent screenshot. via then
+                    // sends one trailing auto-reply, which we tag as STREAM_DONE.
+                    int16_t  dim    = lcd_capture_dim();
+                    uint32_t total  = (uint32_t)dim * (uint32_t)dim * 2u;
+                    uint16_t nchunk = (uint16_t)((total + CAP_CHUNK - 1) / CAP_CHUNK);
+                    uint8_t  rep[32];
+                    for (uint16_t i = 0; i < nchunk; i++) {
+                        rep[0] = 0xFD; rep[1] = CAP_CMD; rep[2] = CAP_SUB_STREAM;
+                        rep[3] = (uint8_t)(i >> 8); rep[4] = (uint8_t)(i & 0xFF);
+                        memset(&rep[5], 0, CAP_CHUNK);       // zero-fill a short last chunk
+                        lcd_capture_read((uint32_t)i * CAP_CHUNK, &rep[5], CAP_CHUNK);
+                        raw_hid_send(rep, 32);
+                    }
+                    data[2] = CAP_SUB_STREAM_DONE;           // via's trailing reply = done
+                    break;
                 }
                 case CAP_SUB_END:
                 default:

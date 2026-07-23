@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // snapshot: grab the Athena75 RGB LCD over USB (raw-HID 0xFD 0x5C) and save a PNG.
-// The firmware freezes core1 and streams the shown framebuffer (RGB565, big-
-// endian) in 27-byte chunks; this reassembles the frame and writes an RGB PNG.
+// BEGIN freezes core1 and returns the geometry; STREAM then has the firmware push
+// the whole framebuffer (RGB565, big-endian) back-to-back in 27-byte chunks, which
+// we reassemble by index and write as an RGB PNG. END unfreezes core1.
 // Native only (Windows SetupAPI+hid.dll, macOS IOKit); PNG via the bundled writer.
 //
 // Usage:  host_tool snapshot [-o shot.png]
@@ -66,20 +67,31 @@ int cmd_snapshot(int argc, char **argv) {
 
     uint32_t nchunks = (total + (uint32_t)chunk - 1) / (uint32_t)chunk;
     int ok = 1;
-    for (uint32_t idx = 0; idx < nchunks; idx++) {
-        uint8_t req[] = {ATHENA_CMD, ATHENA_CAP_CMD, ATHENA_CAP_READ,
-                         (uint8_t)((idx >> 8) & 0xFF), (uint8_t)(idx & 0xFF)};
-        if (xfer(d, req, sizeof req, rep, 1000) != 0 ||
-            rep[2] != ATHENA_CAP_READ || (uint32_t)((rep[3] << 8) | rep[4]) != idx) {
-            printf("\nerror: chunk %u: bad/no reply\n", idx); ok = 0; break;
-        }
+
+    // STREAM: one request, the device pushes every chunk back-to-back (no per-chunk
+    // round-trip). We just read reports and place each by its index header until we
+    // have them all, then drain the trailing STREAM_DONE marker.
+    uint8_t streamc[ATHENA_REPORT_LEN] = {ATHENA_CMD, ATHENA_CAP_CMD, ATHENA_CAP_STREAM};
+    if (hid_write(d, streamc) != 0) { printf("error: stream request failed\n"); free(frame); hid_close(d); return 1; }
+
+    uint32_t got = 0;
+    while (got < nchunks) {
+        int r = hid_read(d, rep, 2000);
+        if (r != 1) { printf("\nerror: stream stalled at %u/%u chunks\n", got, nchunks); ok = 0; break; }
+        if (rep[0] != ATHENA_CMD || rep[1] != ATHENA_CAP_CMD) continue; // ignore stray reports
+        if (rep[2] == ATHENA_CAP_STREAM_DONE) break;                    // early end (shouldn't happen)
+        if (rep[2] != ATHENA_CAP_STREAM) continue;
+        uint32_t idx = ((uint32_t)rep[3] << 8) | rep[4];
+        if (idx >= nchunks) continue;
         uint32_t off = idx * (uint32_t)chunk;
         uint32_t n = total - off;
         if (n > (uint32_t)chunk) n = (uint32_t)chunk;
         memcpy(frame + off, rep + 5, n);
-        if (idx % 128 == 0 || idx == nchunks - 1) { printf("\r>> %u/%u", idx + 1, nchunks); fflush(stdout); }
+        got++;
+        if (got % 128 == 0 || got == nchunks) { printf("\r>> %u/%u", got, nchunks); fflush(stdout); }
     }
     printf("\n");
+    if (ok) { uint8_t sink[ATHENA_REPORT_LEN]; hid_read(d, sink, 200); } // drain STREAM_DONE
 
     uint8_t endc[] = {ATHENA_CMD, ATHENA_CAP_CMD, ATHENA_CAP_END};
     xfer(d, endc, sizeof endc, rep, 500); // best effort: unfreeze core1
