@@ -10,7 +10,7 @@
 # an image.
 #
 # Deps:  pip install hidapi pillow
-# Usage: python lcd_screenshot.py [-o shot.png] [--vid 0x9D5B] [--pid 0x2514]
+# Usage: python snapshot.py [-o shot.png] [--vid 0x9D5B] [--pid 0x2514]
 
 import argparse
 import sys
