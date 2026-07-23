@@ -8,8 +8,8 @@
 # Usage:
 #   bash build_mac.sh
 #   bash build_mac.sh -c
-#   bash build_mac.sh -i
 #   KEYMAP=via JOBS=8 bash build_mac.sh
+# To flash, run upload.py on the host (BOOTSEL + copy a UF2).
 #
 set -euo pipefail
 

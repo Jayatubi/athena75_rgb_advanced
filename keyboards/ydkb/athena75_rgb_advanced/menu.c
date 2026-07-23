@@ -250,8 +250,15 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
                 // Snapshot the window before entering LCD TEST so Esc can undo.
                 if ((menu_node_id_t)it->child == MN_LCD_TEST) ui_vscr_edit_begin();
                 menu_push((menu_node_id_t)it->child);
-            } else if (menu_item_action(it) == MA_EXIT) {
-                menu_exit();
+            } else {
+                switch (menu_item_action(it)) {
+                    case MA_EXIT:    menu_exit();          break;
+                    case MA_REBOOT:  menu_exit();          // restore keyboard, then restart
+                                     soft_reset_keyboard(); break; // mcu_reset (does not return)
+                    case MA_BOOTSEL: menu_exit();          // restore keyboard, then BOOTSEL
+                                     reset_keyboard();      break; // -> UF2 bootloader (does not return)
+                    default: break;
+                }
             }
             return true;
         }

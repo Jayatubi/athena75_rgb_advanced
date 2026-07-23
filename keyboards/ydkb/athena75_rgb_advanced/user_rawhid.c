@@ -80,6 +80,17 @@ static void call_flash_range_program(void *param) {
     flash_range_program(offset, data, 256);
 }
 
+// Override the platform default mcu_reset() (weak). QMK's RP2040 mcu_reset() calls
+// NVIC_SystemReset() (SYSRESETREQ), which on this dual-core board — core1 driving
+// the LCD straight off XIP flash — can hang instead of rebooting. Force a full
+// watchdog reboot into the application (pc=0 => normal boot via the bootrom), the
+// same clean full-chip reset the BOOTSEL path (reset_usb_boot) relies on. Used by
+// soft_reset_keyboard() / QK_RBT and the menu's REBOOT > NORMAL action.
+void mcu_reset(void) {
+    watchdog_reboot(0, 0, 0);
+    while (1) { /* wait for the watchdog to fire */ }
+}
+
 void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
     uint8_t *command_id = &(data[0]);
     static uint8_t page_data[256] = {0};

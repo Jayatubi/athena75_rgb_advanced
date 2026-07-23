@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Core build for Athena75 RGB (vial). Platform-agnostic.
 
-Owns the shared work: pinned QMK docker image, make, size, uf2 archive, BOOTSEL
-flash. Platform entry points (build_wsl.sh / build_mac.sh) do host-specific prep
-(e.g. WSL mirror sync) then invoke this script.
+Owns the shared work: pinned QMK docker image, make, size, uf2 archive. Platform
+entry points (build_wsl.sh / build_mac.sh) do host-specific prep (e.g. WSL mirror
+sync) then invoke this script. To flash, use upload.py (BOOTSEL + copy a UF2);
+building and uploading are deliberately separate tools.
 
 Usage (direct, or via a platform wrapper):
   python3 build.py                     # docker build ydkb/athena75_rgb_advanced:vial
   python3 build.py -c                  # clean then build
-  python3 build.py -i                  # build, then copy uf2 onto BOOTSEL
   python3 build.py --keymap via
   python3 build.py --jobs 8
   python3 build.py --build-root PATH   # docker mount root (WSL mirror)
   python3 build.py --backend native    # host toolchain (often too strict)
   python3 build.py --check-env
+
+The built firmware is archived to tools/builds/<base>.uf2; upload it with:
+  python3 upload.py                    # BOOTSEL + upload that firmware
 
 On Windows without host Docker, this forwards to build_wsl.sh inside WSL so the
 mirror / rsync path stays in the platform wrapper.
@@ -21,13 +24,11 @@ mirror / rsync path stays in the platform wrapper.
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import platform
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 # --- Configuration -------------------------------------------------------------
@@ -238,125 +239,6 @@ def forward_to_wsl_wrapper(argv_rest):
     return subprocess.run(cmd).returncode
 
 
-# --- Flash ---------------------------------------------------------------------
-def find_rp2_mounts():
-    roots = []
-    system = platform.system()
-    if system == "Windows":
-        import string
-        for letter in string.ascii_uppercase:
-            roots.append(f"{letter}:\\")
-    elif system == "Darwin":
-        roots += glob.glob("/Volumes/*")
-    else:
-        user = os.environ.get("USER", "")
-        roots += glob.glob("/media/*")
-        roots += glob.glob("/media/*/*")
-        roots += glob.glob(f"/run/media/{user}/*") if user else glob.glob("/run/media/*/*")
-        roots += glob.glob("/mnt/*")
-        if in_wsl():
-            import string
-            for letter in string.ascii_lowercase:
-                roots.append(f"/mnt/{letter}")
-                roots.append(f"/mnt/{letter.upper()}")
-
-    seen, out = set(), []
-    for r in roots:
-        key = str(Path(r).resolve()) if Path(r).exists() else r
-        if key in seen:
-            continue
-        seen.add(key)
-        if (Path(r) / "INFO_UF2.TXT").is_file():
-            out.append(r)
-    return out
-
-
-def _wsl_find_rp2_win_letter():
-    """Ask powershell.exe for a BOOTSEL drive letter (WSL /mnt may lag)."""
-    if not on_path("powershell.exe"):
-        return None
-    try:
-        r = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             "foreach ($d in [System.IO.DriveInfo]::GetDrives()) {"
-             "  if ($d.IsReady) {"
-             "    $p = Join-Path $d.Name 'INFO_UF2.TXT';"
-             "    if (Test-Path -LiteralPath $p) {"
-             "      Write-Output $d.Name.Substring(0,1); break"
-             "    }"
-             "  }"
-             "}"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    letter = (r.stdout or "").strip().replace("\r", "").lower()
-    return letter if letter and len(letter) == 1 else None
-
-
-def _wsl_path_to_win(path: Path):
-    s = str(path.resolve())
-    if s.startswith("/mnt/") and len(s) > 6 and s[5].isalpha() and s[6] == "/":
-        drive = s[5].upper()
-        rest = s[7:].replace("/", "\\")
-        return f"{drive}:\\{rest}"
-    return None
-
-
-def flash(out_uf2: Path):
-    if not out_uf2.is_file():
-        err(f"build output {out_uf2} not found, cannot install")
-        sys.exit(1)
-
-    step("looking for BOOTSEL drive (INFO_UF2.TXT)...")
-    step("(enter BOOTSEL anytime now — waiting up to ~3 minutes)")
-    drive = None
-    win_letter = None
-    for _ in range(180):
-        mounts = find_rp2_mounts()
-        if mounts:
-            drive = mounts[0]
-            break
-        if in_wsl():
-            win_letter = _wsl_find_rp2_win_letter()
-            if win_letter:
-                mnt = Path(f"/mnt/{win_letter}")
-                if (mnt / "INFO_UF2.TXT").is_file():
-                    drive = str(mnt)
-                else:
-                    drive = f"win:{win_letter}"
-                break
-        time.sleep(1)
-
-    if not drive:
-        err("no BOOTSEL drive detected (timed out)")
-        if in_wsl():
-            print("hint: if Windows sees BOOTSEL but WSL does not, re-plug USB "
-                  "or: wsl --shutdown then reopen WSL.", file=sys.stderr)
-        sys.exit(1)
-
-    if drive.startswith("win:"):
-        letter = drive[4:].upper()
-        win_uf2 = _wsl_path_to_win(out_uf2)
-        if not win_uf2:
-            err(f"uf2 is not under /mnt/<letter>; cannot copy via Windows path ({out_uf2})")
-            sys.exit(1)
-        step(f"found Windows drive {letter}: (via powershell; /mnt not ready)")
-        step(f"copying {win_uf2} -> {letter}:\\")
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             f"Copy-Item -LiteralPath '{win_uf2}' -Destination '{letter}:\\' -Force"],
-            check=False,
-        )
-    else:
-        step(f"found {drive}, copying {out_uf2.name}...")
-        try:
-            shutil.copy(str(out_uf2), drive)
-        except OSError:
-            pass
-    step("copied.")
-
-
 # --- Env report ----------------------------------------------------------------
 def check_env():
     step("environment check")
@@ -411,8 +293,6 @@ def main(argv=None):
     )
     ap.add_argument("-c", "--clean", action="store_true",
                     help="run make <target>:clean before building")
-    ap.add_argument("-i", "--install", action="store_true",
-                    help="after build, detect BOOTSEL and copy the uf2")
     ap.add_argument("--keymap", default=os.environ.get("KEYMAP", DEFAULT_KEYMAP),
                     help=f"keymap (default: {DEFAULT_KEYMAP})")
     ap.add_argument("--jobs", type=int,
@@ -490,9 +370,7 @@ def main(argv=None):
     for old in pruned:
         step(f"pruned old build: {old}")
 
-    if args.install:
-        flash(out_uf2)
-
+    step("to flash:   python3 upload.py")
     return 0
 
 

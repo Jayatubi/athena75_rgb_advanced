@@ -278,11 +278,9 @@ bool qp_gc9107_init(painter_device_t device, painter_rotation_t rotation) {
         GC9107_SET_FRAME_RATE, 0, 1, 0x19,
         GC9XXX_SET_PIXEL_FORMAT, 0, 1, GC9107_PIXEL_FORMAT_16_BPP_IFPF,
         GC9XXX_CMD_SLEEP_OFF,   120, 0,
-        GC9XXX_CMD_DISPLAY_ON,  20,  0
-    };
-
-    const uint8_t gc9107_init_sequence_st7735_fix[] = {
-        GC9XXX_CMD_INVERT_ON,   20, 0 
+        // NOTE: DISPLAY_ON is intentionally NOT sent here. The panel powers up with
+        // garbage (a full-white frame) in GRAM; enabling the display inside qp_init
+        // would flash that. Callers clear GRAM to black first, then call qp_power(1).
     };
 
     // Configure the rotation (i.e. the ordering and direction of memory writes in GRAM)
@@ -321,7 +319,8 @@ static void lcd_switch(bool on) {
         wait_ms(200);                                        // let the rail settle
         qp_init(display, LCD_ROTATION);                      // re-send GC9107 init sequence
         qp_set_viewport_offsets(display, LCD_OFFSET_X, LCD_OFFSET_Y);
-        qp_power(display, 1);                                // sleep-out + display-on
+        qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1); // black before display-on (no white flash)
+        qp_power(display, 1);                                // display-on (GRAM already black)
         anim_step = -1;                                      // restart renderer
     } else {
         if (!boot_displaying) qp_stop_animation(my_anim);    // stop any lingering (boot) anim
@@ -493,15 +492,15 @@ void display_init(void)
 
     // Display Init
     display = qp_gc9107_make_spi_device(LCD_HEIGHT, LCD_WIDTH, LCD_CS_PIN, LCD_DC_PIN, LCD_RST_PIN, LCD_SPI_DIVISOR, SPI_MODE);
-    qp_init(display, LCD_ROTATION);
+    qp_init(display, LCD_ROTATION);                              // sleep-out; display still OFF
 
     // Display offset
     qp_set_viewport_offsets(display, LCD_OFFSET_X, LCD_OFFSET_Y);
 
-    // Power on display, RGB Test
-    // qp_rect(painter_device_t device, uint16_t left, uint16_t top, uint16_t right, uint16_t bottom, uint8_t hue, uint8_t sat, uint8_t val, bool filled);
+    // Clear GRAM to black BEFORE enabling the display so the panel never shows its
+    // power-up garbage (a full-white frame), then turn the display on.
+    qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);   // default black
     qp_power(display, 1);
-    qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1); //default black
     // font / UI text blitter
     ui_init();
     menu_model_init();

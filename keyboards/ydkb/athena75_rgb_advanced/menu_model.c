@@ -233,7 +233,10 @@ enum {
     MI_ROOT_ANIM = 1,
     MI_ROOT_RGB,
     MI_ROOT_LCDTEST,
+    MI_ROOT_REBOOT,
     MI_ROOT_EXIT,
+    MI_REBOOT_NORMAL,
+    MI_REBOOT_BOOTSEL,
     MI_ANIM_SLIDE,
     MI_ANIM_DISSOLVE,
     MI_ANIM_SHAKE,
@@ -369,8 +372,14 @@ void menu_model_init(void) {
 #endif
     // Diagnostic: descends into the checkerboard test screen (handled in menu.c).
     node_add(MN_ROOT, MI_ROOT_LCDTEST,  "LCD TEST",  MIK_FOLDER, 0, VG_NONE, 0, MN_LCD_TEST);
+    // Reboot: submenu picks a normal restart or the UF2 bootloader (BOOTSEL).
+    node_add(MN_ROOT, MI_ROOT_REBOOT,   "REBOOT",    MIK_FOLDER, 0, VG_NONE, 0, MN_REBOOT);
     // Convenience: leaves menu mode from anywhere on the root list.
     node_add(MN_ROOT, MI_ROOT_EXIT,     "EXIT",      MIK_ACTION, 0, VG_NONE, MA_EXIT, 0);
+
+    // REBOOT submenu: two one-shot actions (fired in menu.c on Right/Enter).
+    node_add(MN_REBOOT, MI_REBOOT_NORMAL,  "NORMAL",  MIK_ACTION, 0, VG_NONE, MA_REBOOT,  0);
+    node_add(MN_REBOOT, MI_REBOOT_BOOTSEL, "BOOTSEL", MIK_ACTION, 0, VG_NONE, MA_BOOTSEL, 0);
 
     // ANIMATION: effects are mutually-exclusive (MI_RADIO / VG_EFFECT): Space
     // selects the active effect in place. Those that carry parameters are also

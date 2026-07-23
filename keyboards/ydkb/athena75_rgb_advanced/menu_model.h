@@ -22,6 +22,7 @@ typedef enum {
     MN_RGB_HUE,     // RGB: hue levels (generated)
     MN_RGB_SAT,     // RGB: saturation levels (generated)
     MN_RGB_SPD,     // RGB: animation speed levels (generated)
+    MN_REBOOT,      // reboot submenu: normal restart vs BOOTSEL (UF2 bootloader)
     MN_LCD_TEST,    // sentinel: full-screen panel-alignment checkerboard (no items)
     MN_COUNT
 } menu_node_id_t;
@@ -37,6 +38,8 @@ typedef enum {
 typedef enum {
     MA_NONE = 0,
     MA_EXIT,        // leave menu mode
+    MA_REBOOT,      // normal restart (mcu_reset)
+    MA_BOOTSEL,     // reboot into the RP2040 UF2 bootloader (BOOTSEL)
 } menu_action_t;
 
 // Per-item capability flags (configured on the item, static or dynamic alike).

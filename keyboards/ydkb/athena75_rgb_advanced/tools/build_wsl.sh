@@ -11,12 +11,12 @@
 #     kb   (default)  only keyboards/ydkb/athena75_rgb_advanced
 #     all             full repo (needed once before the first mirror build)
 #
-# Core work (delegated): python3 build.py  (docker / archive / flash)
+# Core work (delegated): python3 build.py  (docker / archive)
+# To flash, run upload.py on the host (Windows) — not here (WSL2 has no USB).
 #
 # Usage:
 #   bash build_wsl.sh                 # sync kb, then build
 #   bash build_wsl.sh -c              # clean + build
-#   bash build_wsl.sh -i              # build + BOOTSEL copy
 #   bash build_wsl.sh --sync all      # full-repo sync, then build
 #   bash build_wsl.sh --sync=all -c
 #   KEYMAP=via JOBS=8 bash build_wsl.sh
