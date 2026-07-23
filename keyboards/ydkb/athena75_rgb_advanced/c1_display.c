@@ -24,8 +24,6 @@
 
 bool is_st7735 = false;
 painter_device_t display;
-static deferred_token my_anim;
-static bool gif_started = 0;
 static bool now_lcd_off = 0;
 static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
 
@@ -260,8 +258,16 @@ static uint16_t anim_kf      = 0;
 static int16_t  anim_step    = -1; // -1 = (re)init; 0 = hold; 1..TW = tween step
 static uint32_t anim_timer   = 0;
 
-painter_image_handle_t playing_gif;
 static uint8_t boot_displaying = 1;
+
+// Software boot-splash player: decode the flash-slot QGF frame-by-frame into
+// fbShow and push it via blit_full (the same path as the tween renderer), instead
+// of QP's qp_animate. This makes the splash respect the virtual screen and keeps
+// all presentation on one code path. 0 frames = no/invalid slot -> splash skipped.
+static uint16_t boot_nframes = 0;   // frames in the boot QGF (0 = none/invalid)
+static uint16_t boot_frame   = 0;   // frame currently on screen
+static uint32_t boot_ft0     = 0;   // timer_read32() when the current frame was shown
+static bool     boot_started = false;
 
 
 /* rgb info */
@@ -330,7 +336,6 @@ static void lcd_switch(bool on) {
         qp_power(display, 1);                                // display-on (GRAM already black)
         anim_step = -1;                                      // restart renderer
     } else {
-        if (!boot_displaying) qp_stop_animation(my_anim);    // stop any lingering (boot) anim
         palSetLine(17U);                                     // panel power off
     }
 }
@@ -461,31 +466,40 @@ void toggle_ft_hud(void) {
 
 //user config end
 
-typedef struct animation_state_t {
-    painter_device_t       device;
-    uint16_t               x;
-    uint16_t               y;
-    painter_image_handle_t image;
-    qp_pixel_t             fg_hsv888;
-    qp_pixel_t             bg_hsv888;
-    uint16_t               frame_number;
-    deferred_token         defer_token;
-} animation_state_t;
+// ---- QGF frame access (shared by the boot player and the keyframe renderer) ---
+// QGF layout (see tools/host png_to_uf2): a graphics descriptor, a frame-offset
+// table at +28, then per-frame blocks. Each frame block: 11-byte frame descriptor
+// (format@+5, flags@+6, compression@+7, transparency@+8, delay@+9 le16) then a
+// 5-byte data descriptor (len@+13 le24) then the payload (big-endian RGB565,
+// matching fbShow's byte order).
+static inline uint16_t rd_le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static inline uint32_t rd_le32(const uint8_t *p) { return (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24)); }
 
-extern deferred_executor_t animation_executors[QUANTUM_PAINTER_CONCURRENT_ANIMATIONS];
-extern animation_state_t   animation_states[QUANTUM_PAINTER_CONCURRENT_ANIMATIONS];
+static inline uint16_t       qgf_frame_count(const uint8_t *q)             { return rd_le16(q + 21); }
+static inline uint32_t       qgf_frame_off(const uint8_t *q, uint16_t i)   { return rd_le32(q + 28 + i * 4); }
+static inline const uint8_t *qgf_frame_blk(const uint8_t *q, uint16_t i)   { return q + qgf_frame_off(q, i); }
+// Raw pixel payload: 11-byte frame desc + 5-byte data desc = 16 bytes of headers.
+static inline const uint8_t *qgf_frame_ptr(const uint8_t *q, uint16_t i)   { return qgf_frame_blk(q, i) + 16; }
+static inline uint8_t        qgf_frame_comp(const uint8_t *q, uint16_t i)  { return qgf_frame_blk(q, i)[7]; }
+static inline uint16_t       qgf_frame_delay(const uint8_t *q, uint16_t i) { return rd_le16(qgf_frame_blk(q, i) + 9); }
+static inline uint32_t       qgf_frame_len(const uint8_t *q, uint16_t i)   { const uint8_t *b = qgf_frame_blk(q, i) + 13; return (uint32_t)(b[0] | (b[1] << 8) | (b[2] << 16)); }
 
-void qp_stop_animation_frame(deferred_token anim_token) {
-    for (int i = 0; i < QUANTUM_PAINTER_CONCURRENT_ANIMATIONS; ++i) {
-        if (animation_states[i].defer_token == anim_token) {
-            if (animation_states[i].device != NULL && animation_states[i].frame_number == 1) {
-                cancel_deferred_exec_advanced(animation_executors, QUANTUM_PAINTER_CONCURRENT_ANIMATIONS, anim_token);
-                animation_states[i].device = NULL;
-                gif_started = 0;
-            }
-            return;
+// Byte-RLE decode into dst (matches tools/host png_to_uf2 rle_encode and QP's
+// qp_drawimage_byte_rle_decoder): c in 1..127 => repeat next byte c times;
+// c in 128..255 => (c-127) literal bytes follow. Bounded by src_len/out_len.
+static void qgf_rle_decode(const uint8_t *src, uint32_t src_len, uint8_t *dst, uint32_t out_len) {
+    uint32_t si = 0, di = 0;
+    while (di < out_len && si < src_len) {
+        uint8_t c = src[si++];
+        if (c >= 128) {                                  // literal run
+            uint32_t n = (uint32_t)c - 127;
+            while (n-- && di < out_len && si < src_len) dst[di++] = src[si++];
+        } else if (si < src_len) {                       // repeated byte
+            uint8_t v = src[si++];
+            while (c-- && di < out_len) dst[di++] = v;
         }
     }
+    while (di < out_len) dst[di++] = 0;                  // defensive: zero any shortfall
 }
 
 void display_init(void)
@@ -512,17 +526,18 @@ void display_init(void)
     ui_init();
     menu_model_init();
 
-    // boot splash: play ONLY a user-supplied QGF flashed to the boot slot. There is
-    // no built-in animation anymore; if the slot is blank/invalid boot_task skips
-    // the splash entirely. (volatile: the slot is a fixed flash address with no
-    // backing C object, so force the runtime read + keep the branch.)
-    playing_gif = NULL;
+    // boot splash: play ONLY a user-supplied QGF flashed to the boot slot, decoded
+    // in software (see boot_task). There is no built-in animation; a blank/invalid
+    // slot leaves boot_nframes == 0 and boot_task skips the splash entirely.
+    // (volatile: the slot is a fixed flash address with no backing C object, so
+    // force the runtime read + keep the branch.)
+    boot_nframes = 0;
     const volatile uint8_t *bq = BOOT_QGF_ADDR;
     if (bq[5] == 'Q' && bq[6] == 'G' && bq[7] == 'F') // QGF signature at the slot
-        playing_gif = qp_load_image_mem((const void *)BOOT_QGF_ADDR); // user-flashed boot
+        boot_nframes = qgf_frame_count((const uint8_t *)BOOT_QGF_ADDR);
 
     kb_idle_timer = 0;
-    gif_started = 0;
+    boot_started  = false;
     anim_effect   = user_eeconfig.gif_id % EFF_COUNT;
     anim_speed    = user_eeconfig.speed_id % HOLD_COUNT;
     anim_dir      = user_eeconfig.dir_id % DIR_COUNT;
@@ -546,18 +561,6 @@ bool lcd_is_on(void)
 // MCU real-time tweening: read uncompressed keyframes straight from XIP flash,
 // synthesize the in-betweens into fbOut.
 ////////////////////////////////////////////////////////////////////////////////
-
-static inline uint16_t rd_le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
-static inline uint32_t rd_le32(const uint8_t *p) { return (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24)); }
-
-static inline uint16_t qgf_frame_count(const uint8_t *q) { return rd_le16(q + 21); }
-static inline uint32_t qgf_frame_off(const uint8_t *q, uint16_t i) { return rd_le32(q + 28 + i * 4); }
-
-// Pointer to frame i's raw RGB565 pixel data inside the (uncompressed) QGF:
-// frame desc (11 bytes) + data desc header (5 bytes) = 16 bytes before pixels.
-static inline const uint8_t *qgf_frame_ptr(const uint8_t *q, uint16_t i) {
-    return q + qgf_frame_off(q, i) + 16;
-}
 
 static inline uint16_t px_rd(const uint8_t *fb, uint32_t i) { return (uint16_t)((fb[2 * i] << 8) | fb[2 * i + 1]); }
 static inline void     px_wr(uint8_t *fb, uint32_t i, uint16_t v) { fb[2 * i] = v >> 8; fb[2 * i + 1] = v & 0xFF; }
@@ -1416,7 +1419,6 @@ static void boot_finish(void) {
     qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);
     now_lcd_off = user_eeconfig.lcd_off;
     if (user_eeconfig.lcd_off) lcd_switch(false);   // apply persisted off state via the shared switch
-    qp_stop_animation(my_anim);                     // stop boot animation (no-op if never started)
     anim_effect   = user_eeconfig.gif_id % EFF_COUNT;
     anim_speed    = user_eeconfig.speed_id % HOLD_COUNT;
     anim_dir      = user_eeconfig.dir_id % DIR_COUNT;
@@ -1431,26 +1433,44 @@ static void boot_finish(void) {
     anim_step = -1; // hand over to tween renderer
 }
 
-// Boot-splash playback: plays a QGF from the flash boot slot via QP animation.
-// If nothing valid was flashed there (playing_gif == NULL), skip the splash.
+// Decode boot frame i (RLE or raw) straight into fbShow and present it. Payload
+// is big-endian RGB565, i.e. exactly fbShow's byte order, so no swap is needed.
+static void boot_show_frame(uint16_t i) {
+    const uint8_t *q  = (const uint8_t *)BOOT_QGF_ADDR;
+    const uint8_t *pl = qgf_frame_ptr(q, i);
+    if (qgf_frame_comp(q, i))
+        qgf_rle_decode(pl, qgf_frame_len(q, i), fbShow, ANIM_BYTES);
+    else
+        memcpy(fbShow, pl, ANIM_BYTES);
+    blit_full(fbShow);
+}
+
+// Boot-splash playback, software-decoded on the same fbShow -> blit_full path as
+// the tween renderer (so it obeys the virtual screen). Plays the flash-slot QGF
+// once, honouring each frame's delay, then hands over to the tween renderer. A
+// blank/invalid slot (boot_nframes == 0) skips the splash.
 static void boot_task(void) {
     kb_idle_timer = 0;
 
-    if (!playing_gif) { boot_finish(); return; } // no flash boot animation -> skip
+    if (boot_nframes == 0) { boot_finish(); return; } // no flash boot animation -> skip
 
-    if (boot_displaying == 1 && animation_states[0].frame_number > 1) boot_displaying = 2;
+    const uint8_t *q = (const uint8_t *)BOOT_QGF_ADDR;
 
-    if (boot_displaying == 2 && animation_states[0].frame_number == 1) {
-        wait_ms(800);
-        boot_finish();
+    if (!boot_started) {                              // show the first frame
+        boot_frame   = 0;
+        boot_show_frame(0);
+        boot_ft0     = timer_read32();
+        boot_started = true;
         return;
     }
 
-    if (gif_started == 0) {
-        qp_stop_animation(my_anim);
-        my_anim     = qp_animate(display, 0, 0, playing_gif);
-        gif_started = 1;
-    }
+    uint16_t delay = qgf_frame_delay(q, boot_frame);  // hold time of the on-screen frame
+    if (delay == 0) delay = 16;
+    if (timer_elapsed32(boot_ft0) < delay) return;    // still showing the current frame
+
+    if (++boot_frame >= boot_nframes) { boot_finish(); return; } // played once -> done
+    boot_show_frame(boot_frame);
+    boot_ft0 = timer_read32();
 }
 
 // ---- USB LCD screenshot -----------------------------------------------------
@@ -1497,7 +1517,7 @@ int16_t lcd_capture_dim(void) { return ANIM_SIZE; }
 #define MTX_FRAME_MS 55                       // rain step cadence (~18 Hz, discrete)
 #define MTX_HEAD_FG  0xFFFF                   // leading glyph: white
 #define MTX_TAIL_FG  0x07E0                   // trail: pure green (alpha fades it)
-#define MTX_CLOCK_FG 0xBC21                   // clock watermark: dark gold (contrasts the green)
+#define MTX_CLOCK_FG 0xFEA0                   // clock watermark: bright gold (contrasts the green)
 #define MTX_CLOCK_A  255                      // clock glyph alpha
 
 // Host-synced wall clock (no RTC on the board). The time is always base + (now
@@ -1626,7 +1646,7 @@ static void mtx_task(void) {
     ui_clear(fbShow, 0x0000);
     char g[4];
 
-    // 2) clock base: draw the HH:MM cells in dark gold first, so an idle digit
+    // 2) clock base: draw the HH:MM cells in bright gold first, so an idle digit
     // cell (no head passing) shows gold. A rain head drawn on top later lights it.
     if (have_clock) {
         for (uint8_t c = 0; c < cols; c++) {
