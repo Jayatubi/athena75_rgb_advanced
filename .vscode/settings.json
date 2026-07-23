@@ -1,0 +1,67 @@
+// Place your settings in this file to overwrite default and user settings.
+{
+    // Unofficially, QMK uses spaces for indentation
+    "editor.insertSpaces": true,
+    // Hide other keyboard vendors + other ydkb boards. Note: files.exclude "false"
+    // only disables that exact pattern — it does NOT re-include paths already
+    // matched by a broader glob (so "ydkb/*":true + "athena75_rgb":false fails).
+    // The working board is athena75_rgb_advanced; the pristine vendor baseline
+    // athena75_rgb is hidden alongside the other stock boards.
+    "files.exclude": {
+        "**/.build": true,
+        "**/*.hex": true,
+        "**/*.bin": true,
+        "**/*.uf2": true,
+        // All top-level vendors except "ydkb" (character-class peel).
+        "keyboards/[!y]*": true,
+        "keyboards/y[!d]*": true,
+        "keyboards/yd[!k]*": true,
+        "keyboards/ydk[!b]*": true,
+        // Other boards under ydkb (keep athena75_rgb_advanced + debounce_pk.h).
+        "keyboards/ydkb/athena1800": true,
+        "keyboards/ydkb/athena75": true,
+        "keyboards/ydkb/athena75_rgb": true,
+        "keyboards/ydkb/chili": true,
+        "keyboards/ydkb/grape": true,
+        "keyboards/ydkb/just60": true,
+        "keyboards/ydkb/yd68": true,
+        "keyboards/ydkb/ydpm40": true
+    },
+    "search.exclude": {
+        "**/.build": true,
+        "keyboards/[!y]*": true,
+        "keyboards/y[!d]*": true,
+        "keyboards/yd[!k]*": true,
+        "keyboards/ydk[!b]*": true,
+        "keyboards/ydkb/athena1800": true,
+        "keyboards/ydkb/athena75": true,
+        "keyboards/ydkb/athena75_rgb": true,
+        "keyboards/ydkb/chili": true,
+        "keyboards/ydkb/grape": true,
+        "keyboards/ydkb/just60": true,
+        "keyboards/ydkb/yd68": true,
+        "keyboards/ydkb/ydpm40": true
+    },
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c",
+        "*.inc": "c",
+        "*.cpp": "cpp",
+        "*.hpp": "cpp",
+        "xstddef": "c",
+        "type_traits": "c",
+        "utility": "c",
+        "ranges": "c"
+    },
+    "[markdown]": {
+        "editor.trimAutoWhitespace": false,
+        "files.trimTrailingWhitespace": false
+    },
+    "python.formatting.provider": "yapf",
+    "[json]": {
+        "editor.formatOnSave": false
+    },
+    "clangd.arguments": [
+        "--header-insertion=never"
+    ]
+}

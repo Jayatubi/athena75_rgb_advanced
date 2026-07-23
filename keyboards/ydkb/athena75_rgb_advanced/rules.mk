@@ -1,0 +1,25 @@
+# project specific files
+SRC ?=	c1_display.c c1_main.c matrix.c user_led.c user_function.c user_rawhid.c
+
+# Pure-C Q15.16 fixed-point math (trig for the Whirlpool rotate effect).
+SRC +=  lib/fixed_math/fixed_math.c
+
+MCU_LDSCRIPT = RP2040_FLASH_TIMECRIT_16M
+
+ALLOW_WARNINGS = yes
+
+CUSTOM_MATRIX            = yes # Custom matrix file
+CONSOLE_ENABLE          ?= no	# Console for debug
+
+QUANTUM_PAINTER_ENABLE   = yes
+QUANTUM_PAINTER_DRIVERS  = gc9107_spi surface
+
+# Display data
+SRC +=  gfx/menu_font.c \
+        gfx/boot.qgf.c \
+        gfx/boot2.qgf.c \
+        menu.c menu_model.c ui_scene.c
+
+# 16M FLASH
+# LDFLAGS += -Xlinker --defsym=FLASH_LEN=16384k
+# OPT_DEFS += -DCRT0_EXTRA_CORES_NUMBER=1

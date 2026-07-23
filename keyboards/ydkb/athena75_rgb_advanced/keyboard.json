@@ -1,0 +1,32 @@
+{
+    "manufacturer": "KBDFans",
+    "keyboard_name": "Athena75 RGB Keyboard",
+    "maintainer": "YDKB",
+    "bootloader": "rp2040",
+    "processor": "RP2040",
+    "url": "",
+    "usb": {
+        "device_version": "1.0.0",
+        "vid": "0x9D5B",
+        "pid": "0x2514"
+    },
+    "features": {
+        "wait_for_enumeration": true,
+        "bootmagic": false,
+        "command": true,
+        "mousekey": true,
+        "extrakey": true,
+        "nkro": true
+    },
+    "ws2812": {
+        "pin": "GP0",
+        "driver": "vendor"
+    },
+    "layouts": {
+        "LAYOUT": {
+            "layout": [
+                {"matrix": [0, 0], "x": 0, "y": 0}
+            ]
+        }
+    }
+}
