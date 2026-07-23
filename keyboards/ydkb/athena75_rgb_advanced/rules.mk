@@ -14,10 +14,8 @@ CONSOLE_ENABLE          ?= no	# Console for debug
 QUANTUM_PAINTER_ENABLE   = yes
 QUANTUM_PAINTER_DRIVERS  = gc9107_spi surface
 
-# Display data
+# Display data (boot splash is loaded from the flash boot slot, not compiled in)
 SRC +=  gfx/menu_font.c \
-        gfx/boot.qgf.c \
-        gfx/boot2.qgf.c \
         menu.c menu_model.c ui_scene.c
 
 # 16M FLASH

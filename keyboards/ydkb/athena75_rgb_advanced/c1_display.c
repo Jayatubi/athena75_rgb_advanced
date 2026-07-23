@@ -5,8 +5,6 @@
 
 #include "qp_gc9xxx_opcodes.h"
 #include "qp_gc9107_opcodes.h"
-#include "gfx/boot.qgf.h"
-#include "gfx/boot2.qgf.h"
 
 #include "gfx/menu_font.h"
 #include "ui.h"
@@ -37,8 +35,13 @@ static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
 #define ANIM_SIZE   128
 #define ANIM_PX     (ANIM_SIZE * ANIM_SIZE)
 #define ANIM_BYTES  (ANIM_PX * 2)
-#define ANIM_QGF_ADDR ((const uint8_t *)(0x1040u << 16)) // merged 12MB slot base
-#define MAX_ANIM_FRAMES 400 // 12MB slot / ~32KB per uncompressed frame; sanity bound
+// External-flash partition (16MB), laid out after the firmware image:
+//   0x10000000..0x10400000  firmware (code + rodata, <=4MB; LD-managed)
+//   0x10400000..0x10600000  boot splash slot (2MB)   -> replaceable via its own UF2
+//   0x10600000..0x11000000  keyframe slot   (10MB)   -> keyframe UF2
+#define BOOT_QGF_ADDR ((const uint8_t *)(0x1040u << 16)) // boot splash slot base (2MB)
+#define ANIM_QGF_ADDR ((const uint8_t *)(0x1060u << 16)) // keyframe slot base (10MB)
+#define MAX_ANIM_FRAMES 319 // 10MB slot / ~32.8KB per uncompressed frame; sanity bound
 
 enum { EFF_SLIDE = 0, EFF_DISSOLVE, EFF_SHAKE, EFF_WHIRL, EFF_RANDOM, EFF_COUNT };
 #define EFF_CONCRETE EFF_RANDOM // concrete effects are [0 .. EFF_RANDOM)
@@ -503,12 +506,14 @@ void display_init(void)
     ui_init();
     menu_model_init();
 
-    // boot gif
-    #ifndef BOOTGIF
-    playing_gif = qp_load_image_mem(gfx_boot); //内置的启动动画
-    #else
-    playing_gif = qp_load_image_mem(BOOTGIF);
-    #endif
+    // boot splash: play ONLY a user-supplied QGF flashed to the boot slot. There is
+    // no built-in animation anymore; if the slot is blank/invalid boot_task skips
+    // the splash entirely. (volatile: the slot is a fixed flash address with no
+    // backing C object, so force the runtime read + keep the branch.)
+    playing_gif = NULL;
+    const volatile uint8_t *bq = BOOT_QGF_ADDR;
+    if (bq[5] == 'Q' && bq[6] == 'G' && bq[7] == 'F') // QGF signature at the slot
+        playing_gif = qp_load_image_mem((const void *)BOOT_QGF_ADDR); // user-flashed boot
 
     kb_idle_timer = 0;
     gif_started = 0;
@@ -1384,29 +1389,38 @@ static void present(bool frame_new) {
     blit_full(fbShow);
 }
 
-// Boot-splash playback (still uses QP animation for the built-in boot gif).
+// Leave the boot splash and hand control to the real-time tween renderer. Applies
+// the persisted LCD on/off state and (re)loads the animation params from EEPROM.
+static void boot_finish(void) {
+    boot_displaying = 0;
+    qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);
+    now_lcd_off = user_eeconfig.lcd_off;
+    if (user_eeconfig.lcd_off) lcd_switch(false);   // apply persisted off state via the shared switch
+    qp_stop_animation(my_anim);                     // stop boot animation (no-op if never started)
+    anim_effect   = user_eeconfig.gif_id % EFF_COUNT;
+    anim_speed    = user_eeconfig.speed_id % HOLD_COUNT;
+    anim_dir      = user_eeconfig.dir_id % DIR_COUNT;
+    anim_zoom_dir = user_eeconfig.zoom_dir;
+    anim_ghost    = user_eeconfig.ghost_id % GHOST_COUNT;
+    anim_rand_iv  = user_eeconfig.rand_iv % RAND_IV_COUNT;
+    anim_tween    = user_eeconfig.tween_n;
+    tween_clamp();
+    if (anim_effect == EFF_RANDOM) rand_arm();
+    anim_step = -1; // hand over to tween renderer
+}
+
+// Boot-splash playback: plays a QGF from the flash boot slot via QP animation.
+// If nothing valid was flashed there (playing_gif == NULL), skip the splash.
 static void boot_task(void) {
     kb_idle_timer = 0;
+
+    if (!playing_gif) { boot_finish(); return; } // no flash boot animation -> skip
 
     if (boot_displaying == 1 && animation_states[0].frame_number > 1) boot_displaying = 2;
 
     if (boot_displaying == 2 && animation_states[0].frame_number == 1) {
-        boot_displaying = 0;
         wait_ms(800);
-        qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);
-        now_lcd_off = user_eeconfig.lcd_off;
-        if (user_eeconfig.lcd_off) lcd_switch(false);   // apply persisted off state via the shared switch
-        qp_stop_animation(my_anim);                     // stop boot animation
-        anim_effect   = user_eeconfig.gif_id % EFF_COUNT;
-        anim_speed    = user_eeconfig.speed_id % HOLD_COUNT;
-        anim_dir      = user_eeconfig.dir_id % DIR_COUNT;
-        anim_zoom_dir = user_eeconfig.zoom_dir;
-        anim_ghost    = user_eeconfig.ghost_id % GHOST_COUNT;
-        anim_rand_iv  = user_eeconfig.rand_iv % RAND_IV_COUNT;
-        anim_tween    = user_eeconfig.tween_n;
-        tween_clamp();
-        if (anim_effect == EFF_RANDOM) rand_arm();
-        anim_step = -1; // hand over to tween renderer
+        boot_finish();
         return;
     }
 

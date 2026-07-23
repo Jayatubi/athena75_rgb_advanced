@@ -20,6 +20,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "quantum.h"
 #include "via.h"
 #include "c1.h"
+#include "bootloader.h"
 #include "hardware/watchdog.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
@@ -34,6 +35,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define CAP_SUB_END    0x02 // release the freeze
 #define CAP_CHUNK      27   // payload bytes per 32B report (5B header)
 #define CAP_FMT_RGB565 2    // big-endian RGB565 pairs
+
+// Raw-HID reboot to bootloader (0xFD 0x5D 0xB0 0x07). Reboots straight into the
+// RP2040 UF2 bootloader (BOOTSEL) so a host flasher can upload without touching
+// the board. The two magic bytes guard against an accidental trigger.
+#define BSEL_CMD 0x5D
+#define BSEL_M0  0xB0
+#define BSEL_M1  0x07
 
 #ifndef LED_TYPE
 #define LED_TYPE rgb_led_t
@@ -120,6 +128,11 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
                 default:
                     lcd_capture_end();                      // release the freeze
                     break;
+            }
+        } else if (data[1] == BSEL_CMD) {
+            // 0xFD 0x5D 0xB0 0x07: reboot into the RP2040 UF2 bootloader (BOOTSEL).
+            if (data[2] == BSEL_M0 && data[3] == BSEL_M1) {
+                bootloader_jump();                          // does not return
             }
         }
     }

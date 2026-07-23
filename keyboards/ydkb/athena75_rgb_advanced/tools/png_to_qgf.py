@@ -4,7 +4,7 @@
 但每帧保持 RGBA 真彩, 直接压成 RGB565 (65K 色) 写入 QGF,
 避免 make_montage.py 里 to_p() 那步 256 色调色盘造成的失真。
 
-输出目标: athena75_rgb 的 "big" 大动画槽 (0x10600000, <=255 帧)。
+输出目标: athena75_rgb 的 keyframe 大动画槽 (0x10600000, 10MB)。
 需要 Pillow: python3 -m pip install pillow
 """
 import argparse
@@ -13,6 +13,8 @@ import os
 import struct
 
 from PIL import Image
+
+import uf2_common
 
 SRC = "."                # PNG 源目录, 可用 --src 覆盖 (默认当前目录)
 SIZE = 128
@@ -31,13 +33,14 @@ GHOST_ALPHA = 0.45       # 残影起始不透明度
 B_EASE = 1.0             # 飞入缓出指数 (1.0=线性)
 
 # --- QGF/UF2 ---
-SLOT_ADDR = 0x10400000   # 合并后的 12MB 单槽 (0x10400000..0x11000000)
-SLOT_BYTES = 0x11000000 - 0x10400000  # 12MB 槽容量 (压缩后按字节数限制)
-MAX_FRAMES = 383         # 12MB / ~32.8KB 每帧 (未压缩时的帧数上限)
+# flash 分区调整后, keyframe 区从 boot 区 (2MB) 之后开始:
+#   0x10400000..0x10600000  boot 区 (2MB)
+#   0x10600000..0x11000000  keyframe 区 (10MB)  <- 本脚本输出到这里
+SLOT_ADDR = 0x10600000   # keyframe 区基址 (固件里的 ANIM_QGF_ADDR)
+SLOT_BYTES = 0x11000000 - 0x10600000  # 10MB 槽容量 (压缩后按字节数限制)
+MAX_FRAMES = 319         # 10MB / ~32.8KB 每帧 (未压缩时的帧数上限)
 PER_FRAME_HEADER = bytes([0x02, 0xFD, 0x06, 0x00, 0x00, 0x08, 0x00, 0x00,
                           0xFF, 0x00, 0x00, 0x05, 0xFA, 0x00, 0x80, 0x00])
-FAMILY_ID = 0xE48BFF56
-UF2_PAYLOAD = 256
 
 
 def text_shift_map(paths):
@@ -224,27 +227,7 @@ def build_qgf(frames, compress=False):
     return bytes(b)
 
 
-def to_uf2(data, start_addr):
-    num_blocks = (len(data) + UF2_PAYLOAD - 1) // UF2_PAYLOAD
-    out = bytearray(num_blocks * 512)
-    for i in range(num_blocks):
-        bo = i * 512
-        do = i * UF2_PAYLOAD
-        struct.pack_into("<I", out, bo + 0, 0x0A324655)
-        struct.pack_into("<I", out, bo + 4, 0x9E5D5157)
-        struct.pack_into("<I", out, bo + 8, 0x00002000)
-        struct.pack_into("<I", out, bo + 12, start_addr + do)
-        struct.pack_into("<I", out, bo + 16, UF2_PAYLOAD)
-        struct.pack_into("<I", out, bo + 20, i)
-        struct.pack_into("<I", out, bo + 24, num_blocks)
-        struct.pack_into("<I", out, bo + 28, FAMILY_ID)
-        chunk = data[do:do + UF2_PAYLOAD]
-        out[bo + 32:bo + 32 + len(chunk)] = chunk
-        struct.pack_into("<I", out, bo + 508, 0x0AB16F30)
-    return bytes(out)
-
-
-def build(tween_ms, effect, out_path, tween_frames=TWEEN, align_text=False,
+def build(tween_ms, effect, base, tween_frames=TWEEN, align_text=False,
           compress=False, keyframes=False):
     emojis = load_emojis(align_text)
     n = len(emojis)
@@ -275,17 +258,17 @@ def build(tween_ms, effect, out_path, tween_frames=TWEEN, align_text=False,
     raw_bytes = sum(len(px) for px, _ in frames)
     qgf = build_qgf(frames, compress)
     if len(qgf) > SLOT_BYTES:
-        raise SystemExit(f"QGF {len(qgf)}B 超出 12MB 槽 ({SLOT_BYTES}B)")
-    uf2 = to_uf2(qgf, SLOT_ADDR)
-
-    with open(out_path, "wb") as f:
-        f.write(uf2)
+        raise SystemExit(f"QGF {len(qgf)}B 超出 keyframe 槽 ({SLOT_BYTES}B)")
+    uf2 = uf2_common.to_uf2(qgf, SLOT_ADDR)
+    latest, stamped, _ = uf2_common.archive_bytes(uf2, base)
 
     total_s = sum(durations) / 1000
     ratio = f"  压缩率={len(qgf) / raw_bytes * 100:.0f}%" if compress else ""
     mode = "keyframes(MCU补间)" if keyframes else f"effect={effect} tween={tween_ms}ms"
     print(f"{mode}  frames={len(frames)}  loop={total_s:.1f}s  "
-          f"qgf={len(qgf)}B  uf2={len(uf2)}B{ratio}  -> {out_path}")
+          f"qgf={len(qgf)}B  uf2={len(uf2)}B{ratio}  addr={hex(SLOT_ADDR)}")
+    print(f"  latest  -> {latest}")
+    print(f"  history -> {os.path.basename(stamped)}")
 
 
 if __name__ == "__main__":
@@ -303,15 +286,16 @@ if __name__ == "__main__":
     ap.add_argument("--keyframes", action="store_true",
                     help="只输出关键帧(每表情一帧), 补间交给固件 MCU 实时生成 "
                          "(默认不压缩, 固件直接 XIP 读取; 加 --compress 才用 RLE)")
-    ap.add_argument("--out", default=None, help="输出 uf2 路径")
+    ap.add_argument("--base", default=None,
+                    help="产物基名 (统一归档到 builds/<base>.uf2; 默认按模式自动命名)")
     args = ap.parse_args()
     SRC = args.src
     compress = args.compress  # 关键帧模式默认不压缩 (固件从 flash 直接寻址关键帧)
     if args.keyframes:
         suffix = ("_aligned" if args.align_text else "") + ("_rle" if compress else "_raw")
-        default_name = f"penta_kill_keyframes{suffix}.uf2"
+        default_base = f"penta_kill_keyframes{suffix}"
     else:
         suffix = ("_aligned" if args.align_text else "") + ("_rle" if compress else "")
-        default_name = f"penta_kill_montage_12m_{args.effect}{args.frames}_t{args.tween}{suffix}.uf2"
-    out = args.out or os.path.join(SRC, default_name)
-    build(args.tween, args.effect, out, args.frames, args.align_text, compress, args.keyframes)
+        default_base = f"penta_kill_montage_12m_{args.effect}{args.frames}_t{args.tween}{suffix}"
+    base = args.base or default_base
+    build(args.tween, args.effect, base, args.frames, args.align_text, compress, args.keyframes)

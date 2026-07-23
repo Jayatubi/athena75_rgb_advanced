@@ -28,7 +28,6 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 # --- Configuration -------------------------------------------------------------
@@ -45,6 +44,9 @@ WSL_DISTRO = os.environ.get("WSL_DISTRO", "")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[3]  # …/tools -> repo root
+
+sys.path.insert(0, str(SCRIPT_DIR))
+import uf2_common  # noqa: E402  (local module in tools/, unified UF2 archiving)
 
 
 # --- Small helpers -------------------------------------------------------------
@@ -432,8 +434,6 @@ def main(argv=None):
     build_root = (args.build_root or REPO_ROOT).resolve()
     target = f"{KEYBOARD}:{args.keymap}"
     base = artifact_base(args.keymap)
-    # Source-of-truth landing path (always the checkout that owns tools/).
-    out_uf2 = REPO_ROOT / f"{base}.uf2"
     built_uf2 = build_root / f"{base}.uf2"
     elf_rel = f".build/{base}.elf"
 
@@ -481,25 +481,14 @@ def main(argv=None):
         err(f"expected firmware {built_uf2} not found")
         return 1
 
-    if built_uf2.resolve() != out_uf2.resolve():
-        step(f"copy       : {built_uf2} -> {out_uf2}")
-        shutil.copy2(str(built_uf2), str(out_uf2))
-
-    archive_dir = SCRIPT_DIR / "builds"
-    keep = 10
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stamped = archive_dir / f"{base}_{stamp}.uf2"
-    shutil.copy2(str(out_uf2), str(stamped))
+    # Unified output: all UF2s (firmware / boot / keyframe) land in tools/builds/
+    # as a stable latest <base>.uf2 plus a timestamped history (see uf2_common).
+    latest, stamped, pruned = uf2_common.archive_file(str(built_uf2), base)
+    out_uf2 = Path(latest)
     step(f"firmware   : {out_uf2}")
     step(f"archived   : {stamped}")
-    archives = sorted(
-        archive_dir.glob(f"{base}_*.uf2"),
-        key=lambda p: p.stat().st_mtime, reverse=True,
-    )
-    for old in archives[keep:]:
-        step(f"pruning old build: {old}")
-        old.unlink()
+    for old in pruned:
+        step(f"pruned old build: {old}")
 
     if args.install:
         flash(out_uf2)

@@ -76,6 +76,6 @@
 // LCD
 #undef  LCD_ROTATION
 #define LCD_ROTATION QP_ROTATION_180
-#define BOOTGIF gfx_boot2
+// boot splash comes only from the flash boot slot (see c1_display.c); no built-in animation.
 
 #define WEAR_LEVELING_BACKING_SIZE 65536 //10240不行, 65536是最大允许值
