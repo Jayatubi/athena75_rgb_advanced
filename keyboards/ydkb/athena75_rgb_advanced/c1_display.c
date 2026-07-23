@@ -1650,15 +1650,16 @@ static void mtx_task(void) {
     ui_clear(fbShow, 0x0000);
     char g[4];
 
-    // 2) clock base: draw the HH:MM cells in bright gold first, so an idle digit
-    // cell (no head passing) shows gold. A rain head drawn on top later lights it.
+    // 2) clock base: each HH:MM dot is the radio "selected" circle (●) in gold.
+    // This is the resting mark left on the digits; a rain head passing over a cell
+    // (step 3) paints the rain glyph on top, so the character reads as rain while
+    // it passes and falls back to the circle once the head moves on.
     if (have_clock) {
         for (uint8_t c = 0; c < cols; c++) {
             for (uint8_t r = 0; r < rows; r++) {
                 if (!mtx_tmask[c][r]) continue;
-                mtx_utf8(mtx_glyph[c][r], g);
                 ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
-                              g, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
+                              LCD_MENU_RADIO_IND, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
             }
         }
     }
