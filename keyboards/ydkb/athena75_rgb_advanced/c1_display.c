@@ -46,6 +46,13 @@ static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
 enum { EFF_SLIDE = 0, EFF_DISSOLVE, EFF_SHAKE, EFF_WHIRL, EFF_RANDOM, EFF_COUNT };
 #define EFF_CONCRETE EFF_RANDOM // concrete effects are [0 .. EFF_RANDOM)
 
+// Persistent display mode (what the LCD shows outside the menu). ANIMATION is the
+// keyframe playback + tween renderer; MATRIX is the generative digital-rain
+// screen. Selected from the root menu (radio), saved in eeconfig, restored here.
+enum { DM_ANIM = 0, DM_MATRIX, DM_COUNT };
+static uint8_t anim_disp_mode = DM_ANIM;
+static bool    mtx_seeded     = false; // MATRIX rain re-seeds when this is cleared
+
 // Selectable per-keyframe hold times; long-press on the gif key cycles these.
 static const uint16_t hold_frames_list[] = LCD_HOLD_FRAMES_LIST;
 #define HOLD_COUNT (sizeof(hold_frames_list) / sizeof(hold_frames_list[0]))
@@ -523,6 +530,8 @@ void display_init(void)
     anim_ghost    = user_eeconfig.ghost_id % GHOST_COUNT;
     anim_rand_iv  = user_eeconfig.rand_iv % RAND_IV_COUNT;
     anim_tween    = user_eeconfig.tween_n;
+    anim_disp_mode = user_eeconfig.disp_mode % DM_COUNT;
+    mtx_seeded    = false;
     tween_clamp();
     if (anim_effect == EFF_RANDOM) rand_arm();
     anim_step = -1;
@@ -1194,6 +1203,18 @@ void menu_bind_apply_effect(uint8_t eff) {
     anim_step = -1;
 }
 
+// Persistent display mode select (root radio: ANIMATION vs MATRIX). Persisted so
+// it survives reboot; switching to ANIMATION restarts the keyframe renderer,
+// switching to MATRIX re-seeds the rain.
+void menu_bind_set_display(uint8_t mode) {
+    anim_disp_mode = mode % DM_COUNT;
+    user_eeconfig.disp_mode = anim_disp_mode;
+    eeconfig_update_user(user_eeconfig.raw);
+    if (anim_disp_mode == DM_MATRIX) mtx_seeded = false;
+    else                             anim_step  = -1;
+}
+uint8_t menu_bind_get_display(void) { return anim_disp_mode % DM_COUNT; }
+
 void menu_bind_set_ghost(uint8_t id) {
     anim_ghost = id % GHOST_COUNT;
     user_eeconfig.ghost_id = anim_ghost;
@@ -1403,6 +1424,8 @@ static void boot_finish(void) {
     anim_ghost    = user_eeconfig.ghost_id % GHOST_COUNT;
     anim_rand_iv  = user_eeconfig.rand_iv % RAND_IV_COUNT;
     anim_tween    = user_eeconfig.tween_n;
+    anim_disp_mode = user_eeconfig.disp_mode % DM_COUNT;
+    mtx_seeded    = false;
     tween_clamp();
     if (anim_effect == EFF_RANDOM) rand_arm();
     anim_step = -1; // hand over to tween renderer
@@ -1460,6 +1483,92 @@ uint16_t lcd_capture_read(uint32_t off, uint8_t *dst, uint16_t n) {
 void    lcd_capture_end(void) { lcd_capture_freeze = false; }
 int16_t lcd_capture_dim(void) { return ANIM_SIZE; }
 
+// ---- MATRIX digital-rain display mode --------------------------------------
+// A self-contained generative effect (not a keyframe transition): it owns a
+// per-column grid of glyphs + drops and repaints fbShow directly via the ui_*
+// blitter on a fixed cadence. Glyphs are the half-width katakana in the font
+// (U+FF66..U+FF9D); each is 3-byte UTF-8. Runs in the normal (non-menu) path
+// when the persistent display mode is DM_MATRIX.
+#define MTX_CELL_W   6                       // == MF_ADVANCE (monospace column)
+#define MTX_CELL_H   12                      // vertical glyph pitch (glyphs are 13px)
+#define MTX_COLS_MAX 22                       // 128/6 = 21 columns + slack
+#define MTX_ROWS_MAX 12                       // 128/12 = 10 rows + slack
+#define MTX_GLYPHS   56                       // U+FF66..U+FF9D inclusive
+#define MTX_FRAME_MS 55                       // rain step cadence (~18 Hz, discrete)
+#define MTX_HEAD_FG  0xFFFF                   // leading glyph: white
+#define MTX_TAIL_FG  0x07E0                   // trail: pure green (alpha fades it)
+
+static uint8_t  mtx_glyph[MTX_COLS_MAX][MTX_ROWS_MAX];
+static int16_t  mtx_head[MTX_COLS_MAX];
+static uint8_t  mtx_trail[MTX_COLS_MAX];
+static uint8_t  mtx_period[MTX_COLS_MAX];
+static uint8_t  mtx_ctr[MTX_COLS_MAX];
+static uint32_t mtx_timer = 0;
+
+static void mtx_utf8(uint8_t idx, char *buf) {
+    uint32_t cp = 0xFF66u + (idx % MTX_GLYPHS);
+    buf[0] = (char)(0xE0 | (cp >> 12));
+    buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    buf[2] = (char)(0x80 | (cp & 0x3F));
+    buf[3] = 0;
+}
+
+static void mtx_seed(void) {
+    for (uint8_t c = 0; c < MTX_COLS_MAX; c++) {
+        for (uint8_t r = 0; r < MTX_ROWS_MAX; r++)
+            mtx_glyph[c][r] = (uint8_t)(rng_next() % MTX_GLYPHS);
+        mtx_head[c]   = (int16_t)(-(int16_t)(rng_next() % (MTX_ROWS_MAX * 2))); // stagger
+        mtx_trail[c]  = (uint8_t)(4 + rng_next() % 6);
+        mtx_period[c] = (uint8_t)(1 + rng_next() % 3);
+        mtx_ctr[c]    = (uint8_t)(rng_next() % mtx_period[c]);
+    }
+    mtx_timer = timer_read32() - MTX_FRAME_MS; // draw the first frame immediately
+}
+
+static void mtx_task(void) {
+    if (!mtx_seeded) { mtx_seed(); mtx_seeded = true; }
+    if (timer_elapsed32(mtx_timer) < MTX_FRAME_MS) return; // hold the last frame
+    mtx_timer = timer_read32();
+
+    uint8_t cols = (uint8_t)(ui_vw() / MTX_CELL_W);
+    uint8_t rows = (uint8_t)(ui_vh() / MTX_CELL_H);
+    if (cols > MTX_COLS_MAX) cols = MTX_COLS_MAX;
+    if (rows > MTX_ROWS_MAX) rows = MTX_ROWS_MAX;
+
+    ui_clear(fbShow, 0x0000);
+    char g[4];
+    for (uint8_t c = 0; c < cols; c++) {
+        if (++mtx_ctr[c] >= mtx_period[c]) {                     // advance this column's drop
+            mtx_ctr[c] = 0;
+            mtx_head[c]++;
+            if (mtx_head[c] >= 0 && mtx_head[c] < rows)
+                mtx_glyph[c][mtx_head[c]] = (uint8_t)(rng_next() % MTX_GLYPHS); // fresh head
+            if (mtx_head[c] - (int16_t)mtx_trail[c] > rows) {    // fully off the bottom -> respawn
+                mtx_head[c]   = (int16_t)(-(int16_t)(rng_next() % rows));
+                mtx_trail[c]  = (uint8_t)(4 + rng_next() % 6);
+                mtx_period[c] = (uint8_t)(1 + rng_next() % 3);
+            }
+        }
+        if ((rng_next() & 0x1F) == 0) {                          // occasional flicker
+            uint8_t rr = (uint8_t)(rng_next() % rows);
+            mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
+        }
+        for (uint8_t k = 0; k <= mtx_trail[c]; k++) {            // head + fading trail
+            int16_t r = (int16_t)(mtx_head[c] - k);
+            if (r < 0 || r >= rows) continue;
+            mtx_utf8(mtx_glyph[c][r], g);
+            int16_t  x = (int16_t)(c * MTX_CELL_W);
+            int16_t  y = (int16_t)(r * MTX_CELL_H);
+            uint16_t fg;
+            uint8_t  a;
+            if (k == 0) { fg = MTX_HEAD_FG; a = 255; }
+            else        { fg = MTX_TAIL_FG; a = (uint8_t)(((uint16_t)(mtx_trail[c] - k) * 255u) / mtx_trail[c]); }
+            ui_text_alpha(fbShow, x, y, g, fg, 0x0000, a);
+        }
+    }
+    ui_present(fbShow);
+}
+
 void display_task_user(void)
 {
     // Screenshot freeze: hold the shown frame so core0 can read it tear-free.
@@ -1504,6 +1613,14 @@ void display_task_user(void)
         menu_render_task();
         return;
     }
+
+    // Persistent display mode: Matrix rain repaints fbShow directly (its own
+    // cadence + present); otherwise run the keyframe tween renderer.
+    if (anim_disp_mode == DM_MATRIX) {
+        mtx_task();
+        return;
+    }
+    mtx_seeded = false; // re-seed the rain next time MATRIX is selected
 
     // Measure compose time when the FT HUD is on (gif+F).
     uint32_t t0        = 0;

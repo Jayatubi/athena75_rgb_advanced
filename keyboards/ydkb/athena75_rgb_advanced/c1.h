@@ -48,6 +48,11 @@ uint8_t  menu_bind_get_tween_idx(void);
 bool     menu_bind_get_ft(void);
 uint8_t  menu_bind_get_effect(void);
 
+// Persistent display mode (what the LCD shows after leaving the menu): keyframe
+// animation vs Matrix digital-rain. Saved in eeconfig, restored on boot.
+void     menu_bind_set_display(uint8_t mode); // 0 = ANIMATION, 1 = MATRIX
+uint8_t  menu_bind_get_display(void);
+
 /* user config saved in eeprom */
 typedef union {
     uint32_t raw;
@@ -60,5 +65,6 @@ typedef union {
         uint8_t  rand_iv  :4; // RANDOM: index into LCD_RAND_FRAMES_LIST
         uint8_t  tween_n  :5; // tween frame count (LCD_TWEEN_FRAMES_MIN..MAX)
         uint8_t  ghost_id :2; // SLIDE afterimage strength (index into ghost_decay_list)
+        uint8_t  disp_mode:1; // persistent display mode: 0 = animation, 1 = matrix rain
     };
 } user_eeconfig_t;

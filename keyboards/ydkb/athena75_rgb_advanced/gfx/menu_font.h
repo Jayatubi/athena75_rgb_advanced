@@ -22,9 +22,9 @@ typedef struct {
 #define MF_ADVANCE     6
 #define MF_ASCII_FIRST 0x20
 #define MF_ASCII_COUNT 95
-#define MF_UNI_COUNT   21
+#define MF_UNI_COUNT   77
 
-extern const uint8_t    mf_cov[9204];
+extern const uint8_t    mf_cov[13572];
 extern const mf_glyph_t mf_ascii[MF_ASCII_COUNT];
 extern const uint16_t   mf_uni_cp[MF_UNI_COUNT];
 extern const mf_glyph_t mf_uni[MF_UNI_COUNT];

@@ -38,6 +38,11 @@ SYMBOL_CPS = [
     0x2591, 0x2592, 0x2593, 0x25B2, 0x25B6, 0x25BC, 0x25C0, 0x25CB,
     0x25CF, 0x2610, 0x2611, 0x2713, 0x2717,
 ]
+# Half-width katakana (all DWIDTH 6 in Cozette -> drop into the 6px monospace grid)
+# for the Matrix digital-rain LCD effect. Kept ascending so mf_uni_cp stays sorted
+# for the firmware's binary search (mf_lookup). U+FF66..U+FF9D inclusive (56 cps).
+KATAKANA_CPS = list(range(0xFF66, 0xFF9E))
+SYMBOL_CPS += KATAKANA_CPS
 
 
 # Pixel overrides applied instead of the BDF glyph. Cozette's own ● (U+25CF) is a

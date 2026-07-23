@@ -19,6 +19,12 @@ enum {
     EFF_RANDOM,
 };
 
+// ---- persistent display mode ids (must match c1_display DM_* enum) ----------
+enum {
+    DM_ANIM = 0, // keyframe playback + tween renderer
+    DM_MATRIX,   // Matrix digital-rain screen
+};
+
 // ---- RGB backlight level resolutions (menu radio steps) ---------------------
 // Brightness / saturation / speed are shown as N evenly-spaced levels; hue as a
 // colour wheel divided into HUE_LEVELS. Actual<->level mapping lives in the
@@ -34,6 +40,7 @@ enum {
 // all selection logic in one id-driven place (no per-node hardcoding).
 enum {
     VG_NONE = 0,
+    VG_DISPLAY, // persistent display mode: DM_ANIM vs DM_MATRIX (root radios)
     VG_EFFECT,
     VG_GHOST,
     VG_ZOOM,
@@ -81,6 +88,7 @@ static uint8_t level_to_hue(uint8_t l, uint8_t levels) {
 
 static uint8_t group_get(uint8_t g) {
     switch (g) {
+        case VG_DISPLAY:   return menu_bind_get_display();
         case VG_EFFECT:    return menu_bind_get_effect();
         case VG_GHOST:     return menu_bind_get_ghost();
         case VG_ZOOM:      return menu_bind_get_zoom();
@@ -103,6 +111,7 @@ static uint8_t group_get(uint8_t g) {
 
 static void group_set(uint8_t g, uint8_t v) {
     switch (g) {
+        case VG_DISPLAY:   menu_bind_set_display(v);    break;
         case VG_EFFECT:    menu_bind_apply_effect(v);   break;
         case VG_GHOST:     menu_bind_set_ghost(v);      break;
         case VG_ZOOM:      menu_bind_set_zoom(v);       break;
@@ -232,6 +241,7 @@ static menu_item_t *node_add(menu_node_id_t nid, uint16_t id, const char *label,
 enum {
     MI_ROOT_ANIM = 1,
     MI_ROOT_RGB,
+    MI_ROOT_MATRIX,
     MI_ROOT_LCDTEST,
     MI_ROOT_REBOOT,
     MI_ROOT_EXIT,
@@ -364,7 +374,12 @@ void menu_model_init(void) {
 
     // Root is now a short launcher: keyframe playback settings live under
     // ANIMATION, backlight under RGB, plus the diagnostic + exit shortcuts.
-    node_add(MN_ROOT, MI_ROOT_ANIM,     "ANIMATION", MIK_FOLDER, 0, VG_NONE, 0, MN_ANIM);
+    // ANIMATION and MATRIX are the two persistent display modes (mutually
+    // exclusive, VG_DISPLAY): Space selects which one the LCD shows after leaving
+    // the menu (saved to eeprom). ANIMATION also folds into its keyframe settings
+    // on Right/Enter; MATRIX has no parameters, so it is a plain marked leaf.
+    node_add(MN_ROOT, MI_ROOT_ANIM,     "ANIMATION", MIK_FOLDER, MI_RADIO, VG_DISPLAY, DM_ANIM,   MN_ANIM);
+    node_add(MN_ROOT, MI_ROOT_MATRIX,   "MATRIX",    MIK_VALUE,  MI_RADIO, VG_DISPLAY, DM_MATRIX, 0);
 #ifdef RGB_MATRIX_ENABLE
     // RGB itself carries the on/off checkbox (Space toggles in place); Right/Enter
     // still descends into the RGB submenu.
