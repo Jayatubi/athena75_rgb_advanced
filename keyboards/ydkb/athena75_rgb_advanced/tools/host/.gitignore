@@ -1,0 +1,7 @@
+# CMake build tree and compiled host tools (platform-specific, rebuild locally).
+/build/
+/bin/
+*.png
+
+# The repo-root .gitignore ignores CMakeLists.txt (QMK convention); keep ours.
+!CMakeLists.txt

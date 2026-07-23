@@ -12,7 +12,8 @@
 #     all             full repo (needed once before the first mirror build)
 #
 # Core work (delegated): python3 build.py  (docker / archive)
-# To flash, run upload.py on the host (Windows) — not here (WSL2 has no USB).
+# To flash, build & run `host_tool upload` (tools/host) on the host (Windows) —
+# not here (WSL2 has no USB).
 #
 # Usage:
 #   bash build_wsl.sh                 # sync kb, then build

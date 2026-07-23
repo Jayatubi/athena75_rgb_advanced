@@ -155,9 +155,26 @@ bash    keyboards/ydkb/athena75_rgb_advanced/tools/build_wsl.sh   # Windows + WS
 bash    keyboards/ydkb/athena75_rgb_advanced/tools/build_mac.sh   # macOS
 ```
 
-常用参数：`-c` 先 clean、`-i` 编完等待 BOOTSEL 并拷贝 uf2、`--keymap via` 指定键位方案。
+常用参数：`-c` 先 clean、`--keymap via` 指定键位方案。构建只负责产出 UF2，刷写交给下面的原生工具。
 
 通用 QMK 环境说明见 [QMK Docs](https://docs.qmk.fm/#/getting_started_build_tools)。
+
+### 主机端原生工具（`tools/host`）
+
+上位机是一个原生 C（C11）单一多命令程序 `host_tool`（类似 adb 用子命令区分功能），
+CMake 工程，跨平台（Windows / macOS），不依赖第三方库：Windows 走 SetupAPI + `hid.dll`，
+macOS 走 IOKit + CoreFoundation，PNG 由内置写入器生成。
+
+```bash
+cmake -S keyboards/ydkb/athena75_rgb_advanced/tools/host -B build   # 生成工程
+cmake --build build --config Release                                # 产物在 tools/host/bin/host_tool
+```
+
+| 子命令 | 作用 |
+|------|------|
+| `host_tool upload [uf2] [--no-hid] [--timeout N]` | 通过 HID 触发 BOOTSEL，再把 UF2 拷到 `RPI-RP2` 盘（默认烧固件，也可传 boot/keyframe 的 UF2） |
+| `host_tool snapshot [-o shot.png]` | 通过 HID 抓取 LCD 帧缓冲（RGB565）并存为 PNG |
+| `host_tool synctime [--utc] [--loop SEC]` | 把 PC 时间推送给键盘（MATRIX 时钟水印用） |
 
 ---
 

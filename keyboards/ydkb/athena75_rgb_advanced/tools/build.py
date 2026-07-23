@@ -3,8 +3,8 @@
 
 Owns the shared work: pinned QMK docker image, make, size, uf2 archive. Platform
 entry points (build_wsl.sh / build_mac.sh) do host-specific prep (e.g. WSL mirror
-sync) then invoke this script. To flash, use upload.py (BOOTSEL + copy a UF2);
-building and uploading are deliberately separate tools.
+sync) then invoke this script. To flash, use the native `host_tool upload`
+(BOOTSEL + copy a UF2, built from tools/host); build and upload are separate.
 
 Usage (direct, or via a platform wrapper):
   python3 build.py                     # docker build ydkb/athena75_rgb_advanced:vial
@@ -15,8 +15,9 @@ Usage (direct, or via a platform wrapper):
   python3 build.py --backend native    # host toolchain (often too strict)
   python3 build.py --check-env
 
-The built firmware is archived to tools/builds/<base>.uf2; upload it with:
-  python3 upload.py                    # BOOTSEL + upload that firmware
+The built firmware is archived to tools/builds/<base>.uf2; upload it with the
+native host tool (tools/host):
+  ./tools/host/bin/host_tool upload     # BOOTSEL + upload that firmware
 
 On Windows without host Docker, this forwards to build_wsl.sh inside WSL so the
 mirror / rsync path stays in the platform wrapper.
@@ -370,7 +371,7 @@ def main(argv=None):
     for old in pruned:
         step(f"pruned old build: {old}")
 
-    step("to flash:   python3 upload.py")
+    step("to flash:   tools/host/bin/host_tool upload  (build tools/host with CMake first)")
     return 0
 
 
