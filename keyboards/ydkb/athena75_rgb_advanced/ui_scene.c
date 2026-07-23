@@ -168,6 +168,12 @@ void ui_elem_free(ui_elem_t *e) {
     e->in_use = false;
 }
 
+void ui_scene_free_keys_from(uint16_t min_key) {
+    for (uint8_t i = 0; i < UI_ELEM_MAX; i++) {
+        if (elems[i].in_use && elems[i].key >= min_key) ui_elem_free(&elems[i]);
+    }
+}
+
 void ui_scene_fade_all(uint32_t dur_ms) {
     for (uint8_t i = 0; i < UI_ELEM_MAX; i++) {
         if (elems[i].in_use) {

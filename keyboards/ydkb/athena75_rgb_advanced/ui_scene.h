@@ -60,6 +60,10 @@ ui_elem_t *ui_elem_spawn(uint16_t key, ui_draw_fn draw); // zeroed, alpha=255
 ui_elem_t *ui_elem_find(uint16_t key);
 void       ui_elem_free(ui_elem_t *e);      // also cancels tweens it owns
 void       ui_tween_cancel_owner(uint16_t owner); // drop every tween owned by key
+// Free every in-use element whose key >= min_key (cancelling its tweens). Used to
+// drop a superseded "retiring" generation en masse so rapid reconciliation cannot
+// stack unbounded outgoing screens and exhaust the pools.
+void       ui_scene_free_keys_from(uint16_t min_key);
 
 // ---- tweens (updaters) -----------------------------------------------------
 // Drive *field (inside some element) from->to over dur_ms, starting delay_ms

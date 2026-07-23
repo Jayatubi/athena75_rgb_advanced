@@ -656,6 +656,13 @@ static void menu_build(const menu_view_t *v, menu_node_id_t node, uint8_t cnt, b
 // (returning to the parent). The outgoing screen exits the opposite way. Chrome
 // (frame, title bar, mask) is shared and stays put across the change.
 static void menu_transition(const menu_view_t *v, menu_node_id_t node, uint8_t cnt, int8_t side) {
+    // A new transition supersedes any previous outgoing screen that is still
+    // flying out. Drop that stale "retiring" generation now so back-to-back node
+    // changes (e.g. mashing Left/Right) cannot stack unbounded generations and
+    // exhaust the element/tween pools — which would leave the incoming screen
+    // unable to spawn and the menu blank but for the shared chrome.
+    ui_scene_free_keys_from(RETIRE_OFF);
+
     ui_elem_t *oldc = ui_elem_find(K_LIST);
     int16_t    oldy = oldc ? oldc->y : list_origin_y(rc_scroll);
     retire_content(rc_node, rc_scroll, oldy, side);
