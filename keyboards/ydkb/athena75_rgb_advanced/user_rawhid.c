@@ -43,6 +43,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define BSEL_M0  0xB0
 #define BSEL_M1  0x07
 
+// Raw-HID wall-clock sync (0xFD 0x5E HH MM SS). No RTC on the board, so the host
+// pushes the current time; the firmware free-runs it off the system timer. Feeds
+// the MATRIX rain's dimmed HH:MM watermark. Re-sync on connect / periodically.
+#define CLK_CMD  0x5E
+
 #ifndef LED_TYPE
 #define LED_TYPE rgb_led_t
 #endif
@@ -144,6 +149,11 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             // 0xFD 0x5D 0xB0 0x07: reboot into the RP2040 UF2 bootloader (BOOTSEL).
             if (data[2] == BSEL_M0 && data[3] == BSEL_M1) {
                 bootloader_jump();                          // does not return
+            }
+        } else if (data[1] == CLK_CMD) {
+            // 0xFD 0x5E HH MM SS: set the wall clock (MATRIX HH:MM watermark).
+            if (data[2] < 24 && data[3] < 60 && data[4] < 60) {
+                lcd_clock_set(data[2], data[3], data[4]);
             }
         }
     }

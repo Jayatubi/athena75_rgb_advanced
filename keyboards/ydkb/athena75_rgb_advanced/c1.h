@@ -53,6 +53,12 @@ uint8_t  menu_bind_get_effect(void);
 void     menu_bind_set_display(uint8_t mode); // 0 = ANIMATION, 1 = MATRIX
 uint8_t  menu_bind_get_display(void);
 
+// Wall-clock sync from the host over USB (raw-HID 0xFD 0x5E). The board has no
+// battery-backed RTC, so the host pushes the time and the firmware free-runs it
+// off the system timer until power is lost (re-sync on connect). Used by the
+// MATRIX rain's dimmed HH:MM watermark.
+void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss);
+
 /* user config saved in eeprom */
 typedef union {
     uint32_t raw;

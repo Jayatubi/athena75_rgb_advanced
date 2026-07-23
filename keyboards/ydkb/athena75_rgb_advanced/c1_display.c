@@ -1493,10 +1493,39 @@ int16_t lcd_capture_dim(void) { return ANIM_SIZE; }
 #define MTX_CELL_H   12                      // vertical glyph pitch (glyphs are 13px)
 #define MTX_COLS_MAX 22                       // 128/6 = 21 columns + slack
 #define MTX_ROWS_MAX 12                       // 128/12 = 10 rows + slack
-#define MTX_GLYPHS   56                       // U+FF66..U+FF9D inclusive
+#define MTX_GLYPHS   150                      // ASCII 0x21..0x7E (94) + katakana FF66..FF9D (56)
 #define MTX_FRAME_MS 55                       // rain step cadence (~18 Hz, discrete)
 #define MTX_HEAD_FG  0xFFFF                   // leading glyph: white
 #define MTX_TAIL_FG  0x07E0                   // trail: pure green (alpha fades it)
+#define MTX_CLOCK_FG 0xBC21                   // clock watermark: dark gold (contrasts the green)
+#define MTX_CLOCK_A  255                      // clock glyph alpha
+
+// Host-synced wall clock (no RTC on the board). core0 (raw HID) sets base+sync;
+// core1 reads to derive HH:MM. volatile: cross-core, updated rarely.
+static volatile uint32_t clock_base_sec = 0; // seconds-since-midnight at last sync
+static volatile uint32_t clock_sync_ms  = 0; // timer_read32() captured at that sync
+static volatile bool     clock_valid    = false;
+
+// 3x5 dot-matrix digits 0-9 (rows top->bottom; bits 2,1,0 = left,mid,right col).
+// One cell of the rain grid per dot, so a digit is 3 grid columns x 5 rows.
+static const uint8_t clock_font[10][5] = {
+    {0b111,0b101,0b101,0b101,0b111}, // 0
+    {0b010,0b110,0b010,0b010,0b111}, // 1
+    {0b111,0b001,0b111,0b100,0b111}, // 2
+    {0b111,0b001,0b111,0b001,0b111}, // 3
+    {0b101,0b101,0b111,0b001,0b001}, // 4
+    {0b111,0b100,0b111,0b001,0b111}, // 5
+    {0b111,0b100,0b111,0b101,0b111}, // 6
+    {0b111,0b001,0b010,0b010,0b010}, // 7
+    {0b111,0b101,0b111,0b101,0b111}, // 8
+    {0b111,0b101,0b111,0b001,0b111}, // 9
+};
+
+void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss) {
+    clock_base_sec = (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
+    clock_sync_ms  = timer_read32();
+    clock_valid    = true; // set last so a mid-update read never sees a torn base
+}
 
 static uint8_t  mtx_glyph[MTX_COLS_MAX][MTX_ROWS_MAX];
 static int16_t  mtx_head[MTX_COLS_MAX];
@@ -1504,9 +1533,20 @@ static uint8_t  mtx_trail[MTX_COLS_MAX];
 static uint8_t  mtx_period[MTX_COLS_MAX];
 static uint8_t  mtx_ctr[MTX_COLS_MAX];
 static uint32_t mtx_timer = 0;
+static bool     mtx_tmask[MTX_COLS_MAX][MTX_ROWS_MAX]; // cells covered by the HH:MM watermark
 
+// Map a rain glyph index to a code point: 0..93 -> printable ASCII 0x21..0x7E
+// (letters, digits, symbols), 94..149 -> half-width katakana U+FF66..U+FF9D.
+static uint32_t mtx_cp(uint8_t idx) {
+    idx %= MTX_GLYPHS;
+    return (idx < 94) ? (uint32_t)(0x21 + idx) : (uint32_t)(0xFF66 + (idx - 94));
+}
+
+// Encode a rain glyph into a NUL-terminated UTF-8 string (1 byte for ASCII,
+// 3 bytes for katakana) for ui_text_alpha.
 static void mtx_utf8(uint8_t idx, char *buf) {
-    uint32_t cp = 0xFF66u + (idx % MTX_GLYPHS);
+    uint32_t cp = mtx_cp(idx);
+    if (cp < 0x80) { buf[0] = (char)cp; buf[1] = 0; return; }
     buf[0] = (char)(0xE0 | (cp >> 12));
     buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
     buf[2] = (char)(0x80 | (cp & 0x3F));
@@ -1525,6 +1565,32 @@ static void mtx_seed(void) {
     mtx_timer = timer_read32() - MTX_FRAME_MS; // draw the first frame immediately
 }
 
+// Stamp the dimmed HH:MM watermark into mtx_tmask for the current (host-synced)
+// time. Returns true if the clock is valid and the 17x5-cell layout fits.
+static bool clock_build_mask(uint8_t cols, uint8_t rows) {
+    memset(mtx_tmask, 0, sizeof(mtx_tmask));
+    if (!clock_valid) return false;
+    const uint8_t CW = 17, CH = 5;               // "12:34" footprint in grid cells
+    if (cols < CW || rows < CH) return false;
+    uint32_t sec = (clock_base_sec + timer_elapsed32(clock_sync_ms) / 1000u) % 86400u;
+    uint8_t  hh  = (uint8_t)(sec / 3600u);
+    uint8_t  mm  = (uint8_t)((sec % 3600u) / 60u);
+    uint8_t  d[4] = { (uint8_t)(hh / 10), (uint8_t)(hh % 10), (uint8_t)(mm / 10), (uint8_t)(mm % 10) };
+    uint8_t  ox = (uint8_t)((cols - CW) / 2);     // centre the block in the grid
+    uint8_t  oy = (uint8_t)((rows - CH) / 2);
+    static const uint8_t dcol[4] = {0, 4, 10, 14}; // digit start cols; colon sits at 8
+    for (uint8_t i = 0; i < 4; i++) {
+        for (uint8_t ry = 0; ry < 5; ry++) {
+            uint8_t bits = clock_font[d[i]][ry];
+            for (uint8_t rx = 0; rx < 3; rx++)
+                if (bits & (1 << (2 - rx))) mtx_tmask[ox + dcol[i] + rx][oy + ry] = true;
+        }
+    }
+    mtx_tmask[ox + 8][oy + 1] = true;             // colon dots
+    mtx_tmask[ox + 8][oy + 3] = true;
+    return true;
+}
+
 static void mtx_task(void) {
     if (!mtx_seeded) { mtx_seed(); mtx_seeded = true; }
     if (timer_elapsed32(mtx_timer) < MTX_FRAME_MS) return; // hold the last frame
@@ -1535,8 +1601,9 @@ static void mtx_task(void) {
     if (cols > MTX_COLS_MAX) cols = MTX_COLS_MAX;
     if (rows > MTX_ROWS_MAX) rows = MTX_ROWS_MAX;
 
-    ui_clear(fbShow, 0x0000);
-    char g[4];
+    bool have_clock = clock_build_mask(cols, rows);
+
+    // 1) advance every column's drop + flicker (state only, no drawing).
     for (uint8_t c = 0; c < cols; c++) {
         if (++mtx_ctr[c] >= mtx_period[c]) {                     // advance this column's drop
             mtx_ctr[c] = 0;
@@ -1553,15 +1620,39 @@ static void mtx_task(void) {
             uint8_t rr = (uint8_t)(rng_next() % rows);
             mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
         }
-        for (uint8_t k = 0; k <= mtx_trail[c]; k++) {            // head + fading trail
+    }
+
+    ui_clear(fbShow, 0x0000);
+    char g[4];
+
+    // 2) clock base: draw the HH:MM cells in dark gold first, so an idle digit
+    // cell (no head passing) shows gold. A rain head drawn on top later lights it.
+    if (have_clock) {
+        for (uint8_t c = 0; c < cols; c++) {
+            for (uint8_t r = 0; r < rows; r++) {
+                if (!mtx_tmask[c][r]) continue;
+                mtx_utf8(mtx_glyph[c][r], g);
+                ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
+                              g, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
+            }
+        }
+    }
+
+    // 3) rain: head (bright) + fading trail. Over a clock cell only the HEAD is
+    // drawn — so a passing head lights that digit cell white, then it falls back
+    // to gold once the head moves on; the trail leaves the gold base untouched.
+    for (uint8_t c = 0; c < cols; c++) {
+        for (uint8_t k = 0; k <= mtx_trail[c]; k++) {
             int16_t r = (int16_t)(mtx_head[c] - k);
             if (r < 0 || r >= rows) continue;
+            bool is_clock = have_clock && mtx_tmask[c][r];
+            if (is_clock && k != 0) continue;                    // trail keeps the gold base
             mtx_utf8(mtx_glyph[c][r], g);
             int16_t  x = (int16_t)(c * MTX_CELL_W);
             int16_t  y = (int16_t)(r * MTX_CELL_H);
             uint16_t fg;
             uint8_t  a;
-            if (k == 0) { fg = MTX_HEAD_FG; a = 255; }
+            if (k == 0) { fg = MTX_HEAD_FG; a = 255; }           // head: bright (lights clock cells too)
             else        { fg = MTX_TAIL_FG; a = (uint8_t)(((uint16_t)(mtx_trail[c] - k) * 255u) / mtx_trail[c]); }
             ui_text_alpha(fbShow, x, y, g, fg, 0x0000, a);
         }
