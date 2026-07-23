@@ -1500,11 +1500,13 @@ int16_t lcd_capture_dim(void) { return ANIM_SIZE; }
 #define MTX_CLOCK_FG 0xBC21                   // clock watermark: dark gold (contrasts the green)
 #define MTX_CLOCK_A  255                      // clock glyph alpha
 
-// Host-synced wall clock (no RTC on the board). core0 (raw HID) sets base+sync;
-// core1 reads to derive HH:MM. volatile: cross-core, updated rarely.
-static volatile uint32_t clock_base_sec = 0; // seconds-since-midnight at last sync
-static volatile uint32_t clock_sync_ms  = 0; // timer_read32() captured at that sync
-static volatile bool     clock_valid    = false;
+// Host-synced wall clock (no RTC on the board). The time is always base + (now
+// uptime - sync uptime) -- never a delta accumulation. At boot base = 00:00 and
+// sync = current uptime, so it reads 00:00 and counts up until the host syncs a
+// real time (raw HID), which just rebases (base := HH:MM:SS, sync := now).
+// volatile: core0 (raw HID) writes, core1 reads.
+static volatile uint32_t clock_base_sec = 0; // seconds-since-midnight at last (re)base
+static volatile uint32_t clock_sync_ms  = 0; // timer_read32() captured at that (re)base
 
 // 3x5 dot-matrix digits 0-9 (rows top->bottom; bits 2,1,0 = left,mid,right col).
 // One cell of the rain grid per dot, so a digit is 3 grid columns x 5 rows.
@@ -1522,9 +1524,8 @@ static const uint8_t clock_font[10][5] = {
 };
 
 void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss) {
-    clock_base_sec = (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
     clock_sync_ms  = timer_read32();
-    clock_valid    = true; // set last so a mid-update read never sees a torn base
+    clock_base_sec = (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss; // rebase: base + (now-sync)
 }
 
 static uint8_t  mtx_glyph[MTX_COLS_MAX][MTX_ROWS_MAX];
@@ -1565,11 +1566,11 @@ static void mtx_seed(void) {
     mtx_timer = timer_read32() - MTX_FRAME_MS; // draw the first frame immediately
 }
 
-// Stamp the dimmed HH:MM watermark into mtx_tmask for the current (host-synced)
-// time. Returns true if the clock is valid and the 17x5-cell layout fits.
+// Stamp the HH:MM watermark into mtx_tmask for the current time (always shown;
+// 00:00 from boot until the host rebases it). Returns true if the 17x5-cell
+// layout fits. Time = base + (now uptime - sync uptime), never accumulated.
 static bool clock_build_mask(uint8_t cols, uint8_t rows) {
     memset(mtx_tmask, 0, sizeof(mtx_tmask));
-    if (!clock_valid) return false;
     const uint8_t CW = 17, CH = 5;               // "12:34" footprint in grid cells
     if (cols < CW || rows < CH) return false;
     uint32_t sec = (clock_base_sec + timer_elapsed32(clock_sync_ms) / 1000u) % 86400u;
