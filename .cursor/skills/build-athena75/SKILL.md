@@ -7,10 +7,19 @@ description: Build (and prepare to flash) the ydkb/athena75_rgb_advanced firmwar
 
 ## Hard rules (do not break)
 
-- **Only use WSL. Never use PowerShell** for build work. The Cursor Shell tool
-  runs PowerShell on this machine, so invoke everything as a single
-  `wsl bash <script>` call with **no** PowerShell pipes/operators
-  (`|`, `&&`, `||`, `>`, `$(...)`). Those get mangled by PowerShell.
+- **The only forbidden thing is PowerShell.** Everything runs under WSL. The
+  Cursor Shell tool launches PowerShell on this machine, so keep it a thin
+  launcher: invoke `wsl ...` with **no** PowerShell pipes/operators
+  (`|`, `&&`, `||`, `>`, `$(...)`, quoted `$vars`) — those get mangled.
+- **Windows `.exe` files are normal executables under WSL — just run them.**
+  `git.exe`, `cmake.exe`, `docker`, etc. are called directly, e.g.
+  `wsl git.exe -C F:/work/vial-qmk-v6 status`. Running a Windows exe from WSL is
+  normal and encouraged; it is not an exception.
+- **Windows exes need Windows-style path args with FORWARD slashes**
+  (`F:/work/...`, `C:/Users/...`). A `/mnt/...` path won't resolve for a Windows
+  process, and backslashes get stripped by the launcher.
+- If a command genuinely needs pipes/redirection/`$()`, put it in a real `.sh`
+  file and run `wsl bash <path.sh>`; never inline it through PowerShell.
 - **Use the ready-made scripts.** Do not improvise build commands, do not run
   `docker run` / `make` / `python3 build.py` by hand, and do not create new
   build scripts. The scripts already exist:
@@ -38,20 +47,25 @@ PowerShell `| tee`/`>`. If you need to inspect the tail of a long build, let the
 script's own stdout stream back, or read the archived log the wrapper leaves in
 the mirror. Do not wrap the `wsl` call in PowerShell redirection.
 
-## Build the host_tool (USB tool — the one Windows exception)
+## Build the host_tool (USB tool)
 
-`host_tool` talks to the keyboard over USB (SetupAPI + hid.dll) and does the
-flashing, so it is a **Windows-native** CMake/MSVC build and cannot be built in
-WSL. This is the only build that needs a Windows shell. Use the existing
-`tools/host/CMakeLists.txt` and the existing `tools/host/build/` directory
-(`cmake --build build --config Release`); do not invent a new layout. Only
-rebuild it when host_tool sources actually change and the user wants a new exe.
+`host_tool` is a Windows CMake/MSVC target (it uses USB via SetupAPI + hid.dll),
+but you still drive it from WSL by calling the Windows build tools as normal
+executables — no PowerShell. Reuse the existing `tools/host/CMakeLists.txt` and
+`tools/host/build/` (don't invent a new layout), e.g.:
+
+```
+wsl cmake.exe --build F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+```
+
+Only rebuild when host_tool sources actually change and the user wants a new exe.
 
 ## Flashing
 
-WSL2 has no USB. Flashing is done from the **host** via the host_tool:
-`host_tool upload` (BOOTSEL + copy the UF2). Build and upload are separate steps;
-only flash when the user asks.
+Flashing is done by running the Windows `host_tool.exe` from WSL (interop reaches
+USB fine): `wsl .../host_tool.exe upload F:/.../vial.uf2`. See the
+`host-tool-athena75` skill for details. Build and upload are separate steps; only
+flash when the user asks.
 
 ## Reminders
 

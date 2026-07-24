@@ -9,12 +9,12 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
 
 ## How to run it — NEVER PowerShell
 
-- **Never use PowerShell.** Do not use the PowerShell call operator (`& "...exe"`),
-  and do not wrap commands in `wsl bash -c '...'` (PowerShell mangles quotes,
-  backslashes, and `$()`).
-- `host_tool.exe` is a Windows binary but **launch it from WSL via interop** — WSL
-  runs a Windows `.exe` as a normal executable. It reaches USB fine (the Windows
-  process has USB; only WSL2's own /dev lacks it). Invoke the exe directly:
+- **The only forbidden thing is PowerShell.** Do not use the PowerShell call
+  operator (`& "...exe"`), and do not wrap commands in `wsl bash -c '...'`
+  (PowerShell mangles quotes, backslashes, and `$()`).
+- **`host_tool.exe` is just a normal executable under WSL — run it directly.**
+  Running a Windows `.exe` from WSL is normal, not an exception; it reaches USB
+  fine (the Windows process has USB; only WSL2's own /dev lacks it):
 
   ```
   wsl /mnt/f/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/bin/host_tool.exe <cmd> <args>
@@ -72,7 +72,13 @@ paths for any file args):
 
 ## Rebuilding host_tool (only when its sources change)
 
-`host_tool` is a Windows CMake/MSVC build under `tools/host/` (uses the existing
-`tools/host/CMakeLists.txt` and `tools/host/build/`). Only rebuild when the C
-sources actually change and the user wants a fresh exe; `upload` and the other
-commands otherwise keep working with the existing exe.
+`host_tool` is a Windows CMake/MSVC target under `tools/host/`. Drive it from WSL
+by calling the Windows build tools as normal executables (no PowerShell), reusing
+the existing `tools/host/CMakeLists.txt` and `tools/host/build/`:
+
+```
+wsl cmake.exe --build F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+```
+
+Only rebuild when the C sources actually change and the user wants a fresh exe;
+`upload` and the other commands otherwise keep working with the existing exe.
