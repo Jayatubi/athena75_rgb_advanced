@@ -29,6 +29,28 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
 - Do not build firmware here — build with `build-athena75` (WSL). host_tool only
   *uses* an already-built UF2.
 
+## Running on macOS (native, no WSL)
+
+On a Mac the tool is a **native arm64 binary** — there is no WSL and no `.exe`;
+run it directly. The macOS backend (`common/hid_mac.c` IOKit HID +
+`common/sys_mac.c`) is already in the tree, so it just needs building once:
+
+```
+cmake -S keyboards/ydkb/athena75_rgb_advanced/tools/host -B keyboards/ydkb/athena75_rgb_advanced/tools/host/build -DCMAKE_BUILD_TYPE=Release
+cmake --build keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+```
+
+- Binary lands at `.../tools/host/build/Release/host_tool` (Mach-O; `build/` is
+  gitignored — rebuild locally, don't commit it).
+- File-path args are just normal macOS paths (e.g. the UF2 under `tools/builds/`).
+- **First HID access needs permission.** If a command prints
+  `error: device 9d5b:2514 not found` even though `ioreg`/System Information shows
+  the keyboard (VID `0x9D5B` / PID `0x2514`, raw-HID collection UsagePage `0xFF60`
+  Usage `0x61`), grant the running terminal app **Input Monitoring** in System
+  Settings › Privacy & Security, then just re-run — no code change needed.
+- The current-source binary exposes `upload/snapshot/synctime/daemon/diag/
+  backup/restore/probe(read|erase|prog)` — there is **no** `put/ls/read`.
+
 ## The executable and firmware paths
 
 - Exe (canonical): `.../tools/host/bin/host_tool.exe`

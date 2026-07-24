@@ -58,6 +58,19 @@ executables — no PowerShell. Reuse the existing `tools/host/CMakeLists.txt` an
 wsl cmake.exe --build F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
 ```
 
+On **macOS** there is no WSL: build the native binary directly with the same
+CMake project (the `common/hid_mac.c` + `common/sys_mac.c` backend is already in
+the tree, links IOKit/CoreFoundation, no third-party deps):
+
+```
+cmake -S keyboards/ydkb/athena75_rgb_advanced/tools/host -B keyboards/ydkb/athena75_rgb_advanced/tools/host/build -DCMAKE_BUILD_TYPE=Release
+cmake --build keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+```
+
+The binary lands at `.../tools/host/build/Release/host_tool` (`build/` is
+gitignored). See the `host-tool-athena75` skill for the Input Monitoring
+permission note on first USB/HID access.
+
 Only rebuild when host_tool sources actually change and the user wants a new exe.
 
 ## Flashing
