@@ -1,0 +1,37 @@
+---
+description: Hard limit on how much flash we may erase/program while testing (protect flash endurance)
+alwaysApply: true
+---
+
+# Flash write budget — do NOT wear out the flash
+
+SPI-NOR flash has a finite erase/program endurance (~100k cycles per sector).
+Repeated or unbounded test loops that erase/program the same sector will
+physically damage it. Treat every erase/program as a scarce, counted resource.
+
+## Hard rules
+
+- **Never run open-ended / looping flash-write tests.** No "keep hammering it"
+  loops, no scripts that erase+program in a `while`/`for` without a tiny fixed
+  bound. Reads (`probe read`, `snapshot`, `backup`, `diag`, JEDEC) are free —
+  loop those all you want; **writes are not**.
+- **Per test session, keep total erase+program operations to a small, fixed
+  number (default budget: ≤ 10 erase/program ops).** One erase + one program +
+  read-back is enough to prove read/write works. If you think you need more,
+  stop and ask the user first.
+- **Always vary/rotate the test address, or reuse a single dedicated scratch
+  sector deliberately** — do not silently re-erase the same sector over and over
+  across runs.
+- **Never erase/program the firmware region or the EEPROM backing store.**
+  On `ydkb/athena75_rgb_advanced` the flash is 16 MB (XIP `0x1000_0000`..
+  `0x1100_0000`):
+  - `0x1000_0000`..`0x1040_0000` (4 MB) = firmware. **Off-limits.**
+  - EEPROM (wear-leveling) backing at offset `0x001F_0000` (+64 KB) =
+    XIP `0x101F_0000`..`0x1020_0000`. **Off-limits.**
+  - Safe scratch region for read/write tests: the data area
+    `0x1040_0000`..`0x1100_0000` (e.g. `0x1080_0000`).
+  Note: `probe erase/prog` only checks the address is in-window — it does **not**
+  protect firmware/EEPROM. The caller is responsible for the address.
+- **Prefer read-back verification over re-writing.** After a single
+  erase+program, verify with reads (which are free), rather than writing again.
+- If a test would exceed the budget, **pause and report** instead of continuing.
