@@ -26,6 +26,10 @@ typedef enum {
     MN_RGB_SCOPE,   // RGB: which LEDs light up (layout options bits[3:5])
     MN_REBOOT,      // reboot submenu: normal restart vs BOOTSEL (UF2 bootloader)
     MN_LCD_TEST,    // sentinel: full-screen panel-alignment checkerboard (no items)
+    MN_MATRIX,      // MATRIX rain submenu (speed / density / clock floor)
+    MN_MTX_SPEED,   // MATRIX: fall speed levels
+    MN_MTX_DENS,    // MATRIX: density levels
+    MN_MTX_CLOCK,   // MATRIX: clock digit floor alpha levels
     MN_COUNT
 } menu_node_id_t;
 

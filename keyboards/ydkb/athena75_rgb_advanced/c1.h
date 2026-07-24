@@ -53,6 +53,16 @@ uint8_t  menu_bind_get_effect(void);
 void     menu_bind_set_display(uint8_t mode); // 0 = ANIMATION, 1 = MATRIX
 uint8_t  menu_bind_get_display(void);
 
+// MATRIX rain tunables (persisted in eeconfig, applied live by app/matrix.c).
+// Each is an index into a small table owned by matrix.c: speed = per-cell fall
+// time, density = drop spacing + trail length, clock = digit-region floor alpha.
+void     menu_bind_set_mtx_speed(uint8_t idx);
+uint8_t  menu_bind_get_mtx_speed(void);
+void     menu_bind_set_mtx_density(uint8_t idx);
+uint8_t  menu_bind_get_mtx_density(void);
+void     menu_bind_set_mtx_clock(uint8_t idx);
+uint8_t  menu_bind_get_mtx_clock(void);
+
 // Wall-clock sync from the host over USB (raw-HID 0xFD 0x5E). The board has no
 // battery-backed RTC, so the host pushes the time and the firmware free-runs it
 // off the system timer until power is lost (re-sync on connect). Used by the
@@ -66,17 +76,34 @@ void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss);
 void flash_prompt_request(void);
 
 /* user config saved in eeprom */
+// NOTE ON FIELD ORDER: GCC allocates uint8_t/bool bit-fields into 1-byte
+// containers and never lets a field straddle a byte boundary -- it pads instead.
+// Only the 4-byte `raw` is persisted (eeconfig_update_user takes raw). The fields
+// below are ordered to fill each byte exactly (8+8+8+8) so nothing spills into a
+// 5th byte outside `raw`. The MATRIX fields slot into the padding the original
+// layout left (byte0 had 3 free bits after gif_id, byte2 had 4 after rand_iv),
+// so every pre-existing field keeps its original bit position -- old eeprom values
+// (anim/display settings) stay valid across this change. The _Static_assert below
+// guards the whole thing: if it ever exceeds 4 bytes, persistence breaks silently.
 typedef union {
     uint32_t raw;
     struct {
+        // byte 0
         bool     lcd_off  :1;
         uint8_t  gif_id   :4;
+        uint8_t  mtx_clock:3; // MATRIX clock digit floor alpha (index into the floor table)
+        // byte 1
         uint8_t  speed_id :4; // index into LCD_HOLD_FRAMES_LIST
         uint8_t  dir_id   :3;
         uint8_t  zoom_dir :1; // dissolve zoom direction (0 = grow-out, 1 = shrink-out)
+        // byte 2
         uint8_t  rand_iv  :4; // RANDOM: index into LCD_RAND_FRAMES_LIST
+        uint8_t  mtx_speed:2; // MATRIX rain fall speed (index into the speed table)
+        uint8_t  mtx_dens :2; // MATRIX rain density   (index into the density table)
+        // byte 3
         uint8_t  tween_n  :5; // tween frame count (LCD_TWEEN_FRAMES_MIN..MAX)
         uint8_t  ghost_id :2; // SLIDE afterimage strength (index into ghost_decay_list)
         uint8_t  disp_mode:1; // persistent display mode: 0 = animation, 1 = matrix rain
     };
 } user_eeconfig_t;
+_Static_assert(sizeof(user_eeconfig_t) == 4, "user_eeconfig must stay within the 4-byte eeconfig raw word");

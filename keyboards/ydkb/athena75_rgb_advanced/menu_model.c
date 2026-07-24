@@ -54,6 +54,9 @@ enum {
 enum {
     VG_NONE = 0,
     VG_DISPLAY, // persistent display mode: DM_ANIM vs DM_MATRIX (root radios)
+    VG_MTX_SPEED, // MATRIX rain fall speed level
+    VG_MTX_DENS,  // MATRIX rain density level
+    VG_MTX_CLOCK, // MATRIX clock digit floor alpha level
     VG_EFFECT,
     VG_GHOST,
     VG_ZOOM,
@@ -104,6 +107,9 @@ static uint8_t level_to_hue(uint8_t l, uint8_t levels) {
 static uint8_t group_get(uint8_t g) {
     switch (g) {
         case VG_DISPLAY:   return menu_bind_get_display();
+        case VG_MTX_SPEED: return menu_bind_get_mtx_speed();
+        case VG_MTX_DENS:  return menu_bind_get_mtx_density();
+        case VG_MTX_CLOCK: return menu_bind_get_mtx_clock();
         case VG_EFFECT:    return menu_bind_get_effect();
         case VG_GHOST:     return menu_bind_get_ghost();
         case VG_ZOOM:      return menu_bind_get_zoom();
@@ -129,6 +135,9 @@ static uint8_t group_get(uint8_t g) {
 static void group_set(uint8_t g, uint8_t v) {
     switch (g) {
         case VG_DISPLAY:   menu_bind_set_display(v);    break;
+        case VG_MTX_SPEED: menu_bind_set_mtx_speed(v);   break;
+        case VG_MTX_DENS:  menu_bind_set_mtx_density(v);  break;
+        case VG_MTX_CLOCK: menu_bind_set_mtx_clock(v);    break;
         case VG_EFFECT:    menu_bind_apply_effect(v);   break;
         case VG_GHOST:     menu_bind_set_ghost(v);      break;
         case VG_ZOOM:      menu_bind_set_zoom(v);       break;
@@ -177,6 +186,11 @@ static const uint8_t  ghost_vals[] = LCD_GHOST_DECAY_LIST;
 static const char *const ghost_labels[] = {"OFF", "LOW", "MID", "HIGH"};
 static const char *const zoom_labels[]  = {"ZOOM IN", "ZOOM OUT"};
 static const char *const whirl_labels[] = {"CW", "CCW", "ALT"};
+
+// MATRIX rain tunables. Index order matches the tables in app/matrix.c; index 0
+// is the (fresh-eeprom) default: fast, dense, 75% clock floor.
+static const char *const mtx_speed_labels[] = {"FAST", "MED", "SLOW", "V.SLOW"};
+static const char *const mtx_dens_labels[]  = {"HIGH", "MED", "LOW", "MIN"};
 
 // backing storage for generated numeric labels
 static char gap_labels[GAP_COUNT][8];
@@ -278,6 +292,9 @@ enum {
     MI_ROOT_EXIT,
     MI_REBOOT_NORMAL,
     MI_REBOOT_BOOTSEL,
+    MI_MTX_SPEED,
+    MI_MTX_DENS,
+    MI_MTX_CLOCK,
     MI_ANIM_SLIDE,
     MI_ANIM_DISSOLVE,
     MI_ANIM_SHAKE,
@@ -418,10 +435,10 @@ void menu_model_init(void) {
     // ANIMATION, backlight under RGB, plus the diagnostic + exit shortcuts.
     // ANIMATION and MATRIX are the two persistent display modes (mutually
     // exclusive, VG_DISPLAY): Space selects which one the LCD shows after leaving
-    // the menu (saved to eeprom). ANIMATION also folds into its keyframe settings
-    // on Right/Enter; MATRIX has no parameters, so it is a plain marked leaf.
+    // the menu (saved to eeprom). Both also fold into their own settings on
+    // Right/Enter (ANIMATION -> keyframe params, MATRIX -> rain params).
     node_add(MN_ROOT, MI_ROOT_ANIM,     "ANIMATION", MIK_FOLDER, MI_RADIO, VG_DISPLAY, DM_ANIM,   MN_ANIM);
-    node_add(MN_ROOT, MI_ROOT_MATRIX,   "MATRIX",    MIK_VALUE,  MI_RADIO, VG_DISPLAY, DM_MATRIX, 0);
+    node_add(MN_ROOT, MI_ROOT_MATRIX,   "MATRIX",    MIK_FOLDER, MI_RADIO, VG_DISPLAY, DM_MATRIX, MN_MATRIX);
 #ifdef RGB_MATRIX_ENABLE
     // RGB itself carries the on/off checkbox (Space toggles in place); Right/Enter
     // still descends into the RGB submenu.
@@ -470,6 +487,23 @@ void menu_model_init(void) {
     for (uint8_t i = 0; i < TWN_COUNT; i++) {
         node_add(MN_TWN, MI_DYN(VG_TWEEN, i), twn_labels[i], MIK_VALUE, MI_RADIO, VG_TWEEN, i, 0);
     }
+
+    // MATRIX rain: three parameter screens under the MATRIX display mode. Each is
+    // a small fixed radio list bound to its group (persisted via menu_bind_*).
+    node_add(MN_MATRIX, MI_MTX_SPEED, "SPEED",   MIK_FOLDER, 0, VG_NONE, 0, MN_MTX_SPEED);
+    node_add(MN_MATRIX, MI_MTX_DENS,  "DENSITY", MIK_FOLDER, 0, VG_NONE, 0, MN_MTX_DENS);
+    node_add(MN_MATRIX, MI_MTX_CLOCK, "CLOCK",   MIK_FOLDER, 0, VG_NONE, 0, MN_MTX_CLOCK);
+    build_enum_node(MN_MTX_SPEED, VG_MTX_SPEED, 4, mtx_speed_labels);
+    build_enum_node(MN_MTX_DENS,  VG_MTX_DENS,  4, mtx_dens_labels);
+    // CLOCK floor alpha: shown ascending by %, but each item's value is its index
+    // into matrix.c's floor table (index 0 = 75% = the fresh-eeprom default). This
+    // keeps the list ordered while preserving 75% as the default (same trick as
+    // RGB SCOPE below, where display order and stored value differ).
+    node_add(MN_MTX_CLOCK, MI_DYN(VG_MTX_CLOCK, 1), "50%",  MIK_VALUE, MI_RADIO, VG_MTX_CLOCK, 1, 0);
+    node_add(MN_MTX_CLOCK, MI_DYN(VG_MTX_CLOCK, 2), "62%",  MIK_VALUE, MI_RADIO, VG_MTX_CLOCK, 2, 0);
+    node_add(MN_MTX_CLOCK, MI_DYN(VG_MTX_CLOCK, 0), "75%",  MIK_VALUE, MI_RADIO, VG_MTX_CLOCK, 0, 0);
+    node_add(MN_MTX_CLOCK, MI_DYN(VG_MTX_CLOCK, 3), "88%",  MIK_VALUE, MI_RADIO, VG_MTX_CLOCK, 3, 0);
+    node_add(MN_MTX_CLOCK, MI_DYN(VG_MTX_CLOCK, 4), "100%", MIK_VALUE, MI_RADIO, VG_MTX_CLOCK, 4, 0);
 
 #ifdef RGB_MATRIX_ENABLE
     // RGB submenu: the on/off checkbox now lives on the parent RGB item itself.

@@ -10,6 +10,7 @@
 
 #include "quantum.h"
 #include "timer.h"
+#include "eeconfig.h"
 #include <string.h>
 
 #include "app.h"
@@ -22,13 +23,42 @@
 #define MTX_ROWS_MAX 12                      // 128/12 = 10 rows + slack
 #define MTX_GLYPHS   150                     // ASCII 0x21..0x7E (94) + katakana FF66..FF9D (56)
 #define MTX_RENDER_MS 16                     // update + present cadence: fixed 60 FPS
-#define MTX_STEP_MS   55                     // nominal fall time for one cell (speed basis)
 #define MTX_DT_MAX_MS 100                    // clamp delta-time after a stall/wake
 #define MTX_HEAD_FG  0xFFFF                  // leading glyph: white
 #define MTX_TAIL_FG  0x07E0                  // trail: pure green (alpha fades it)
-#define MTX_CLOCK_FG 0xFEA0                  // clock watermark: bright gold (contrasts the green)
-#define MTX_CLOCK_A  255                     // clock glyph alpha
-#define MTX_CLOCK_DOT "\xE2\x80\xA2"         // U+2022 • bullet: the digit's resting dot
+#define MTX_CLOCK_FG 0xFEA0                  // digit region: bright gold (contrasts the green)
+
+// ---- user-tunable rain parameters (menu-driven, persisted in eeconfig) ------
+// All three are small index tables owned here; the menu picks an index via the
+// menu_bind_* setters below and matrix.c reads user_eeconfig.* live each frame.
+// Index 0 is the default a fresh eeprom lands on (fast, dense, 75% clock floor).
+//
+// SPEED = per-cell fall time in ms (a column's true rate is this * its 1..3
+// period). Lower = faster.
+static const uint16_t mtx_speed_ms[4] = {24, 38, 55, 78}; // FAST, MED, SLOW, V.SLOW
+// DENSITY = how tightly drops pack: a smaller respawn gap (drops re-enter sooner,
+// so more columns rain at once) and a longer trail (more lit cells per drop).
+static const uint8_t  mtx_dens_gap[4]  = {4, 9, 15, 22};  // HIGH, MED, LOW, MIN (respawn spread)
+static const uint8_t  mtx_dens_tmin[4] = {7, 5, 4, 3};    // trail length floor
+static const uint8_t  mtx_dens_tspan[4]= {6, 5, 4, 3};    // trail length random span
+// CLOCK = floor alpha for the HH:MM digit region (kept legible under the rain).
+static const uint8_t  mtx_floor_a[5]   = {191, 128, 158, 224, 255}; // 75,50,62,88,100 %
+
+static inline uint16_t mtx_step_ms(void)  { return mtx_speed_ms[user_eeconfig.mtx_speed & 3]; }
+static inline uint8_t  mtx_gap(void)      { uint8_t g = mtx_dens_gap[user_eeconfig.mtx_dens & 3]; return g ? g : 1; }
+static inline uint8_t  mtx_tmin(void)     { return mtx_dens_tmin[user_eeconfig.mtx_dens & 3]; }
+static inline uint8_t  mtx_tspan(void)    { uint8_t s = mtx_dens_tspan[user_eeconfig.mtx_dens & 3]; return s ? s : 1; }
+static inline uint8_t  mtx_clock_floor(void) { uint8_t i = user_eeconfig.mtx_clock; return mtx_floor_a[(i < 5) ? i : 0]; }
+
+// ---- menu bindings (called on core0) ----------------------------------------
+// Store the picked index + persist; matrix.c reads it live so changes to speed
+// and clock apply on the next frame, density on each column's next respawn.
+void    menu_bind_set_mtx_speed(uint8_t idx)   { user_eeconfig.mtx_speed = idx & 3; eeconfig_update_user(user_eeconfig.raw); }
+uint8_t menu_bind_get_mtx_speed(void)          { return user_eeconfig.mtx_speed & 3; }
+void    menu_bind_set_mtx_density(uint8_t idx) { user_eeconfig.mtx_dens = idx & 3; eeconfig_update_user(user_eeconfig.raw); }
+uint8_t menu_bind_get_mtx_density(void)        { return user_eeconfig.mtx_dens & 3; }
+void    menu_bind_set_mtx_clock(uint8_t idx)   { user_eeconfig.mtx_clock = (idx < 5) ? idx : 0; eeconfig_update_user(user_eeconfig.raw); }
+uint8_t menu_bind_get_mtx_clock(void)          { uint8_t i = user_eeconfig.mtx_clock; return (i < 5) ? i : 0; }
 
 // Host-synced wall clock (no RTC on the board). The time is always base + (now
 // uptime - sync uptime) -- never a delta accumulation. At boot base = 00:00 and
@@ -65,6 +95,13 @@ static uint8_t  mtx_period[MTX_COLS_MAX];              // fall-speed divisor: 1 
 static uint32_t mtx_render_t = 0;                      // last present (60 FPS gate)
 static uint32_t mtx_frame_t  = 0;                      // last update (for delta-time)
 static bool     mtx_tmask[MTX_COLS_MAX][MTX_ROWS_MAX]; // cells covered by the HH:MM watermark
+// Digit cells have no resident glyph: they only light where a drop has swept
+// through, and keep that glyph as gold residue afterwards. mtx_dep holds the
+// deposited glyph+1 per cell (0 = untouched -> drawn as nothing). The residue is
+// wiped whenever the shown HH:MM changes so each new time re-materialises from
+// the rain rather than showing a stale character.
+static uint8_t  mtx_dep[MTX_COLS_MAX][MTX_ROWS_MAX];
+static uint16_t mtx_clock_hm = 0xFFFF;                 // last shown hh*100+mm
 
 // Map a rain glyph index to a code point: 0..93 -> printable ASCII 0x21..0x7E
 // (letters, digits, symbols), 94..149 -> half-width katakana U+FF66..U+FF9D.
@@ -88,11 +125,13 @@ static void mtx_seed(void) {
     for (uint8_t c = 0; c < MTX_COLS_MAX; c++) {
         for (uint8_t r = 0; r < MTX_ROWS_MAX; r++)
             mtx_glyph[c][r] = (uint8_t)(rng_next() % MTX_GLYPHS);
-        mtx_head[c]   = (int16_t)(-(int16_t)(rng_next() % (MTX_ROWS_MAX * 2))); // stagger
+        mtx_head[c]   = (int16_t)(-(int16_t)(rng_next() % (MTX_ROWS_MAX + mtx_gap()))); // stagger
         mtx_headf[c]  = (int32_t)mtx_head[c] << 8;
-        mtx_trail[c]  = (uint8_t)(4 + rng_next() % 6);
+        mtx_trail[c]  = (uint8_t)(mtx_tmin() + rng_next() % mtx_tspan());
         mtx_period[c] = (uint8_t)(1 + rng_next() % 3);
     }
+    memset(mtx_dep, 0, sizeof(mtx_dep)); // digit residue starts empty (revealed by rain)
+    mtx_clock_hm = 0xFFFF;
     mtx_render_t = timer_read32() - MTX_RENDER_MS; // present the first frame immediately
     mtx_frame_t  = timer_read32();                 // delta-time origin
 }
@@ -107,6 +146,11 @@ static bool clock_build_mask(uint8_t cols, uint8_t rows) {
     uint32_t sec = (clock_base_sec + timer_elapsed32(clock_sync_ms) / 1000u) % 86400u;
     uint8_t  hh  = (uint8_t)(sec / 3600u);
     uint8_t  mm  = (uint8_t)((sec % 3600u) / 60u);
+    uint16_t hm  = (uint16_t)(hh * 100u + mm);
+    if (hm != mtx_clock_hm) {                     // time changed: drop the old residue
+        memset(mtx_dep, 0, sizeof(mtx_dep));      // new digits re-materialise from rain
+        mtx_clock_hm = hm;
+    }
     uint8_t  d[4] = { (uint8_t)(hh / 10), (uint8_t)(hh % 10), (uint8_t)(mm / 10), (uint8_t)(mm % 10) };
     uint8_t  ox = (uint8_t)((cols - CW) / 2);     // centre the block in the grid
     uint8_t  oy = (uint8_t)((rows - CH) / 2);
@@ -154,21 +198,21 @@ static void matrix_tick(uint32_t dt_ms) {
     // the head's sub-cell offset feeds the trail's smooth per-frame fade below.
     for (uint8_t c = 0; c < cols; c++) {
         int16_t prev = (int16_t)(mtx_headf[c] >> 8);
-        int32_t adv  = ((int32_t)dt << 8) / ((int32_t)mtx_period[c] * MTX_STEP_MS); // q8 cells
+        int32_t adv  = ((int32_t)dt << 8) / ((int32_t)mtx_period[c] * mtx_step_ms()); // q8 cells
         mtx_headf[c] += adv;
         int16_t now  = (int16_t)(mtx_headf[c] >> 8);
         mtx_head[c]  = now;
         for (int16_t r = (int16_t)(prev + 1); r <= now; r++)        // fresh glyph per new head cell
             if (r >= 0 && r < rows) mtx_glyph[c][r] = (uint8_t)(rng_next() % MTX_GLYPHS);
         if (now - (int16_t)mtx_trail[c] > rows) {                   // fully off the bottom -> respawn
-            int16_t nh    = (int16_t)(-(int16_t)(rng_next() % rows));
+            int16_t nh    = (int16_t)(-(int16_t)(rng_next() % mtx_gap())); // density: respawn spread
             mtx_headf[c]  = (int32_t)nh << 8;
             mtx_head[c]   = nh;
-            mtx_trail[c]  = (uint8_t)(4 + rng_next() % 6);
+            mtx_trail[c]  = (uint8_t)(mtx_tmin() + rng_next() % mtx_tspan());
             mtx_period[c] = (uint8_t)(1 + rng_next() % 3);
         }
         // occasional flicker, dt-scaled so its rate is frame-rate independent.
-        if ((rng_next() % (32u * MTX_STEP_MS)) < dt) {
+        if ((rng_next() % (32u * mtx_step_ms())) < dt) {
             uint8_t rr = (uint8_t)(rng_next() % rows);
             mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
         }
@@ -177,54 +221,62 @@ static void matrix_tick(uint32_t dt_ms) {
     ui_clear(fbShow, 0x0000);
     char g[4];
 
-    // 2) clock cells own their look entirely and ALWAYS use the clock colour rule
-    // (gold) -- rain only changes the CHARACTER on a digit cell, never its colour.
-    // A cell under the drop (head..tail) shows that column's rain glyph in gold;
-    // otherwise it shows the resting dot. Step 3 skips these cells so they stay gold.
-    if (have_clock) {
-        for (uint8_t c = 0; c < cols; c++) {
-            for (uint8_t r = 0; r < rows; r++) {
-                if (!mtx_tmask[c][r]) continue;
-                int16_t     rel = mtx_head[c] - (int16_t)r;              // 0 = head .. trail = tail
-                const char *s;
-                if (rel >= 0 && rel <= (int16_t)mtx_trail[c]) {         // drop covers it
-                    mtx_utf8(mtx_glyph[c][r], g);
-                    s = g;                                              // rain char, but gold
-                } else {
-                    s = MTX_CLOCK_DOT;                                  // resting dot
-                }
-                ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
-                              s, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
-            }
-        }
-    }
-
-    // 3) rain: head (bright) + fading trail. Clock cells are handled in step 2 (kept
-    // gold), so skip them here -- the rain lends a digit its character, not its colour.
+    // Unified draw. For every column walk the cells and paint the falling drop's
+    // head (bright) + smoothly fading trail. The alpha of a trail cell k below the
+    // head is a q8 fractional distance (k*256 + the head's sub-cell offset), so it
+    // ramps every frame with delta-time and stays continuous across a cell step.
+    //
+    // Digit cells have NO resident character: they start blank and only light
+    // where a drop sweeps through. A covered digit cell shows the live rain glyph
+    // in gold (floored so it stays legible) and deposits that glyph as residue;
+    // an uncovered digit cell shows its deposited residue (gold, floor alpha) or,
+    // if never touched, nothing. Non-digit cells fade all the way to nothing.
+    const uint8_t clk_floor = mtx_clock_floor();
     for (uint8_t c = 0; c < cols; c++) {
-        uint32_t frac = (uint32_t)(mtx_headf[c] & 0xFF);         // sub-cell offset of this column's head
-        for (uint8_t k = 0; k <= mtx_trail[c]; k++) {
-            int16_t r = (int16_t)(mtx_head[c] - k);
-            if (r < 0 || r >= rows) continue;
-            if (have_clock && mtx_tmask[c][r]) continue;             // clock cell -> step 2
-            mtx_utf8(mtx_glyph[c][r], g);
-            int16_t  x = (int16_t)(c * MTX_CELL_W);
-            int16_t  y = (int16_t)(r * MTX_CELL_H);
+        uint32_t frac = (uint32_t)(mtx_headf[c] & 0xFF);       // head sub-cell offset
+        int16_t  head = mtx_head[c];
+        uint32_t span = (uint32_t)mtx_trail[c] * 256u;         // full trail length
+        for (uint8_t r = 0; r < rows; r++) {
+            int16_t k       = (int16_t)(head - (int16_t)r);    // 0 = head .. trail = tail
+            bool    covered = (k >= 0 && k <= (int16_t)mtx_trail[c]);
+            bool    digit   = have_clock && mtx_tmask[c][r];
+            if (!covered && !digit) continue;                  // nothing to draw here
+
+            uint8_t ra = 0;                                    // rain alpha for this cell
+            if (covered) {
+                if (k == 0) {
+                    ra = 255;                                  // bright head
+                } else {
+                    uint32_t dist = (uint32_t)k * 256u + frac;
+                    ra = (dist >= span) ? 0 : (uint8_t)(((span - dist) * 255u) / span);
+                }
+            }
+
             uint16_t fg;
             uint8_t  a;
-            if (k == 0) {
-                fg = MTX_HEAD_FG; a = 255;                        // crisp bright head (moves per cell)
+            uint8_t  gi;                                                       // glyph to draw
+            if (digit) {
+                fg = MTX_CLOCK_FG;                                             // gold digit region
+                if (covered) {
+                    mtx_dep[c][r] = (uint8_t)(mtx_glyph[c][r] + 1);           // deposit residue
+                    gi = mtx_glyph[c][r];
+                    a  = (ra > clk_floor) ? ra : clk_floor;                    // bright head -> floor
+                } else if (mtx_dep[c][r]) {
+                    gi = (uint8_t)(mtx_dep[c][r] - 1);                         // residue left behind
+                    a  = clk_floor;
+                } else {
+                    continue;                                                 // untouched -> blank
+                }
             } else {
-                // Fractional distance from the head in q8 (k*256 + the head's sub-cell
-                // offset). Because the offset advances every frame with delta-time, the
-                // trail alpha ramps continuously -- and stays continuous when the head
-                // steps to the next cell (k, frac->256 == k+1, frac=0).
-                uint32_t dist = (uint32_t)k * 256u + frac;
-                uint32_t span = (uint32_t)mtx_trail[c] * 256u;   // full trail length
-                fg = MTX_TAIL_FG;
-                a  = (dist >= span) ? 0 : (uint8_t)(((span - dist) * 255u) / span);
+                fg = (k == 0) ? MTX_HEAD_FG : MTX_TAIL_FG;                     // head white, trail green
+                a  = ra;                                                       // fades to nothing
+                gi = mtx_glyph[c][r];
             }
-            ui_text_alpha(fbShow, x, y, g, fg, 0x0000, a);
+            if (!a) continue;
+
+            mtx_utf8(gi, g);
+            ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
+                          g, fg, 0x0000, a);
         }
     }
     ui_present(fbShow);
