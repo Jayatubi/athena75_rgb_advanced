@@ -1651,28 +1651,36 @@ static void mtx_task(void) {
     ui_clear(fbShow, 0x0000);
     char g[4];
 
-    // 2) clock base: draw the resting dot (•, gold) only on digit cells NOT
-    // currently under a rain drop. A cell the drop (head..tail) covers is left to
-    // step 3 so it shows the rain glyph — the rain sweeps through and the dot is
-    // only what remains once the drop has fully passed.
+    // 2) clock cells own their look entirely and ALWAYS use the clock colour rule
+    // (gold) — rain only changes the CHARACTER on a digit cell, never its colour.
+    // A cell under the drop (head..tail) shows that column's rain glyph in gold;
+    // otherwise it shows the resting dot (•). Step 3 skips these cells so they stay
+    // gold instead of taking the green/white rain colours.
     if (have_clock) {
         for (uint8_t c = 0; c < cols; c++) {
             for (uint8_t r = 0; r < rows; r++) {
                 if (!mtx_tmask[c][r]) continue;
-                int16_t rel = mtx_head[c] - (int16_t)r;                   // 0 = head .. trail = tail
-                if (rel >= 0 && rel <= (int16_t)mtx_trail[c]) continue;   // drop covers it -> rain
+                int16_t     rel = mtx_head[c] - (int16_t)r;              // 0 = head .. trail = tail
+                const char *s;
+                if (rel >= 0 && rel <= (int16_t)mtx_trail[c]) {         // drop covers it
+                    mtx_utf8(mtx_glyph[c][r], g);
+                    s = g;                                              // rain char, but gold
+                } else {
+                    s = MTX_CLOCK_DOT;                                  // resting dot
+                }
                 ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
-                              MTX_CLOCK_DOT, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
+                              s, MTX_CLOCK_FG, 0x0000, MTX_CLOCK_A);
             }
         }
     }
 
-    // 3) rain: head (bright) + fading trail, drawn everywhere, clock cells included
-    // — a drop passing a digit shows the normal rain glyph there, not the circle.
+    // 3) rain: head (bright) + fading trail. Clock cells are handled in step 2 (kept
+    // gold), so skip them here — the rain lends a digit its character, not its colour.
     for (uint8_t c = 0; c < cols; c++) {
         for (uint8_t k = 0; k <= mtx_trail[c]; k++) {
             int16_t r = (int16_t)(mtx_head[c] - k);
             if (r < 0 || r >= rows) continue;
+            if (have_clock && mtx_tmask[c][r]) continue;             // clock cell -> step 2
             mtx_utf8(mtx_glyph[c][r], g);
             int16_t  x = (int16_t)(c * MTX_CELL_W);
             int16_t  y = (int16_t)(r * MTX_CELL_H);
