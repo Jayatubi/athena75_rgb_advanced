@@ -1,0 +1,17 @@
+---
+description: Never commit or push unless the user explicitly asks
+alwaysApply: true
+---
+
+# Do not commit/push on your own
+
+- NEVER run `git commit`, `git push`, `git merge`, `git rebase`, or otherwise
+  create/rewrite history unless the user explicitly asks (e.g. "提交" / "推送" /
+  "commit" / "push").
+- After making code changes, stop at leaving the working tree modified. It is
+  fine to build, flash, run, and test, but do not stage-and-commit as a
+  "finishing" step.
+- When the user does ask to commit, only then commit (and push only if they ask
+  to push).
+- If you think a commit is warranted, you may suggest it — but wait for the user
+  to confirm before doing it.
