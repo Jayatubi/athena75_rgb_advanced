@@ -38,3 +38,22 @@ char *sys_exe_dir(char *out, size_t outlen) {
     snprintf(out, outlen, "%s", path);
     return out;
 }
+
+int sys_daemonize(void) {
+    // The relaunched copy inherits this env marker -> it is the background child.
+    if (GetEnvironmentVariableA("ATHENA_DAEMONIZED", NULL, 0) != 0) return 1;
+    // Parent: relaunch ourselves with the same command line, detached and window-
+    // less, then report 0 so the caller exits and leaves the child resident.
+    SetEnvironmentVariableA("ATHENA_DAEMONIZED", "1");
+    char cmd[4096];
+    snprintf(cmd, sizeof cmd, "%s", GetCommandLineA());
+    STARTUPINFOA        si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof si;
+    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
+                             DETACHED_PROCESS | CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    if (!ok) return -1;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return 0;
+}

@@ -4,6 +4,7 @@
 #include "menu_model.h"
 #include "c1.h"
 #include "config.h"
+#include "app/app.h"
 #include <string.h>
 
 #ifdef RGB_MATRIX_ENABLE
@@ -30,12 +31,6 @@ enum {
     EFF_SHAKE,
     EFF_WHIRL,
     EFF_RANDOM,
-};
-
-// ---- persistent display mode ids (must match c1_display DM_* enum) ----------
-enum {
-    DM_ANIM = 0, // keyframe playback + tween renderer
-    DM_MATRIX,   // Matrix digital-rain screen
 };
 
 // ---- RGB backlight level resolutions (menu radio steps) ---------------------

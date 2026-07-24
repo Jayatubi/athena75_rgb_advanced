@@ -3,6 +3,7 @@
 
 #include "menu.h"
 #include "menu_model.h"
+#include "app/app.h"
 #include "ui.h"
 #include "ui_scene.h"
 #include "config.h"

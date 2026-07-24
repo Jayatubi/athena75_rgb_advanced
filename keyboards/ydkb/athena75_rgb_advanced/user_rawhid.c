@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "ch.h"
 #include "quantum.h"
 #include "via.h"
+#include "eeprom.h"
 #include "raw_hid.h"
 #include "c1.h"
 #include "bootloader.h"
@@ -57,6 +58,164 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define FLASH_CMD 0x5F
 #define FLASH_M0  0xF1
 #define FLASH_M1  0x55
+
+#define DIAG_CMD  0x60
+
+// Logical EEPROM (Vial/VIA config) backup & restore over raw-HID: 0xFD 0x62 <sub>.
+// Goes through eeprom_read_block / eeprom_write_block so the wear-leveling layer
+// does the flash encoding (never touches the raw backing directly).
+#define EE_CMD    0x62
+#define EE_INFO   0x00 // -> data[3..6] = logical EEPROM size (BE32)
+#define EE_READ   0x01 // args: data[3..4]=addr(BE16) data[5]=len -> data[6..] bytes
+#define EE_WRITE  0x02 // args: data[3..4]=addr(BE16) data[5]=len data[6..]=bytes
+#define EE_CHUNK  26   // payload bytes per report (6B header in a 32B report)
+
+// Hardware probes over raw-HID (0xFD 0x63 <sub>): let host_tool read the real
+// flash size (JEDEC) and read/erase/program any XIP address for diagnostics.
+#define PROBE_CMD     0x63
+#define PROBE_JEDEC   0x00 // -> data[3..5]=JEDEC id(mfr,type,cap) data[6..9]=size bytes(BE32)
+#define PROBE_XIPREAD 0x01 // args: data[3..6]=addr(BE32) data[7]=len -> data[8..] bytes
+#define PROBE_CHUNK   24   // payload bytes per read (8B header in a 32B report)
+#define PROBE_ERASE   0x02 // args: data[3..6]=addr(BE32) -> data[3]=ok  (erase 4K sector)
+#define PROBE_PROG    0x03 // args: data[3..6]=addr(BE32) -> data[3]=ok  (write test page)
+
+#include "probe_flash.h"
+
+#if __has_include("wear_leveling_rp2040_flash_config.h")
+#    include "wear_leveling_rp2040_flash_config.h"
+#endif
+
+static void ath_handle_diag(uint8_t *data) {
+    (void)data;
+#if defined(PICO_FLASH_SIZE_BYTES)
+    uint32_t fs = (uint32_t)PICO_FLASH_SIZE_BYTES;
+    data[2]     = (uint8_t)(fs >> 24);
+    data[3]     = (uint8_t)(fs >> 16);
+    data[4]     = (uint8_t)(fs >> 8);
+    data[5]     = (uint8_t)(fs);
+    data[14]    = 0;
+#else
+    data[2] = data[3] = data[4] = data[5] = 0;
+    data[14] = 1;
+#endif
+#if defined(WEAR_LEVELING_RP2040_FLASH_BASE)
+    uint32_t base = (uint32_t)WEAR_LEVELING_RP2040_FLASH_BASE;
+#else
+    uint32_t base = 0;
+#endif
+#ifndef WEAR_LEVELING_BACKING_SIZE
+#    define WEAR_LEVELING_BACKING_SIZE 65536
+#endif
+#ifndef WEAR_LEVELING_LOGICAL_SIZE
+#    define WEAR_LEVELING_LOGICAL_SIZE 32768
+#endif
+    data[6]  = (uint8_t)(base >> 24);
+    data[7]  = (uint8_t)(base >> 16);
+    data[8]  = (uint8_t)(base >> 8);
+    data[9]  = (uint8_t)(base);
+    {
+        uint16_t backing_kb = (uint16_t)(WEAR_LEVELING_BACKING_SIZE / 1024u);
+        data[10]            = (uint8_t)(backing_kb >> 8);
+        data[11]            = (uint8_t)(backing_kb);
+    }
+    data[12] = (uint8_t)(WEAR_LEVELING_LOGICAL_SIZE >> 8);
+    data[13] = (uint8_t)(WEAR_LEVELING_LOGICAL_SIZE);
+}
+
+#ifndef WEAR_LEVELING_LOGICAL_SIZE
+#    define WEAR_LEVELING_LOGICAL_SIZE 32768
+#endif
+
+// EEPROM (Vial/VIA config) backup & restore. Reads/writes go through the QMK
+// eeprom API so the wear-leveling driver handles the flash encoding; core1 is
+// parked automatically via backing_store_lock/unlock during any flash write.
+static void ath_handle_ee(uint8_t *data) {
+    switch (data[2]) {
+        case EE_INFO: {
+            uint32_t sz = (uint32_t)WEAR_LEVELING_LOGICAL_SIZE;
+            data[3]     = (uint8_t)(sz >> 24);
+            data[4]     = (uint8_t)(sz >> 16);
+            data[5]     = (uint8_t)(sz >> 8);
+            data[6]     = (uint8_t)(sz);
+            break;
+        }
+        case EE_READ: {
+            uint16_t addr = ((uint16_t)data[3] << 8) | data[4];
+            uint8_t  len  = data[5];
+            if (len > EE_CHUNK) len = EE_CHUNK;
+            if ((uint32_t)addr + len > (uint32_t)WEAR_LEVELING_LOGICAL_SIZE) break;
+            memset(&data[6], 0, EE_CHUNK);
+            eeprom_read_block(&data[6], (const void *)(uintptr_t)addr, len);
+            break;
+        }
+        case EE_WRITE: {
+            uint16_t addr = ((uint16_t)data[3] << 8) | data[4];
+            uint8_t  len  = data[5];
+            if (len > EE_CHUNK) len = EE_CHUNK;
+            if ((uint32_t)addr + len > (uint32_t)WEAR_LEVELING_LOGICAL_SIZE) break;
+            eeprom_write_block(&data[6], (void *)(uintptr_t)addr, len);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// Hardware probes: JEDEC flash-size query + arbitrary XIP read (see PROBE_* above).
+static void ath_handle_probe(uint8_t *data) {
+    switch (data[2]) {
+        case PROBE_JEDEC: {
+            uint8_t id[3] = {0};
+            app_flash_jedec(id);
+            data[3] = id[0];
+            data[4] = id[1];
+            data[5] = id[2];
+            // Most SPI-NOR encode size as log2(bytes) in the capacity byte.
+            uint32_t sz = (id[2] >= 0x10u && id[2] <= 0x1Fu) ? (1u << id[2]) : 0u;
+            data[6] = (uint8_t)(sz >> 24);
+            data[7] = (uint8_t)(sz >> 16);
+            data[8] = (uint8_t)(sz >> 8);
+            data[9] = (uint8_t)(sz);
+            break;
+        }
+        case PROBE_XIPREAD: {
+            uint32_t addr = ((uint32_t)data[3] << 24) | ((uint32_t)data[4] << 16) |
+                            ((uint32_t)data[5] << 8) | data[6];
+            uint8_t len = data[7];
+            if (len > PROBE_CHUNK) len = PROBE_CHUNK;
+            memset(&data[8], 0, PROBE_CHUNK);
+            // Allow all four XIP flash windows (0x1000_0000..0x1400_0000): cached,
+            // no-alloc, no-cache, and no-cache-no-alloc aliases of the same 16M, so
+            // the host can compare a cached read against a straight-from-flash read
+            // (0x13xx_xxxx) to detect a stale XIP cache line.
+            if (addr >= 0x10000000u && (addr + len) <= 0x14000000u) {
+                const uint8_t *p = (const uint8_t *)(uintptr_t)addr;
+                for (uint8_t i = 0; i < len; i++) data[8 + i] = p[i];
+            }
+            break;
+        }
+        case PROBE_ERASE: {
+            uint32_t addr = ((uint32_t)data[3] << 24) | ((uint32_t)data[4] << 16) |
+                            ((uint32_t)data[5] << 8) | data[6];
+            data[3] = app_flash_erase_sector(addr) ? 1u : 0u;
+            break;
+        }
+        case PROBE_PROG: {
+            uint32_t addr = ((uint32_t)data[3] << 24) | ((uint32_t)data[4] << 16) |
+                            ((uint32_t)data[5] << 8) | data[6];
+            uint8_t page[256];
+            memset(page, 0xA5, sizeof page); // recognizable fill
+            page[0] = 'P';
+            page[1] = 'R';
+            page[2] = 'O';
+            page[3] = 'B';
+            data[3] = app_flash_prog_page(addr, page) ? 1u : 0u;
+            break;
+        }
+        default:
+            break;
+    }
+}
 
 #ifndef LED_TYPE
 #define LED_TYPE rgb_led_t
@@ -193,6 +352,12 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             if (data[2] == FLASH_M0 && data[3] == FLASH_M1) {
                 flash_prompt_request();
             }
+        } else if (data[1] == DIAG_CMD) {
+            ath_handle_diag(data);
+        } else if (data[1] == EE_CMD) {
+            ath_handle_ee(data);
+        } else if (data[1] == PROBE_CMD) {
+            ath_handle_probe(data);
         }
     }
 }

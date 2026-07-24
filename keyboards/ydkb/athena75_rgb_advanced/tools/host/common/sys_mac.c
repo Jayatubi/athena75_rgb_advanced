@@ -6,6 +6,7 @@
 #include "sys.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 int sys_find_rp2(char *out, size_t outlen) {
     DIR *d = opendir("/Volumes");
@@ -52,4 +54,20 @@ char *sys_exe_dir(char *out, size_t outlen) {
     }
     snprintf(out, outlen, "%s", path);
     return out;
+}
+
+int sys_daemonize(void) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid > 0) return 0; // parent: caller exits, child stays resident
+    setsid();              // detach from the controlling terminal / session
+    // Redirect std streams to /dev/null so the background process has no tty.
+    int nul = open("/dev/null", O_RDWR);
+    if (nul >= 0) {
+        dup2(nul, 0);
+        dup2(nul, 1);
+        dup2(nul, 2);
+        if (nul > 2) close(nul);
+    }
+    return 1;
 }

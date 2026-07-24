@@ -6,6 +6,8 @@
 #   host_tool upload    - reboot to BOOTSEL over HID and copy a UF2 to RPI-RP2
 #   host_tool snapshot  - screenshot the LCD over HID and save a PNG
 #   host_tool synctime  - push the PC wall-clock time to the MATRIX rain over HID
+#   host_tool daemon    - resident background service: keep the clock synced,
+#                         auto-reconnecting across keyboard reboots/replugs
 #
 # No third-party libraries: Windows uses SetupAPI + hid.dll, macOS uses IOKit +
 # CoreFoundation, and the PNG writer is bundled.
@@ -52,14 +54,14 @@ if(MSVC)
     target_compile_definitions(athena_host PUBLIC _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# One binary, adb-style subcommands (host_tool <upload|snapshot|synctime>).
-add_executable(host_tool host_tool.c upload.c snapshot.c synctime.c)
+# One binary, adb-style subcommands (host_tool <upload|snapshot|synctime|daemon>).
+add_executable(host_tool host_tool.c upload.c snapshot.c synctime.c daemon.c app_cmds.c)
 target_link_libraries(host_tool PRIVATE athena_host)
 
 # Drop the executable in tools/host/bin/ so it sits next to the repo, not in a
 # throwaway build tree (it resolves builds/*.uf2 relative to its own dir).
 set_target_properties(host_tool PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY        "${CMAKE_CURRENT_SOURCE_DIR}/bin"
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG  "${CMAKE_CURRENT_SOURCE_DIR}/bin"
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY        "${CMAKE_CURRENT_BINARY_DIR}/Release"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG  "${CMAKE_CURRENT_BINARY_DIR}/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/Release"
 )

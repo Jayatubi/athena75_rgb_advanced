@@ -4,6 +4,11 @@ SRC ?=	c1_display.c c1_main.c matrix.c user_led.c user_function.c user_rawhid.c
 # Pure-C Q15.16 fixed-point math (trig for the Whirlpool rotate effect).
 SRC +=  lib/fixed_math/fixed_math.c
 
+# Low-level flash probes for the raw-HID PROBE command (JEDEC id + sector/page r/w).
+SRC +=  probe_flash.c
+
+VPATH += app
+
 MCU_LDSCRIPT = RP2040_FLASH_TIMECRIT_16M
 
 ALLOW_WARNINGS = yes

@@ -41,3 +41,22 @@
 #define ATHENA_FLASH_CMD  0x5F
 #define ATHENA_FLASH_M0   0xF1
 #define ATHENA_FLASH_M1   0x55
+
+// Flash / EEPROM diagnostics: 0xFD 0x60 0x00
+#define ATHENA_DIAG_CMD   0x60
+
+// Logical EEPROM (Vial/VIA config) backup & restore: 0xFD 0x62 <sub>.
+#define ATHENA_EE_CMD    0x62
+#define ATHENA_EE_INFO   0x00
+#define ATHENA_EE_READ   0x01
+#define ATHENA_EE_WRITE  0x02
+#define ATHENA_EE_CHUNK  26
+
+// Hardware probes: 0xFD 0x63 <sub>. JEDEC flash-size query + XIP read/erase/prog.
+#define ATHENA_PROBE_CMD     0x63
+#define ATHENA_PROBE_JEDEC   0x00
+#define ATHENA_PROBE_XIPREAD 0x01
+#define ATHENA_PROBE_ERASE   0x02
+#define ATHENA_PROBE_PROG    0x03
+#define ATHENA_PROBE_CHUNK   24
+#define ATHENA_XIP_BASE      0x10000000u

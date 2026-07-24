@@ -26,7 +26,7 @@ static bool         reinit_req  = false;            // force re-enter next frame
 // in the display loop): boot until the splash ends, then menu when open, else the
 // persistent display mode.
 static const app_t *app_desired(void) {
-    if (!boot_done)       return &app_boot;
+    if (!boot_done) return &app_boot;
     if (menu_is_active()) return &app_menu;
     return (persist_mode == DM_MATRIX) ? &app_matrix : &app_anim;
 }

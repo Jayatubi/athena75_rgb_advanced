@@ -19,7 +19,7 @@
 #include <string.h>
 #include <time.h>
 
-static int send_time(hid_dev *d, int use_utc) {
+int synctime_push(hid_dev *d, int use_utc, char *hms_out) {
     time_t now = time(NULL);
     struct tm tmv;
 #if defined(_WIN32)
@@ -31,7 +31,7 @@ static int send_time(hid_dev *d, int use_utc) {
     rep[0] = ATHENA_CMD; rep[1] = ATHENA_CLK_CMD;
     rep[2] = (uint8_t)tmv.tm_hour; rep[3] = (uint8_t)tmv.tm_min; rep[4] = (uint8_t)tmv.tm_sec;
     if (hid_write(d, rep) != 0) return -1;
-    printf(">> synced %02d:%02d:%02d%s\n", tmv.tm_hour, tmv.tm_min, tmv.tm_sec, use_utc ? " UTC" : "");
+    if (hms_out) snprintf(hms_out, 9, "%02d:%02d:%02d", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
     return 0;
 }
 
@@ -46,10 +46,13 @@ int cmd_synctime(int argc, char **argv) {
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) { printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID); return 1; }
 
-    int rc = send_time(d, use_utc);
+    char hms[9];
+    int  rc = synctime_push(d, use_utc, hms);
+    if (rc == 0) printf(">> synced %s%s\n", hms, use_utc ? " UTC" : "");
     while (rc == 0 && loop > 0) {
         sys_msleep(loop * 1000);
-        rc = send_time(d, use_utc);
+        rc = synctime_push(d, use_utc, hms);
+        if (rc == 0) printf(">> synced %s%s\n", hms, use_utc ? " UTC" : "");
     }
     hid_close(d);
     return rc == 0 ? 0 : 1;

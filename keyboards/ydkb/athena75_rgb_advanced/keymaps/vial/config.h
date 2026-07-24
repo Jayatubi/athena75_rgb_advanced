@@ -79,3 +79,6 @@
 // boot splash comes only from the flash boot slot (see c1_display.c); no built-in animation.
 
 #define WEAR_LEVELING_BACKING_SIZE 65536 //10240不行, 65536是最大允许值
+/* Pin Vial EEPROM where pre-16M builds placed it (2MiB - 64KiB). PICO_FLASH_SIZE_BYTES
+ * may be 16M for app-slot flash ops; do not derive wear-leveling base from that. */
+#define WEAR_LEVELING_RP2040_FLASH_BASE 0x001F0000u

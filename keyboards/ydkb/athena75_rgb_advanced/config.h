@@ -20,6 +20,12 @@
 #define RP2040_BOOTLOADER_DOUBLE_TAP_RESET
 #define RP2040_BOOTLOADER_DOUBLE_TAP_RESET_TIMEOUT 500U
 
+/* 16M external flash (flash_range_* limit + app slots above 2M). Vial EEPROM base is
+ * pinned in keymaps/vial/config.h (WEAR_LEVELING_RP2040_FLASH_BASE). */
+#ifndef PICO_FLASH_SIZE_BYTES
+#    define PICO_FLASH_SIZE_BYTES (16u * 1024u * 1024u)
+#endif
+
 #undef  CRT0_EXTRA_CORES_NUMBER
 #define CRT0_EXTRA_CORES_NUMBER 1
 
