@@ -18,7 +18,7 @@ extern uint16_t kb_idle_timer;
 
 static uint16_t boot_nframes = 0;   // frames in the boot QGF (0 = none/invalid)
 static uint16_t boot_frame   = 0;   // frame currently on screen
-static uint32_t boot_acc     = 0;   // elapsed on the current frame (ms, delta-summed)
+static uint32_t boot_acc     = 0;   // ms accumulated on the current frame (delta-summed)
 static bool     boot_started = false;
 
 // Decode boot frame i (RLE or raw) straight into fbShow and present it. Payload
@@ -51,6 +51,11 @@ static void boot_enter(void) {
     boot_started = false;
 }
 
+// Playback is driven by real delta-time (same model as anim/matrix): the frame
+// budget accumulates the wall-clock delta each tick and advances when the current
+// frame's `delay` is met, carrying any overrun. Playback duration therefore
+// equals the authored sum of delays regardless of decode/blit cost, so the splash
+// speed is fully controlled by the QGF timing (regenerate boot.uf2 to retune it).
 static void boot_tick(uint32_t dt_ms) {
     kb_idle_timer = 0; // never idle-sleep while the splash is playing
 
@@ -70,7 +75,7 @@ static void boot_tick(uint32_t dt_ms) {
     if (delay == 0) delay = 16;
     boot_acc += dt_ms;
     if (boot_acc < delay) return;                     // still showing the current frame
-    boot_acc -= delay;
+    boot_acc -= delay;                                // carry the overrun into the next frame
 
     if (++boot_frame >= boot_nframes) { boot_finish(); return; } // played once -> done
     boot_show_frame(boot_frame);
