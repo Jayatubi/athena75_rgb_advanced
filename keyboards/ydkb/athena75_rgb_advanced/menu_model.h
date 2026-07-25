@@ -30,6 +30,7 @@ typedef enum {
     MN_MTX_SPEED,   // MATRIX: fall speed levels
     MN_MTX_DENS,    // MATRIX: density levels
     MN_MTX_CLOCK,   // MATRIX: clock digit floor alpha levels
+    MN_APP,         // installed slot apps discovered by app_scan() (generated)
     MN_COUNT
 } menu_node_id_t;
 
@@ -46,6 +47,7 @@ typedef enum {
     MA_EXIT,        // leave menu mode
     MA_REBOOT,      // normal restart (mcu_reset)
     MA_BOOTSEL,     // reboot into the RP2040 UF2 bootloader (BOOTSEL)
+    MA_APP_LAUNCH,  // launch the slot app at the focused MN_APP row (index = focus)
 } menu_action_t;
 
 // Per-item capability flags (configured on the item, static or dynamic alike).
@@ -81,6 +83,10 @@ typedef struct menu_item {
 
 // Build the whole tree into the allocator pool. Idempotent.
 void menu_model_init(void);
+
+// Re-scan the flash app area and refresh the MN_APP item count. Call at boot and
+// whenever the APP folder is opened (a manual re-scan). Reads only.
+void menu_model_refresh_apps(void);
 
 // Node / item access.
 uint8_t            menu_node_item_count(menu_node_id_t id);

@@ -47,16 +47,17 @@ static void dialog_fire(int8_t idx) {
 
 void dialog_process_key(uint16_t keycode, bool pressed) {
     if (!dlg_active || !pressed) return;
+    // NB: moving focus does NOT reset the timeout — the countdown bar keeps
+    // draining while the user is only picking a button, so the auto-cancel still
+    // fires on time. Only opening the dialog (dialog_open) seeds the timer.
     switch (keycode) {
         case KC_LEFT:
         case KC_UP:
             dlg_focus = (uint8_t)((dlg_focus + dlg.n_buttons - 1) % dlg.n_buttons);
-            dlg_t0    = timer_read32();
             break;
         case KC_RIGHT:
         case KC_DOWN:
             dlg_focus = (uint8_t)((dlg_focus + 1) % dlg.n_buttons);
-            dlg_t0    = timer_read32();
             break;
         case KC_ENTER:
         case KC_KP_ENTER:

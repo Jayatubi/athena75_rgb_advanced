@@ -43,3 +43,12 @@ extern const app_t app_boot;
 extern const app_t app_anim;
 extern const app_t app_matrix;
 extern const app_t app_menu;
+extern const app_t app_slot;   // adapter that runs a loaded flash slot-app (app_loader.c)
+
+// ---- Slot-app launcher (core1-only feature) ---------------------------------
+// core0 (menu) requests launching the app whose image starts at XIP `base`; the
+// core1 reconciler then switches to app_slot, which loads + runs it. Selecting a
+// persistent display mode (ANIMATION/MATRIX) clears the request and returns.
+void     app_launch_slot(uint32_t base);
+bool     app_slot_pending(void);   // a slot app is requested/active
+uint32_t app_slot_req_base(void);  // requested slot base (for the loader)

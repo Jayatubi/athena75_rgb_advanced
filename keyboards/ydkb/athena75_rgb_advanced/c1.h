@@ -68,6 +68,8 @@ uint8_t  menu_bind_get_mtx_clock(void);
 // off the system timer until power is lost (re-sync on connect). Used by the
 // MATRIX rain's dimmed HH:MM watermark.
 void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss);
+// Current wall clock (seconds-since-midnight, 0..86399). Used by slot apps.
+uint32_t lcd_clock_sec(void);
 
 // Host firmware-flash confirmation (raw-HID 0xFD 0x5F ...). Opens the generic
 // modal dialog (dialog.h) asking to update the firmware: FLASH (default focus,

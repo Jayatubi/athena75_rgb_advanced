@@ -248,7 +248,7 @@ static void matrix_tick(uint32_t dt_ms) {
 
 // -- app descriptor + entry --------------------------------------------------
 static const app_desc_t matrix_desc = {
-    .name  = "matrix",
+    .name  = "MATRIX",
     .enter = matrix_enter,
     .exit  = 0,
     .tick  = matrix_tick,
@@ -267,5 +267,5 @@ const app_header_t app_header = {
     .abi_ver  = ATHENA_APP_ABI_VERSION,
     .hdr_size = sizeof(app_header_t),
     .entry    = app_init,
-    .name     = "matrix",
+    .name     = "MATRIX",
 };

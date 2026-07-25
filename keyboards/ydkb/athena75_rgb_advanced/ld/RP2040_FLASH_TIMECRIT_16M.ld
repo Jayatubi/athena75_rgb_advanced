@@ -27,7 +27,7 @@ MEMORY
     flash5 (rx) : org = 0x00000000, len = 0
     flash6 (rx) : org = 0x00000000, len = 0
     flash7 (rx) : org = 0x00000000, len = 0
-    ram0   (wx) : org = 0x20000000, len = 256k  /* SRAM0 striped        */
+    ram0   (wx) : org = 0x20000000, len = 254k  /* SRAM0 striped (top 2K reserved: app RAM window @0x2003F800; see docs/ram_map.md) */
     ram1   (wx) : org = 0x00000000, len = 256k  /* SRAM0 non striped    */
     ram2   (wx) : org = 0x00000000, len = 0
     ram3   (wx) : org = 0x00000000, len = 0

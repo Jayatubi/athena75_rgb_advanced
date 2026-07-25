@@ -19,11 +19,15 @@
  */
 
 LINK_BASE = DEFINED(LINK_BASE) ? LINK_BASE : 0x10A00000;   /* first slot in the 6MB app area */
-RAM_BASE  = DEFINED(RAM_BASE)  ? RAM_BASE  : 0x20040000;   /* placeholder app RAM window */
+RAM_BASE  = DEFINED(RAM_BASE)  ? RAM_BASE  : 0x2003F800;   /* firmware-reserved app RAM window */
 
+/* RAM window: the firmware carves the top 2 KiB of ram0 (SRAM0-3, shared) for
+ * slot apps by shrinking ram0 to 254K (see ld/RP2040_FLASH_TIMECRIT_16M.ld). It
+ * is NOT core0's stack (SRAM4 @0x20040000) — core0 RAM/stack is untouched. Apps
+ * so far need <1 KiB (.data+.bss); keep the window small but with headroom. */
 MEMORY {
-    FLASH (rx) : ORIGIN = 0x10A00000, LENGTH = 252K   /* 256K slot - 4K save sector */
-    RAM   (rw) : ORIGIN = 0x20040000, LENGTH = 8K
+    FLASH (rx) : ORIGIN = 0x10A00000, LENGTH = 252K       /* 256K slot - 4K save sector */
+    RAM   (rw) : ORIGIN = 0x2003F800, LENGTH = 2K         /* top of ram0, shared, core1 use */
 }
 
 ENTRY(app_header)

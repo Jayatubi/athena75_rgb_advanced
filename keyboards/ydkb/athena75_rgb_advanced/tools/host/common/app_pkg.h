@@ -18,8 +18,8 @@
 
 // Must match sdk/app.ld (ORIGIN of FLASH/RAM).
 #define APP_LINK_BASE 0x10A00000u   // reference slot the app is linked at
-#define APP_RAM_BASE  0x20040000u   // fixed RAM window every app links .data/.bss at
-#define APP_RAM_SPAN  0x2000u       // ld RAM LENGTH (8 KiB)
+#define APP_RAM_BASE  0x2003F800u   // fixed RAM window every app links .data/.bss at
+#define APP_RAM_SPAN  0x800u        // ld RAM LENGTH (2 KiB, top of ram0)
 
 // Slot geometry (must match sdk/app.ld + firmware app_upload.h + proto.h).
 // A slot is 256 KiB; the first slot's last 4 KiB is the app's save sector, so a

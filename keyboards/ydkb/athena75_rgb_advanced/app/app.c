@@ -22,12 +22,28 @@ static uint32_t     last_tick   = 0;                // timer origin for the fram
 static uint32_t     wake_ack    = 0;                // last observed c1_wake_seq()
 static bool         reinit_req  = false;            // force re-enter next frame
 
+// Slot-app launch request. core0 (menu) writes base+pending; core1 reads them in
+// the reconciler. volatile + a barrier on publish so core1 never sees pending
+// set before base is valid. This is purely a core1 concern (which full-screen app
+// to show) and never touches core0's own RAM/stack.
+static volatile uint32_t slot_base    = 0;
+static volatile bool     slot_pending = false;
+
+void app_launch_slot(uint32_t base) {
+    slot_base = base;
+    __sync_synchronize();     // publish base before pending
+    slot_pending = true;
+}
+bool     app_slot_pending(void)  { return slot_pending; }
+uint32_t app_slot_req_base(void) { return slot_base; }
+
 // Desired app for this frame, derived purely from state (no control-flow coupling
-// in the display loop): boot until the splash ends, then menu when open, else the
-// persistent display mode.
+// in the display loop): boot until the splash ends, then menu when open, then a
+// requested slot app, else the persistent display mode.
 static const app_t *app_desired(void) {
     if (!boot_done) return &app_boot;
     if (menu_is_active()) return &app_menu;
+    if (slot_pending) return &app_slot;
     return (persist_mode == DM_MATRIX) ? &app_matrix : &app_anim;
 }
 
@@ -74,5 +90,6 @@ void menu_bind_set_display(uint8_t mode) {
     persist_mode            = mode % DM_COUNT;
     user_eeconfig.disp_mode = persist_mode;
     eeconfig_update_user(user_eeconfig.raw);
+    slot_pending            = false; // picking a persistent mode leaves any slot app
 }
 uint8_t menu_bind_get_display(void) { return persist_mode % DM_COUNT; }

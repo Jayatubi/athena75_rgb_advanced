@@ -622,32 +622,35 @@ static void dialog_render(uint8_t text_a) {
     }
 
     // Buttons: centred, one per row; focused row highlighted, negative reads red.
-    uint8_t focus = dialog_focus();
+    // The timeout is shown (no text) as a bar behind the negative button that
+    // drains left-to-right as the auto-cancel approaches — when it empties the
+    // negative action fires. So the countdown *is* the negative row's background.
+    uint8_t  focus = dialog_focus();
+    uint16_t rem   = dialog_remaining_ms();
     for (uint8_t i = 0; i < d->n_buttons; i++) {
-        const char *lbl = d->buttons[i].label ? d->buttons[i].label : "";
-        if (i == focus) {
-            ui_fill_rect(fb, (int16_t)(B + 1), (int16_t)(y - 2),
-                         (int16_t)(W - 2 * B - 2), LCD_MENU_ITEM_H, 0x1082);
-            ui_wire_rect(fb, B, (int16_t)(y - 2),
-                         (int16_t)(W - 2 * B), LCD_MENU_ITEM_H, 0xFFFF);
+        const char *lbl    = d->buttons[i].label ? d->buttons[i].label : "";
+        int16_t     ry     = (int16_t)(y - 2);
+        int16_t     rw     = (int16_t)(W - 2 * B - 2);
+        bool        is_neg = (d->timeout_ms && i == d->negative);
+        if (is_neg) {
+            // Drain bar: width tracks remaining/timeout (full on open -> 0 at
+            // fire), and it shrinks symmetrically toward the row centre — the two
+            // ends close in on the middle as the auto-cancel approaches.
+            int16_t bw = (int16_t)((int32_t)rw * (int32_t)rem / (int32_t)d->timeout_ms);
+            if (bw < 0) bw = 0;
+            if (bw > rw) bw = rw;
+            if (bw > 0) {
+                int16_t bx = (int16_t)(B + 1 + (rw - bw) / 2); // centre the remaining bar
+                ui_fill_rect(fb, bx, ry, bw, LCD_MENU_ITEM_H, 0x5800);
+            }
+        } else if (i == focus) {
+            ui_fill_rect(fb, (int16_t)(B + 1), ry, rw, LCD_MENU_ITEM_H, 0x1082);
         }
+        if (i == focus)
+            ui_wire_rect(fb, B, ry, (int16_t)(W - 2 * B), LCD_MENU_ITEM_H, 0xFFFF);
         uint16_t fg = (i == d->negative) ? 0xF9A0 : 0xFFFF;
         ui_text_alpha(fb, (int16_t)((W - ui_text_width(lbl)) / 2), y, lbl, fg, 0x0000, text_a);
         y += LCD_MENU_ITEM_H;
-    }
-
-    // Countdown (dim grey, bottom) — only when the dialog has a timeout.
-    if (d->timeout_ms) {
-        uint8_t sec = (uint8_t)((dialog_remaining_ms() + 999) / 1000);
-        char buf[16];
-        uint8_t k = 0;
-        for (const char *p = "auto in "; *p; p++) buf[k++] = *p;
-        if (sec >= 10) buf[k++] = (char)('0' + sec / 10);
-        buf[k++] = (char)('0' + sec % 10);
-        buf[k++] = 's';
-        buf[k]   = 0;
-        ui_text_alpha(fb, (int16_t)((W - ui_text_width(buf)) / 2),
-                      (int16_t)(H - B - 13), buf, 0x8410, 0x0000, text_a);
     }
 
     ui_present(fb);

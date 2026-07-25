@@ -5,6 +5,7 @@
 #include "c1.h"
 #include "config.h"
 #include "app/app.h"
+#include "app_scan.h"
 #include <string.h>
 
 #ifdef RGB_MATRIX_ENABLE
@@ -285,6 +286,7 @@ enum {
     MI_ROOT_ANIM = 1,
     MI_ROOT_RGB,
     MI_ROOT_MATRIX,
+    MI_ROOT_APP,
     MI_ROOT_LCDTEST,
     MI_ROOT_REBOOT,
     MI_ROOT_EXIT,
@@ -414,6 +416,28 @@ static const char *const caps_color_labels[] = {
 #define CAPS_COLOR_COUNT (sizeof(caps_color_labels) / sizeof(caps_color_labels[0]))
 #endif // RGB_MATRIX_ENABLE
 
+// ---- generated APP node (installed slot apps) -------------------------------
+// Items come from the app_scan() table (rebuilt at boot and on every APP-folder
+// open): each installed app is an ACTION row that launches it (Right/Enter). The
+// row's list index == the app's index in the scan table, so menu.c resolves the
+// slot base from the focused index (see MA_APP_LAUNCH). When nothing is installed
+// a single non-actionable "(NONE)" placeholder keeps the screen non-empty.
+static void gen_app(uint8_t idx, menu_item_t *out, char *label) {
+    (void)label; // app names live in the scan table (persistent), not the slot buf
+    memset(out, 0, sizeof(*out));
+    const app_scan_entry_t *a = app_scan_get(idx);
+    if (!a) {
+        out->id    = 0x2000u;
+        out->label = "(NONE)";
+        out->kind  = MIK_VALUE; // nothing to launch
+        return;
+    }
+    out->id    = (uint16_t)(0x2001u + idx);
+    out->label = a->name;       // valid until the next app_scan()
+    out->kind  = MIK_ACTION;    // Right/Enter -> launch
+    out->value = MA_APP_LAUNCH; // index resolved from the focused row in menu.c
+}
+
 static void build_enum_node(menu_node_id_t nid, uint8_t group, uint8_t count, const char *const *labels) {
     for (uint8_t i = 0; i < count; i++) {
         node_add(nid, MI_DYN(group, i), labels[i], MIK_VALUE, MI_RADIO, group, i, 0);
@@ -442,6 +466,9 @@ void menu_model_init(void) {
     // still descends into the RGB submenu.
     node_add(MN_ROOT, MI_ROOT_RGB,      "RGB",       MIK_FOLDER, MI_TOGGLE, VG_RGB_ON, 0, MN_RGB);
 #endif
+    // APP: installed slot apps (discovered by app_scan). Right/Enter descends into
+    // the generated list; menu.c re-scans the flash app area on the way in.
+    node_add(MN_ROOT, MI_ROOT_APP,      "APP",       MIK_FOLDER, 0, VG_NONE, 0, MN_APP);
     // Diagnostic: descends into the checkerboard test screen (handled in menu.c).
     node_add(MN_ROOT, MI_ROOT_LCDTEST,  "LCD TEST",  MIK_FOLDER, 0, VG_NONE, 0, MN_LCD_TEST);
     // Reboot: submenu picks a normal restart or the UF2 bootloader (BOOTSEL).
@@ -533,6 +560,19 @@ void menu_model_init(void) {
     node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 2), "SWITCH", MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 2, 0);
     node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 1), "GLOW",   MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 1, 0);
 #endif
+
+    // APP list is generated from the scan table; count is refreshed below and on
+    // every APP-folder open (menu.c). Start with a boot scan so it is populated
+    // even before the folder is first entered.
+    node_set_gen(MN_APP, 1, gen_app);
+    menu_model_refresh_apps();
+}
+
+void menu_model_refresh_apps(void) {
+    menu_model_init(); // guarantees the tree (and the MN_APP gen hook) exists
+    app_scan();
+    uint8_t n = app_scan_count();
+    node_tbl[MN_APP].count = n ? n : 1; // >=1 so the "(NONE)" placeholder shows
 }
 
 // ---- accessors --------------------------------------------------------------

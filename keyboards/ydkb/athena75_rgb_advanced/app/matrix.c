@@ -87,6 +87,12 @@ void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss) {
     clock_base_sec = (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss; // rebase: base + (now-sync)
 }
 
+// Current wall clock as seconds-since-midnight (free-runs off the timer since the
+// last host sync; 00:00 until first sync). Exposed to slot apps via host_api.
+uint32_t lcd_clock_sec(void) {
+    return (clock_base_sec + timer_elapsed32(clock_sync_ms) / 1000u) % 86400u;
+}
+
 static uint8_t  mtx_glyph[MTX_COLS_MAX][MTX_ROWS_MAX];
 static int32_t  mtx_headf[MTX_COLS_MAX];               // fractional head position, q8 cells
 static int16_t  mtx_head[MTX_COLS_MAX];                // = mtx_headf>>8, cached for the clock

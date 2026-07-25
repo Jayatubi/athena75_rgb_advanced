@@ -4,6 +4,7 @@
 #include "menu.h"
 #include "menu_model.h"
 #include "app/app.h"
+#include "app_scan.h"
 #include "ui.h"
 #include "ui_scene.h"
 #include "config.h"
@@ -250,6 +251,9 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             if (menu_item_is_folder(it)) {
                 // Snapshot the window before entering LCD TEST so Esc can undo.
                 if ((menu_node_id_t)it->child == MN_LCD_TEST) ui_vscr_edit_begin();
+                // Opening APP re-scans the flash app area (manual re-scan) so the
+                // list reflects anything uploaded since the last scan.
+                if ((menu_node_id_t)it->child == MN_APP) menu_model_refresh_apps();
                 menu_push((menu_node_id_t)it->child);
             } else {
                 switch (menu_item_action(it)) {
@@ -258,6 +262,12 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
                                      soft_reset_keyboard(); break; // mcu_reset (does not return)
                     case MA_BOOTSEL: menu_exit();          // restore keyboard, then BOOTSEL
                                      reset_keyboard();      break; // -> UF2 bootloader (does not return)
+                    case MA_APP_LAUNCH: {
+                        // The focused MN_APP row maps 1:1 to the scan table index.
+                        const app_scan_entry_t *a = app_scan_get(menu_wr.focus);
+                        if (a) { app_launch_slot(a->base); menu_exit(); }
+                        break;
+                    }
                     default: break;
                 }
             }

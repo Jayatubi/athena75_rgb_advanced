@@ -24,6 +24,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "c1.h"
 #include "config.h"
 #include "menu.h"
+#include "menu_model.h"
 #include "dialog.h"
 #include "app_upload.h"
 
@@ -191,6 +192,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         default:
             return true;
     }
+}
+
+void keyboard_post_init_user(void) {
+    // Boot-time slot-app discovery: populate the APP menu with whatever is
+    // installed in the flash app area (re-scanned on each APP-folder open too).
+    menu_model_refresh_apps();
 }
 
 void housekeeping_task_user(void) {
