@@ -29,18 +29,23 @@ enum {
 #define APP_AREA_BEGIN 0x10800000u
 #define APP_AREA_END   0x11000000u
 
-// Slot geometry (must match apps/sdk/app.ld + tools/host proto.h). A slot is
-// 256 KiB; the first slot's last 4 KiB is the app's save sector, so a code image
-// must fit in 252 KiB. Apps may span more slots for data.
-#define APP_SLOT_SIZE      0x40000u
-#define APP_SLOT_SAVE_SIZE 0x1000u
-#define APP_SLOT_CODE_MAX  (APP_SLOT_SIZE - APP_SLOT_SAVE_SIZE)
+// Slot geometry (must match app.ld + host proto/app_pkg). The tail is fixed:
+//   0x3E800..0x3F000  32x32 big-endian RGB565 icon (2048 B)
+//   0x3F000..0x40000  per-app save sector (4096 B)
+#define APP_SLOT_SIZE        0x40000u
+#define APP_SLOT_ICON_OFFSET 0x3E800u
+#define APP_SLOT_ICON_SIZE   0x0800u
+#define APP_SLOT_SAVE_SIZE   0x1000u
+#define APP_SLOT_CODE_MAX    APP_SLOT_ICON_OFFSET
 
 // ---- core0 ------------------------------------------------------------------
-// Validate slot/size and raise the confirm dialog (-> PENDING). Rejects anything
-// outside the app area or misaligned (-> DENIED, no dialog).
-void     app_upload_request(uint32_t slot, uint32_t total, const char *name);
+// Validate slot/size and raise the confirm dialog (-> PENDING). `slot == 0`
+// requests automatic placement in the first free slot; an explicit occupied
+// slot is rejected. Invalid/full requests become DENIED with no dialog.
+void     app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
+                            uint8_t slot_count, const char *name);
 uint8_t  app_upload_state(void);
+uint32_t app_upload_slot(void);    // selected slot, or 0 when no slot was accepted
 uint32_t app_upload_written(void);
 uint32_t app_upload_total(void);
 // Erase one 4K sector / accumulate+program one 256B page. Both require the user

@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define ATHENA_APP_ABI_VERSION 2
+#define ATHENA_APP_ABI_VERSION 3
 #define ATHENA_APP_MAGIC       "A75APP\0"   // 8 bytes incl. terminator
 
 // ---- Input --------------------------------------------------------------
@@ -183,6 +183,7 @@ typedef struct host_api_t {
     void     (*reboot)(bool bootsel);            // marshalled to core0 (BOOTSEL if true)
     void     (*set_input_mode)(uint8_t mode);    // APP_INPUT_* (marshalled to core0)
     uint8_t  (*input_mode)(void);                // current mode
+    uint32_t (*app_base)(void);                  // this app's first-slot XIP base
 
     // ---- RGB (marshalled to core0's rgb_matrix) -----------------------------
     void     (*rgb_get)(app_rgb_state_t *out);
@@ -264,4 +265,6 @@ typedef struct app_header_t {
     uint32_t     bss_size;      // .bss bytes to zero after .data
     uint32_t     crc32;         // CRC32 of image (this field treated as 0)
     char         name[16];      // human name (also in app_desc)
+    uint8_t      slot_count;    // code slot + contiguous data slots reserved
+    uint8_t      reserved[3];
 } app_header_t;

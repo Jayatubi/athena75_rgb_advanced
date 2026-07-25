@@ -12,22 +12,21 @@
  * FLASH holds: .app_header (offset 0) + .text + .rodata + .data init image.
  * RAM  holds : .data (copied) + .bss (zeroed) — a firmware-reserved window.
  *
- * A slot is 256 KiB. The first slot of an app carries its code image; its last
- * 4 KiB is reserved as the app's save/data sector, so the linked image must fit
- * in 252 KiB. An app may span more slots for extra data (e.g. keyframes); those
- * are managed separately and are not part of this linked image.
+ * A slot is 256 KiB. The first 250 KiB carries code; +0x3E800 holds the fixed
+ * 2 KiB 32x32 RGB565 icon; the last 4 KiB is the app save/data sector. Icons are
+ * packaged separately (no giant linker hole). Extra data slots are managed
+ * separately and are not part of this linked image.
  */
 
 LINK_BASE = DEFINED(LINK_BASE) ? LINK_BASE : 0x10800000;   /* slot0 in the 8MB app area */
-RAM_BASE  = DEFINED(RAM_BASE)  ? RAM_BASE  : 0x2003F800;   /* firmware-reserved app RAM window */
+RAM_BASE  = DEFINED(RAM_BASE)  ? RAM_BASE  : 0x2002C000;   /* firmware-reserved 80K app arena */
 
-/* RAM window: the firmware carves the top 2 KiB of ram0 (SRAM0-3, shared) for
- * slot apps by shrinking ram0 to 254K (see ld/RP2040_FLASH_TIMECRIT_16M.ld). It
- * is NOT core0's stack (SRAM4 @0x20040000) — core0 RAM/stack is untouched. Apps
- * so far need <1 KiB (.data+.bss); keep the window small but with headroom. */
+/* RAM window: the firmware carves the top 80 KiB of ram0 (SRAM0-3, shared) for
+ * slot apps by shrinking firmware ram0 to 176K. It is NOT either core's stack
+ * (SRAM4/5). ACE uses ~64K for two keyframes; smaller apps use only what they need. */
 MEMORY {
-    FLASH (rx) : ORIGIN = 0x10800000, LENGTH = 252K       /* 256K slot - 4K save sector */
-    RAM   (rw) : ORIGIN = 0x2003F800, LENGTH = 2K         /* top of ram0, shared, core1 use */
+    FLASH (rx) : ORIGIN = 0x10800000, LENGTH = 250K       /* before fixed icon region */
+    RAM   (rw) : ORIGIN = 0x2002C000, LENGTH = 80K         /* top of ram0, shared, core1 use */
 }
 
 ENTRY(app_header)

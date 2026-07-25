@@ -127,3 +127,41 @@ void menu_bind_set_display(uint8_t mode) {
     slot_pending            = false; // picking a persistent mode leaves any slot app
 }
 uint8_t menu_bind_get_display(void) { return persist_mode % DM_COUNT; }
+
+// Legacy built-in ANIMATION/MATRIX menu nodes remain in the firmware's fallback
+// model for now, but those renderers moved to slot apps. Keep no-op bindings so
+// the old unreachable nodes cost no large renderer BSS.
+void menu_bind_apply_effect(uint8_t v)     { (void)v; }
+void menu_bind_set_ghost(uint8_t v)        { (void)v; }
+void menu_bind_set_zoom(uint8_t v)         { (void)v; }
+void menu_bind_set_whirl_dir(uint8_t v)    { (void)v; }
+void menu_bind_set_rand_iv(uint8_t v)      { (void)v; }
+void menu_bind_set_speed(uint8_t v)        { (void)v; }
+void menu_bind_set_tween_idx(uint8_t v)    { (void)v; }
+void menu_bind_toggle_ft(void)              {}
+void menu_bind_set_ft(bool v)              { (void)v; }
+uint8_t menu_bind_get_ghost(void)           { return 0; }
+uint8_t menu_bind_get_zoom(void)            { return 0; }
+uint8_t menu_bind_get_whirl_dir(void)       { return 0; }
+uint8_t menu_bind_get_rand_iv(void)         { return 0; }
+uint8_t menu_bind_get_speed(void)           { return 0; }
+uint8_t menu_bind_get_tween_idx(void)       { return 0; }
+bool menu_bind_get_ft(void)                 { return false; }
+uint8_t menu_bind_get_effect(void)          { return 0; }
+void menu_bind_set_mtx_speed(uint8_t v)     { (void)v; }
+uint8_t menu_bind_get_mtx_speed(void)       { return 0; }
+void menu_bind_set_mtx_density(uint8_t v)   { (void)v; }
+uint8_t menu_bind_get_mtx_density(void)     { return 0; }
+void menu_bind_set_mtx_clock(uint8_t v)     { (void)v; }
+uint8_t menu_bind_get_mtx_clock(void)       { return 0; }
+void next_gif_id(void)                      {}
+
+// OS wall clock service (formerly owned by the built-in MATRIX renderer).
+static uint32_t clock_sync_ms, clock_base_sec;
+void lcd_clock_set(uint8_t hh, uint8_t mm, uint8_t ss) {
+    clock_sync_ms = timer_read32();
+    clock_base_sec = (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
+}
+uint32_t lcd_clock_sec(void) {
+    return (clock_base_sec + timer_elapsed32(clock_sync_ms) / 1000u) % 86400u;
+}

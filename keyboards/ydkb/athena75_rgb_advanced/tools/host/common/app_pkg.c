@@ -50,8 +50,25 @@ static int cmp_u32(const void *a, const void *b) {
 
 // ---- pack: ELF -> .app ------------------------------------------------------
 int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
+                     const uint8_t *icon, size_t icon_len,
+                     const uint8_t *data_blob, size_t data_blob_len,
                      uint8_t **out, size_t *out_len, char *err, size_t errlen) {
     *out = NULL; *out_len = 0;
+    if (!icon || icon_len != APP_SLOT_ICON_SIZE) {
+        SETERR("icon must be exactly %u bytes (32x32 RGB565)", APP_SLOT_ICON_SIZE);
+        return -1;
+    }
+    if (data_blob_len && !data_blob) {
+        SETERR("data blob pointer is NULL");
+        return -1;
+    }
+    uint32_t data_slots = (uint32_t)((data_blob_len + APP_SLOT_SIZE - 1u) /
+                                     APP_SLOT_SIZE);
+    if (data_slots > 31) {
+        SETERR("data blob needs %u slots; maximum is 31", data_slots);
+        return -1;
+    }
+    uint8_t slot_count = (uint8_t)(1u + data_slots);
     if (elf_len < 52 || memcmp(elf, "\x7f""ELF", 4) != 0) {
         SETERR("not an ELF file"); return -1;
     }
@@ -99,7 +116,7 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
     }
     uint32_t image_size = lma_max - lma_min;
     if (image_size > APP_SLOT_CODE_MAX) {
-        SETERR("image %u B exceeds the %u B code area (256K slot - 4K save)",
+        SETERR("image %u B exceeds the %u B code area (before fixed icon/save tail)",
                image_size, APP_SLOT_CODE_MAX);
         return -1;
     }
@@ -126,6 +143,7 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
     app_wle32(image + APPH_DATA_VMA,     data_vma);
     app_wle32(image + APPH_DATA_SIZE,    data_size);
     app_wle32(image + APPH_BSS_SIZE,     bss_size);
+    image[APPH_SLOT_COUNT] = slot_count;
     app_wle32(image + APPH_CRC32, 0);
     uint32_t crc = app_crc32(image, image_size);
     app_wle32(image + APPH_CRC32, crc);
@@ -201,9 +219,13 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
     }
     nm[16] = 0;
 
-    // Assemble the container: 64B header + image + u32[] relocs.
+    // Assemble the compact container: header + code image + relocs + icon + data. The
+    // installer writes icon separately at APP_SLOT_ICON_OFFSET, avoiding a ~250K
+    // FF-filled gap in every .app package/raw-HID upload.
     size_t reloc_bytes = (size_t)nrel * 4;
-    size_t total = PKG_HDR_SIZE + image_size + reloc_bytes;
+    uint32_t icon_off = (uint32_t)(PKG_HDR_SIZE + image_size + reloc_bytes);
+    uint32_t data_off = (uint32_t)((size_t)icon_off + icon_len);
+    size_t total = (size_t)data_off + data_blob_len;
     uint8_t *pkg = (uint8_t *)calloc(1, total);
     if (!pkg) { free(relocs); free(image); SETERR("out of memory"); return -1; }
     memcpy(pkg + PKG_MAGIC, "A75APKG\0", 8);
@@ -214,11 +236,19 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
     app_wle32(pkg + PKG_IMAGE_OFF,   PKG_HDR_SIZE);
     app_wle32(pkg + PKG_RELOC_OFF,   PKG_HDR_SIZE + image_size);
     app_wle32(pkg + PKG_CRC32,       crc);
-    app_wle32(pkg + PKG_FLAGS,       0);
+    app_wle32(pkg + PKG_ICON_CRC32,  app_crc32(icon, icon_len));
+    app_wle32(pkg + PKG_ICON_OFF,    icon_off);
+    app_wle32(pkg + PKG_ICON_SIZE,   (uint32_t)icon_len);
+    app_wle32(pkg + PKG_DATA_CRC32,  data_blob_len ?
+              app_crc32(data_blob, data_blob_len) : 0u);
+    app_wle32(pkg + PKG_DATA_OFF,    data_off);
+    app_wle32(pkg + PKG_DATA_SIZE,   (uint32_t)data_blob_len);
     memcpy(pkg + PKG_NAME, nm, 16);
     memcpy(pkg + PKG_HDR_SIZE, image, image_size);
     for (uint32_t i = 0; i < nrel; i++)
         app_wle32(pkg + PKG_HDR_SIZE + image_size + (size_t)i * 4, relocs[i]);
+    memcpy(pkg + icon_off, icon, icon_len);
+    if (data_blob_len) memcpy(pkg + data_off, data_blob, data_blob_len);
 
     free(relocs); free(image);
     *out = pkg; *out_len = total;
@@ -239,13 +269,26 @@ int app_pkg_parse(const uint8_t *pkg, size_t len, app_pkg_info_t *info,
     info->image_off   = app_le32(pkg + PKG_IMAGE_OFF);
     info->reloc_off   = app_le32(pkg + PKG_RELOC_OFF);
     info->pkg_crc32   = app_le32(pkg + PKG_CRC32);
-    info->flags       = app_le32(pkg + PKG_FLAGS);
+    info->icon_crc32  = app_le32(pkg + PKG_ICON_CRC32);
+    info->icon_off    = app_le32(pkg + PKG_ICON_OFF);
+    info->icon_size   = app_le32(pkg + PKG_ICON_SIZE);
+    info->data_crc32  = app_le32(pkg + PKG_DATA_CRC32);
+    info->data_off    = app_le32(pkg + PKG_DATA_OFF);
+    info->data_blob_size = app_le32(pkg + PKG_DATA_SIZE);
     memcpy(info->name, pkg + PKG_NAME, 16);
     info->name[16] = 0;
 
+    if (info->version != APP_PKG_VERSION) {
+        SETERR("package version %u unsupported (expected %u; rebuild the app)",
+               info->version, APP_PKG_VERSION);
+        return -1;
+    }
     if ((size_t)info->image_off + info->image_size > len ||
-        (size_t)info->reloc_off + (size_t)info->reloc_count * 4 > len) {
-        SETERR("package truncated (image/reloc table past EOF)"); return -1;
+        (size_t)info->reloc_off + (size_t)info->reloc_count * 4 > len ||
+        info->icon_size != APP_SLOT_ICON_SIZE ||
+        (size_t)info->icon_off + info->icon_size > len ||
+        (size_t)info->data_off + info->data_blob_size > len) {
+        SETERR("package truncated/invalid (image, relocs, icon, or data past EOF)"); return -1;
     }
     const uint8_t *img = pkg + info->image_off;
     if (info->image_size < APPH_SIZE || memcmp(img, APP_SLOT_MAGIC, 6) != 0) {
@@ -256,7 +299,19 @@ int app_pkg_parse(const uint8_t *pkg, size_t len, app_pkg_info_t *info,
     info->data_vma  = app_le32(img + APPH_DATA_VMA);
     info->data_size = app_le32(img + APPH_DATA_SIZE);
     info->bss_size  = app_le32(img + APPH_BSS_SIZE);
+    info->slot_count = img[APPH_SLOT_COUNT];
     info->ram_needed = info->data_size + info->bss_size;
+    if (info->slot_count == 0 || info->slot_count > 32) {
+        SETERR("invalid required slot count %u", info->slot_count);
+        return -1;
+    }
+    uint32_t expected_slots = 1u +
+        (info->data_blob_size + APP_SLOT_SIZE - 1u) / APP_SLOT_SIZE;
+    if (info->slot_count != expected_slots) {
+        SETERR("slot count %u does not match data size %u (%u slots expected)",
+               info->slot_count, info->data_blob_size, expected_slots);
+        return -1;
+    }
 
     // Integrity: the packaged image CRC (link-base) must match the header field.
     uint8_t saved[4]; memcpy(saved, img + APPH_CRC32, 4);
@@ -269,6 +324,19 @@ int app_pkg_parse(const uint8_t *pkg, size_t len, app_pkg_info_t *info,
     (void)saved;
     if (crc != info->pkg_crc32) {
         SETERR("CRC mismatch (computed %#010x, header %#010x)", crc, info->pkg_crc32);
+        return -1;
+    }
+    uint32_t icon_crc = app_crc32(pkg + info->icon_off, info->icon_size);
+    if (icon_crc != info->icon_crc32) {
+        SETERR("icon CRC mismatch (computed %#010x, header %#010x)",
+               icon_crc, info->icon_crc32);
+        return -1;
+    }
+    uint32_t data_crc = info->data_blob_size ?
+        app_crc32(pkg + info->data_off, info->data_blob_size) : 0u;
+    if (data_crc != info->data_crc32) {
+        SETERR("data CRC mismatch (computed %#010x, header %#010x)",
+               data_crc, info->data_crc32);
         return -1;
     }
     return 0;

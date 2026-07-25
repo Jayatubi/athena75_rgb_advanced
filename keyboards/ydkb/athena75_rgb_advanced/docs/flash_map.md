@@ -28,18 +28,28 @@
 | `0x1F_0000` | `0x20_0000` | `0x101F_0000` | 64 KiB | **Vial/VIA EEPROM** | wear-leveling 备份区（逻辑 32 KiB）。**禁写**（见写预算规则）。 |
 | `0x20_0000` | `0x40_0000` | `0x1020_0000` | 2 MiB | **固件预留尾部** | "≤4 MiB 固件 LD 预留"的尾部，当前未使用。 |
 | `0x40_0000` | `0x80_0000` | `0x1040_0000` | 4 MiB | **开机动画区 (boot)** | QGF 开机图 + 余量，由独立 UF2 烧录。`BOOT_QGF_ADDR`（splash 只用开头）。 |
-| `0x80_0000` | `0x100_0000` | `0x1080_0000` | 8 MiB | **App 槽区 (slots)** | 32 × 256 KiB slot，relocatable slot app（SETTINGS/SLIDES/MATRIX）。`ATHENA_APP_AREA_*`。 |
+| `0x80_0000` | `0x100_0000` | `0x1080_0000` | 8 MiB | **App 槽区 (slots)** | 32 × 256 KiB slot，relocatable slot app（SETTINGS/MATRIX/ACE）。`ATHENA_APP_AREA_*`。 |
 
 > 注 1：固件区仍为 4 MiB（`0x1000_0000..0x1040_0000`）。EEPROM 固定在 `0x1F_0000`
 > （= 2 MiB − 64 KiB，沿用旧布局），固件代码必须落在 `0x1F_0000` 之下；
 > `0x20_0000..0x40_0000` 这 2 MiB 是该 4 MiB 预留里未用的尾部。
 >
 > 注 2：旧的"独立 10 MiB keyframe 动画区"已废弃 —— 开机动画区扩到 4 MiB，其后 8 MiB
-> 全部规划为 app 槽。SLIDES（关键帧播放器）将以 slot app + 自带数据槽的形式回来。
+> 全部规划为 app 槽。ACE（原 SLIDES）以 slot app + 连续数据槽的形式播放关键帧。
 >
 > 注 3：App 槽几何（`app_upload.h` / `proto.h` / `app_pkg.h` / `apps/sdk/app.ld`）：
-> slot0 = `0x1080_0000` .. slot31 = `0x10FC_0000`，每 slot 256 KiB；每个 app 首 slot 的
-> 末 4 KiB 为 save/data sector，故代码镜像 ≤ 252 KiB，可跨更多 slot 存数据。
+> slot0 = `0x1080_0000` .. slot31 = `0x10FC_0000`，每 slot 256 KiB。首 slot 内固定为：
+> `+0x00000..+0x3E800` = 代码（≤250 KiB），`+0x3E800..+0x3F000` = 32×32
+> big-endian RGB565 icon（2048 B），`+0x3F000..+0x40000` = save/data sector（4 KiB）。
+> `.app` v3 将代码、icon 与额外数据 blob 存放在同一个完整包中，并声明必须连续
+> 保留的 slot 数。ACE 当前占
+> 13 个连续 slot：首 slot 为程序，随后 12 个 slot 放独立 UF2 安装的 raw QGF 数据；
+> 运行时通过 `host_api.app_base()` 定位到 `app_base + 0x40000`。
+> `host_tool app install foo.app` 默认走 raw-HID PUT；`--method uf2` 则先通过 HID
+> 请求固件检查并分配连续 slot，再按固件返回地址重定位、生成 UF2，并自动进入
+> BOOTSEL 安装。两种方式都可省略 `--slot`；显式地址被占用时均拒绝覆盖。
+> ACE 的 QGF 已内嵌在 `ace.app`，无需也不接受独立 `--data-uf2`。host_tool 从包内
+> 同时取得程序、icon、数据和连续 slot 数；PUT 与 UF2 安装均一次处理完整包。
 
 ---
 

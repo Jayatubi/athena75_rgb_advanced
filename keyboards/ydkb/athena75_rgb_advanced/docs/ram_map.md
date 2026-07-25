@@ -23,29 +23,25 @@
 
 | 起始 | 结束 | 大小 | 段 | 作用 |
 |---|---|---|---|---|
-| `0x2000_0000` | `0x2004_0000` | 256 KiB | **ram0**（SRAM0–3，共享） | `.data` + `.bss` + heap。两核共享的所有静态数据与堆。 |
+| `0x2000_0000` | `0x2002_C000` | 176 KiB | **firmware ram0** | 固件 `.data` + `.bss` + heap。 |
+| `0x2002_C000` | `0x2004_0000` | 80 KiB | **slot-app arena** | 当前 app 的固定 `.data/.bss`；ACE 使用约 64 KiB。 |
 | `0x2004_0000` | `0x2004_1000` | 4 KiB | **SRAM4**（core0 栈） | core0 的异常栈(MSP) + 线程栈(PSP) + core-local 数据。 |
 | `0x2004_1000` | `0x2004_2000` | 4 KiB | **SRAM5**（core1 栈） | core1 的异常栈 + 线程栈 + core-local 数据 + boot。 |
 
-> **关键点**：`ram0` 的尾部是 **ChibiOS heap（~71 KiB 的空闲池）**，一直顶到
-> `0x2004_0000`。所以"空闲 RAM"主要体现为这块 heap，而非某个地址空洞。
+> **关键点**：slot app arena 是链接脚本硬切出的独占窗口，不属于 ChibiOS heap，
+> 也不与 core0/core1 的独立栈 bank 重叠。
 
 ---
 
-## 2. `ram0`（共享 256 KiB）细分
+## 2. 共享 SRAM0–3 细分
 
-实测（`arm-none-eabi-size -A` / `nm`，当前构建）：
+固件链接器只可使用 `0x2000_0000..0x2002_C000`（176 KiB）；`.data`、`.bss`
+之后的余量由 ChibiOS heap 吸收。独立 app 只能使用
+`0x2002_C000..0x2004_0000`（80 KiB）。两段均为共享 SRAM，只是由链接器隔离。
 
-| 起始 | 结束 | 大小 | 段 | 内容 |
-|---|---|---|---|---|
-| `0x2000_0000` | `0x2000_0FBC` | 4028 B (~3.9 KiB) | `.data` | 有初值的全局变量（初值 LMA 在 flash，启动时拷入）。 |
-| `0x2000_0FC0` | `0x2002_E454` | 185492 B (~181.1 KiB) | `.bss` | 零初值全局/静态（含 `fbShow` 等大缓冲）。 |
-| `0x2002_E454` | `0x2002_E458` | 4 B | `.ram0` | RP2040 core-local `.ram0` 段。 |
-| `0x2002_E458` | `0x2004_0000` | 72616 B (~70.9 KiB) | `.heap` | **ChibiOS core heap**（`chHeap`/`malloc` 池，大部分空闲）。 |
-
-> `ram0` 被 `.data`+`.bss`+`.heap` **占满到顶**（heap 吸收剩余空间）。
-> 边界符号：`__bss_base__=0x2000_0FC0`、`__bss_end__=0x2002_E454`、
-> `__heap_base__=0x2002_E458`、`__heap_end__=0x2004_0000`。
+当前构建 `size` 报告的 BSS/NOLOAD 合计为 182936 B（其中包含链接器扩展后的 heap）；
+删除内置 ANIMATION/MATRIX 后，关键帧双缓冲改由运行中的 ACE 放在 app arena，
+不会与固件静态 BSS 同时占据同一段 RAM。
 
 ---
 
@@ -91,21 +87,20 @@ core1 复用同样尺寸（`rules_stacks_c1.ld`：`__c1_*_stack_size__ = __*_sta
 
 ---
 
-## 5. Slot-app 的 RAM 窗口（规划）
+## 5. Slot-app 的 RAM 窗口（已实施）
 
 独立编译的 slot app 需要一小块固定地址的 RAM 放它的 `.data/.bss`（链接时写死，
 上传时 RAM 指针不做重定位，见 `apps/sdk/app.ld` + `tools/host/common/app_pkg.*`）。
 
 - **占位基址 `0x2004_0000` 不可用**：它正是 SRAM4（core0 主栈）起点，其后 8 KiB
   还会盖到 SRAM5（core1 栈）。直接加载会踩栈崩溃。
-- **实测 app 需求**：`matrix.app` 仅需 **988 B**（`.data 4 + .bss 984`）。
-- **方案**：从 `ram0` **顶部**切出一小块（拟 **2 KiB**：`0x2003_F800`..`0x2004_0000`）
-  作为 app RAM 窗口——即把 `ram0` 由 256 KiB 缩到 254 KiB，等于从 ~71 KiB 的 heap
-  里让出 2 KiB（heap 变 ~69 KiB，固件无感）。需同步：
-  - `ld/RP2040_FLASH_TIMECRIT_16M.ld`：`ram0` len 256k → 254k；
-  - `apps/sdk/app.ld`：RAM `ORIGIN = 0x2003_F800`、`LENGTH = 2K`；
-  - `tools/host/common/app_pkg.h`：`APP_RAM_BASE = 0x2003_F800`、`APP_RAM_SPAN = 0x800`；
-  - 重打包 `.app`（RAM 指针按新基址）并重传。
+- **实测 app 需求**：MATRIX 988 B；ACE 65568 B（两个 128×128 RGB565 帧）。
+- **当前方案**：从 SRAM0–3 顶部切出 **80 KiB**
+  (`0x2002_C000..0x2004_0000`)；固件 ram0 缩为 176 KiB。
+- 三处 source of truth 必须同步：
+  - `ld/RP2040_FLASH_TIMECRIT_16M.ld`：firmware `ram0` = 176K；
+  - `apps/sdk/app.ld`：app RAM `ORIGIN = 0x2002_C000`、`LENGTH = 80K`；
+  - `tools/host/common/app_pkg.h`：`APP_RAM_BASE = 0x2002_C000`、`APP_RAM_SPAN = 0x14000`。
 
 ---
 

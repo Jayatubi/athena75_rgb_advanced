@@ -251,8 +251,19 @@ static void ath_handle_app(uint8_t *data) {
             char name[17];
             memcpy(name, &data[11], 16);   // BEGIN carries name[16] after the header
             name[16] = 0;
-            app_upload_request(slot, total, name);
+            uint8_t slot_count = data[27];
+            uint32_t data_size = ((uint32_t)data[28] << 24) |
+                                 ((uint32_t)data[29] << 16) |
+                                 ((uint32_t)data[30] << 8) | data[31];
+            app_upload_request(slot, total, data_size, slot_count, name);
             data[3] = app_upload_state();
+            // BEGIN returns the firmware-selected slot (AUTO or explicit). Zero
+            // means rejected/no placement. The host relocates only after this.
+            uint32_t chosen = app_upload_slot();
+            data[4] = (uint8_t)(chosen >> 24);
+            data[5] = (uint8_t)(chosen >> 16);
+            data[6] = (uint8_t)(chosen >> 8);
+            data[7] = (uint8_t)(chosen);
             break;
         }
         case APP_STATUS: {

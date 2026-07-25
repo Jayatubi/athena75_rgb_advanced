@@ -66,7 +66,10 @@
 // raises an on-screen "Install app?" dialog and the write only proceeds once the
 // user accepts; the LCD shows a progress bar while erasing/programming.
 #define ATHENA_APP_CMD     0x64
-#define ATHENA_APP_BEGIN   0x00 // data[3..6]=slot(BE32) data[7..10]=total(BE32) -> data[3]=state
+#define ATHENA_APP_BEGIN   0x00 // request: data[3..6]=slot(BE32; 0=AUTO), data[7..10]=total,
+                                // data[11..26]=name, data[27]=contiguous slot count,
+                                // data[28..31]=packaged data blob size (BE32)
+                                // reply: data[3]=state, data[4..7]=selected slot(BE32; 0=none)
 #define ATHENA_APP_STATUS  0x01 // -> data[3]=state data[4..7]=written(BE32)
 #define ATHENA_APP_ERASE   0x02 // data[3..6]=addr(BE32) -> data[3]=1 ok
 #define ATHENA_APP_WRITE   0x03 // data[3..6]=page(BE32) data[7]=poff data[8]=len data[9..]=bytes
@@ -88,11 +91,13 @@
 // (4MB), app slots 0x10800000..0x11000000 (8MB).
 #define ATHENA_APP_AREA_BEGIN 0x10800000u
 #define ATHENA_APP_AREA_END   0x11000000u
-// A slot is 256 KiB (32 slots in 8 MB). The first slot's last 4 KiB is the app's
-// save sector, so a code image must fit in 252 KiB; apps may span more slots.
-#define ATHENA_APP_SLOT_SIZE      0x40000u
-#define ATHENA_APP_SLOT_SAVE_SIZE 0x1000u
-#define ATHENA_APP_SLOT_CODE_MAX  (ATHENA_APP_SLOT_SIZE - ATHENA_APP_SLOT_SAVE_SIZE)
+// A slot is 256 KiB (32 slots in 8 MB). Fixed tail layout:
+// 250 KiB code, 2 KiB icon (32x32 RGB565), 4 KiB save sector.
+#define ATHENA_APP_SLOT_SIZE        0x40000u
+#define ATHENA_APP_SLOT_ICON_OFFSET 0x3E800u
+#define ATHENA_APP_SLOT_ICON_SIZE   0x0800u
+#define ATHENA_APP_SLOT_SAVE_SIZE   0x1000u
+#define ATHENA_APP_SLOT_CODE_MAX    ATHENA_APP_SLOT_ICON_OFFSET
 // BEGIN carries the app name after the header: data[11..26] = name[16].
 #define ATHENA_APP_NAME_OFF 11
 #define ATHENA_APP_NAME_LEN 16

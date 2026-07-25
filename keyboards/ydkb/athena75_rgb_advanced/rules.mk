@@ -1,9 +1,6 @@
 # project specific files
 SRC ?=	c1_display.c c1_main.c matrix.c user_led.c user_function.c user_rawhid.c
 
-# Pure-C Q15.16 fixed-point math (trig for the Whirlpool rotate effect).
-SRC +=  lib/fixed_math/fixed_math.c
-
 # Low-level flash probes for the raw-HID PROBE command (JEDEC id + sector/page r/w).
 SRC +=  probe_flash.c
 
@@ -40,9 +37,9 @@ QUANTUM_PAINTER_DRIVERS  = gc9107_spi surface
 SRC +=  gfx/menu_font.c \
         menu.c menu_model.c ui_scene.c dialog.c
 
-# core1 apps (peer full-screen modes) + runtime. c1_display.c is the shared
-# display service they draw through; app.c reconciles / ticks the active one.
-SRC +=  app/app.c app/boot.c app/anim.c app/matrix.c app/menu.c app/blank.c app/launcher.c
+# Core1 OS runtime. The former built-in ANIMATION/MATRIX renderers are slot apps
+# now; removing their ~100 KiB BSS makes the fixed 96 KiB app arena possible.
+SRC +=  app/app.c app/boot.c app/menu.c app/blank.c app/launcher.c
 # Slot-app loader + adapter: load a relocated .app from a flash slot and run it.
 SRC +=  app/app_loader.c
 

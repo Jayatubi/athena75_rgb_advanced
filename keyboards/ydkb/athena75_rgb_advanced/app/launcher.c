@@ -18,19 +18,18 @@
 #include "quantum.h"        // KC_* keycodes
 #include "app.h"
 #include "app_scan.h"
+#include "app_upload.h"     // fixed APP_SLOT_ICON_OFFSET / SIZE
 #include "app_input.h"
 #include "c1_gfx.h"         // fbShow
 #include "ui.h"
 
-#define LAU_COLS       3
-#define LAU_ICON_MAX   34
-#define LAU_MARGIN     8
+#define LAU_COLS       2
+#define LAU_ROWS       2
+#define LAU_ICON_SIZE  32
 
 // palette (RGB565)
 #define LAU_BG         0x0000
-#define LAU_ICON_FG    0x7BEF   // grey box
-#define LAU_ICON_SEL   0xFFFF   // white box (selected)
-#define LAU_HILITE     0x0011   // dark-blue selection backing
+#define LAU_FOCUS      0xFFFF   // white focus frame
 #define LAU_NAME_FG    0x9CD3   // muted label
 #define LAU_NAME_SEL   0xFFFF
 #define LAU_EMPTY_FG   0x7BEF
@@ -74,6 +73,7 @@ static void launcher_input(uint8_t n) {
 static void launcher_tick(uint32_t dt_ms) {
     (void)dt_ms;
     uint8_t n = app_scan_count();
+    bool focused = app_input_mode() == APP_INPUT_OS;
 
     launcher_input(n);
     if (n && lau_sel >= n) lau_sel = (uint8_t)(n - 1);
@@ -91,37 +91,46 @@ static void launcher_tick(uint32_t dt_ms) {
     }
 
     int16_t lh    = ui_line_height();
-    int16_t cellw = (int16_t)(vw / LAU_COLS);
-    int16_t icon  = (int16_t)(cellw - LAU_MARGIN);
-    if (icon > LAU_ICON_MAX) icon = LAU_ICON_MAX;
-    int16_t cellh = (int16_t)(icon + 4 + lh + 4);
-
-    // Reserve one line at the bottom for the selected app's full name.
-    int16_t grid_h   = (int16_t)(vh - lh - 2);
-    int16_t vis_rows = (int16_t)(grid_h / cellh);
-    if (vis_rows < 1) vis_rows = 1;
+    int16_t cellw  = (int16_t)(vw / LAU_COLS);
+    int16_t icon   = LAU_ICON_SIZE;
+    // Reserve one line at the bottom for the selected app's full name; divide
+    // everything above it into an even 2x2 grid (four apps per screen).
+    int16_t grid_h = (int16_t)(vh - lh);
+    int16_t cellh  = (int16_t)(grid_h / LAU_ROWS);
 
     int16_t sel_row   = (int16_t)(lau_sel / LAU_COLS);
-    int16_t first_row = 0;
-    if (sel_row >= vis_rows) first_row = (int16_t)(sel_row - vis_rows + 1);
+    int16_t first_row = (int16_t)((sel_row / LAU_ROWS) * LAU_ROWS);
 
     for (uint8_t i = 0; i < n; i++) {
         int16_t r = (int16_t)(i / LAU_COLS), c = (int16_t)(i % LAU_COLS);
-        if (r < first_row || r >= first_row + vis_rows) continue;
-        bool    sel = (i == lau_sel);
+        if (r < first_row || r >= first_row + LAU_ROWS) continue;
+        // In normal-keyboard mode the launcher remains visible but has no focus:
+        // retain the cursor internally for the next OS-mode entry, while drawing
+        // no icon/label as selected.
+        bool    sel = focused && (i == lau_sel);
         int16_t x   = (int16_t)(c * cellw + (cellw - icon) / 2);
-        int16_t y   = (int16_t)((r - first_row) * cellh + 2);
+        int16_t content_h = (int16_t)(icon + 2 + lh);
+        int16_t y = (int16_t)((r - first_row) * cellh +
+                              (cellh - content_h) / 2);
 
-        if (sel) ui_fill_rect(fbShow, (int16_t)(x - 2), (int16_t)(y - 2),
-                              (int16_t)(icon + 4), (int16_t)(icon + 4), LAU_HILITE);
-        ui_wire_rect(fbShow, x, y, icon, icon, sel ? LAU_ICON_SEL : LAU_ICON_FG);
-
-        // Short label under the box, clipped to the cell so it never bleeds over.
         const app_scan_entry_t *e = app_scan_get(i);
         if (e) {
+            if (sel) ui_wire_rect(fbShow, (int16_t)(x - 2), (int16_t)(y - 2),
+                                  (int16_t)(icon + 4), (int16_t)(icon + 4), LAU_FOCUS);
+            // Every v2 app package installs its opaque 32x32 big-endian RGB565
+            // icon at this fixed slot offset, so the launcher can XIP-blit it
+            // without loading metadata or consuming app RAM.
+            const uint8_t *icon565 =
+                (const uint8_t *)(uintptr_t)(e->base + APP_SLOT_ICON_OFFSET);
+            ui_blit565(fbShow, x, y, LAU_ICON_SIZE, LAU_ICON_SIZE, icon565);
+
+            // Short label under the icon, clipped to its cell.
             ui_clip_set((int16_t)(c * cellw + 1), (int16_t)(y + icon + 2),
                         (int16_t)(cellw - 2), lh);
-            ui_text(fbShow, (int16_t)(c * cellw + 2), (int16_t)(y + icon + 2),
+            int16_t tw = ui_text_width(e->name);
+            int16_t tx = (int16_t)(c * cellw + (cellw - tw) / 2);
+            if (tx < c * cellw + 1) tx = (int16_t)(c * cellw + 1);
+            ui_text(fbShow, tx, (int16_t)(y + icon + 2),
                     e->name, sel ? LAU_NAME_SEL : LAU_NAME_FG, LAU_BG);
             ui_clip_reset();
         }
@@ -134,7 +143,8 @@ static void launcher_tick(uint32_t dt_ms) {
         int16_t bx = (int16_t)((vw - tw) / 2);
         if (bx < 0) bx = 0;
         ui_clip_set(0, (int16_t)(vh - lh), vw, lh);
-        ui_text(fbShow, bx, (int16_t)(vh - lh), se->name, LAU_NAME_SEL, LAU_BG);
+        ui_text(fbShow, bx, (int16_t)(vh - lh), se->name,
+                focused ? LAU_NAME_SEL : LAU_NAME_FG, LAU_BG);
         ui_clip_reset();
     }
 

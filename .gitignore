@@ -85,6 +85,9 @@ tags
 *.jpg
 *.jpeg
 *.png
+# Slot-app source icons are build inputs, not generated artwork.
+!keyboards/ydkb/athena75_rgb_advanced/apps/sdk/default_app_icon_32.png
+!keyboards/ydkb/athena75_rgb_advanced/apps/**/icon.png
 *.apng
 *.mng
 *.svg

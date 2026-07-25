@@ -24,6 +24,10 @@ SRC="${APPS_DIR}/${APP}/${APP}_app.c"
 BUILD="${APPS_DIR}/${APP}/build"
 HOST_DIR="${KBD_DIR}/tools/host"
 HOST_TOOL="${HOST_DIR}/build/Release/host_tool"
+ICON_SRC="${APPS_DIR}/${APP}/icon.png"
+DEFAULT_ICON="${APPS_DIR}/sdk/default_app_icon_32.png"
+ICON_RGB="${BUILD}/${APP}_icon.rgb565"
+DATA_BLOB="${APP_DATA:-${BUILD}/data.bin}"
 
 if [[ ! -f "${SRC}" ]]; then
     echo "error: app source not found: ${SRC}" >&2
@@ -35,6 +39,19 @@ if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
 fi
 
 mkdir -p "${BUILD}"
+if [[ ! -f "${ICON_SRC}" ]]; then
+    ICON_SRC="${DEFAULT_ICON}"
+fi
+if [[ "${APP}" == "ace" && ! -f "${DATA_BLOB}" ]]; then
+    echo "error: ACE data blob missing: ${DATA_BLOB}" >&2
+    echo "run build_ace_data.py <external-emojis-dir> first" >&2
+    exit 1
+fi
+
+# Convert the app-specific icon (or the SDK default) before packaging. The output
+# is opaque big-endian RGB565, exactly matching ui_blit565 and the fixed 2K slot
+# resource region at +0x3E800.
+python3 "${APPS_DIR}/tools/icon_to_rgb565.py" "${ICON_SRC}" "${ICON_RGB}"
 
 # 1) compile the app -> ELF (only arm-none-eabi-gcc from the pinned image).
 DOCKER_CMD=$(cat <<EOF
@@ -60,16 +77,21 @@ EOF
 echo ">> compiling ${APP} (docker: pinned QMK image)"
 docker run --rm -v "${APPS_DIR}:/apps" -w /apps "${DOCKER_IMAGE}" bash -lc "${DOCKER_CMD}"
 
-# 2) package the ELF -> .app with the native host_tool (build it if needed).
-if [[ ! -x "${HOST_TOOL}" ]]; then
-    echo ">> host_tool not built; building it (cmake)"
+# 2) package the ELF -> .app with the native host_tool. Always run the incremental
+# CMake build so a stale v1 packer cannot silently emit an icon-less package.
+if [[ ! -d "${HOST_DIR}/build" ]]; then
     cmake -S "${HOST_DIR}" -B "${HOST_DIR}/build" >/dev/null
-    cmake --build "${HOST_DIR}/build" --config Release >/dev/null
 fi
+cmake --build "${HOST_DIR}/build" --config Release >/dev/null
 
 # No --name: the package (and the install-dialog) name then mirrors the app's own
 # slot-header name (app_header.name in <app>_app.c), so the two never disagree.
 echo ">> packaging ${APP}.app (native: host_tool app pack)"
-"${HOST_TOOL}" app pack "${BUILD}/${APP}.elf" -o "${APPS_DIR}/${APP}/${APP}.app"
+PACK_ARGS=(app pack "${BUILD}/${APP}.elf" --icon "${ICON_RGB}")
+if [[ -f "${DATA_BLOB}" ]]; then
+    PACK_ARGS+=(--data "${DATA_BLOB}")
+fi
+PACK_ARGS+=(-o "${APPS_DIR}/${APP}/${APP}.app")
+"${HOST_TOOL}" "${PACK_ARGS[@]}"
 
 echo ">> done: ${APPS_DIR}/${APP}/${APP}.app"

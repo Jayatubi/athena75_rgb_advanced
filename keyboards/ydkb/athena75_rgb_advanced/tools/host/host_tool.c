@@ -32,10 +32,10 @@ static int usage(const char *argv0) {
         "  restore file.bin                         write a saved Vial/VIA config back\n"
         "  probe   [read ADDR [len]]                JEDEC flash size + XIP readability map\n"
         "          [erase ADDR] [prog ADDR]         erase a 4K sector / program a test page\n"
-        "  app      pack <elf> [-o out.app]         build a relocatable slot app from an ELF\n"
+        "  app      pack <elf> --icon icon.rgb565   build a relocatable app + fixed icon\n"
         "           info <file.app>                 inspect a packaged app\n"
         "           relocate <file.app> <slot>      patch an app for a target slot (preview)\n"
-        "           upload <file.app> [--slot ADDR] confirm on the LCD, then flash into a slot\n",
+        "           install <file.app> [--method put|uf2] confirm + install into a free slot\n",
         argv0);
     return 2;
 }

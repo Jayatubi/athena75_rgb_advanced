@@ -11,6 +11,7 @@
 #include "app_upload.h"
 #include "probe_flash.h"
 #include "config.h"
+#include "apps/sdk/host_api.h" // ATHENA_APP_MAGIC / app_header_t
 #include "hardware/flash.h"   // FLASH_SECTOR_SIZE, FLASH_PAGE_SIZE
 
 #include <string.h>
@@ -21,6 +22,8 @@ static volatile uint8_t  s_state   = APPUP_IDLE;
 static volatile uint32_t s_slot    = 0;
 static volatile uint32_t s_total   = 0;
 static volatile uint32_t s_written = 0;
+static uint32_t          s_code_size = 0;
+static uint32_t          s_data_size = 0;
 static uint32_t          s_done_t  = 0;
 
 // One-page accumulation buffer (a write report carries <=23 bytes; a flash page
@@ -33,11 +36,54 @@ static bool in_area(uint32_t a, uint32_t len) {
     return len && a >= APP_AREA_BEGIN && (a + len) <= APP_AREA_END && (a + len) > a;
 }
 
-// True while the address lies inside the accepted slot (rounded to `grain`).
-static bool in_slot(uint32_t addr, uint32_t len, uint32_t grain) {
-    uint32_t lo  = s_slot & ~(grain - 1u);
-    uint32_t hi  = (s_slot + s_total + (grain - 1u)) & ~(grain - 1u);
-    return addr >= lo && (addr + len) <= hi;
+// A slot is occupied as soon as it carries an app header magic. Do not require a
+// valid ABI/CRC here: a partially installed or newer app must not be silently
+// overwritten either. Reclaiming such a slot needs an explicit uninstall/erase
+// operation rather than piggy-backing on install.
+static void occupied_map(bool used[32]) {
+    memset(used, 0, 32 * sizeof(bool));
+    for (uint8_t i = 0; i < 32; i++) {
+        const app_header_t *h =
+            (const app_header_t *)(uintptr_t)(APP_AREA_BEGIN + (uint32_t)i * APP_SLOT_SIZE);
+        if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0) continue;
+        uint8_t n = (h->hdr_size >= sizeof(app_header_t)) ? h->slot_count : 1u;
+        if (n == 0 || n > 32 - i) n = 1;
+        for (uint8_t j = 0; j < n; j++) used[i + j] = true;
+    }
+}
+
+static bool run_free(const bool used[32], uint8_t first, uint8_t count) {
+    if (!count || first >= 32 || count > 32 - first) return false;
+    for (uint8_t i = 0; i < count; i++)
+        if (used[first + i]) return false;
+    return true;
+}
+
+static uint32_t first_free_slot(uint8_t count) {
+    bool used[32];
+    occupied_map(used);
+    for (uint8_t i = 0; i < 32; i++) {
+        if (run_free(used, i, count))
+            return APP_AREA_BEGIN + (uint32_t)i * APP_SLOT_SIZE;
+    }
+    return 0;
+}
+
+// True while the address lies in an accepted package resource: compact code,
+// fixed icon, or the contiguous data blob beginning in the second slot. Round each
+// resource to the flash operation grain (4K erase / 256B program).
+static bool in_upload_region(uint32_t addr, uint32_t len, uint32_t grain) {
+    uint32_t code_lo = s_slot & ~(grain - 1u);
+    uint32_t code_hi = (s_slot + s_code_size + grain - 1u) & ~(grain - 1u);
+    uint32_t icon_lo = (s_slot + APP_SLOT_ICON_OFFSET) & ~(grain - 1u);
+    uint32_t icon_hi = (s_slot + APP_SLOT_ICON_OFFSET + APP_SLOT_ICON_SIZE +
+                        grain - 1u) & ~(grain - 1u);
+    uint32_t data_lo = (s_slot + APP_SLOT_SIZE) & ~(grain - 1u);
+    uint32_t data_hi = (s_slot + APP_SLOT_SIZE + s_data_size +
+                        grain - 1u) & ~(grain - 1u);
+    return (addr >= code_lo && (addr + len) <= code_hi) ||
+           (addr >= icon_lo && (addr + len) <= icon_hi) ||
+           (s_data_size && addr >= data_lo && (addr + len) <= data_hi);
 }
 
 // ---- dialog actions (INSTALL / CANCEL) --------------------------------------
@@ -48,15 +94,47 @@ static void app_upload_decline(void) { s_state = APPUP_IDLE; } // drop the scree
 // pointer, so this must stay resident — only one upload is ever in flight).
 static char s_msg[64];
 
-void app_upload_request(uint32_t slot, uint32_t total, const char *name) {
-    // Reject anything outside the app area, larger than a slot's code area, or
-    // not aligned to a 256K slot boundary.
-    if (!in_area(slot, total) || total == 0 || total > APP_SLOT_CODE_MAX ||
-        (slot & (APP_SLOT_SIZE - 1u))) {
+void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
+                        uint8_t slot_count, const char *name) {
+    s_slot = 0;
+
+    // Current executable images use one slot (the last 4K is its save sector).
+    uint32_t expected_slots = 1u +
+        (data_size + APP_SLOT_SIZE - 1u) / APP_SLOT_SIZE;
+    if (code_size == 0 || code_size > APP_SLOT_CODE_MAX ||
+        slot_count == 0 || slot_count > 32 || slot_count != expected_slots) {
         s_state = APPUP_DENIED;
         return;
     }
-    s_slot = slot; s_total = total; s_written = 0;
+
+    // Zero is the wire-level AUTO sentinel. Otherwise require a valid explicit
+    // slot and reject it before showing the confirmation dialog if occupied.
+    if (slot == 0) {
+        slot = first_free_slot(slot_count);
+        if (!slot) {
+            s_state = APPUP_DENIED; // app area full
+            return;
+        }
+    } else {
+        bool used[32];
+        occupied_map(used);
+        if (!in_area(slot, slot_count * APP_SLOT_SIZE) ||
+            (slot & (APP_SLOT_SIZE - 1u))) {
+            s_state = APPUP_DENIED;
+            return;
+        }
+        uint8_t first = (uint8_t)((slot - APP_AREA_BEGIN) / APP_SLOT_SIZE);
+        if (!run_free(used, first, slot_count)) {
+            s_state = APPUP_DENIED;
+            return;
+        }
+    }
+
+    s_slot = slot;
+    s_code_size = code_size;
+    s_data_size = data_size;
+    s_total = code_size + APP_SLOT_ICON_SIZE + data_size;
+    s_written = 0;
     s_page_addr = 0; s_page_dirty = false;
 
     char nm[17];
@@ -66,8 +144,8 @@ void app_upload_request(uint32_t slot, uint32_t total, const char *name) {
     if (!k) { nm[0] = 'a'; nm[1] = 'p'; nm[2] = 'p'; nm[3] = 0; }
     unsigned idx = (unsigned)((slot - APP_AREA_BEGIN) / APP_SLOT_SIZE);
     // Two centred lines: "<name>  <size>B" / "slot <n>  0x<addr>".
-    snprintf(s_msg, sizeof s_msg, "%s  %uB\nslot %u  0x%08X",
-             nm, (unsigned)total, idx, (unsigned)slot);
+    snprintf(s_msg, sizeof s_msg, "%s  %uB\nslot %u +%u data",
+             nm, (unsigned)s_total, idx, (unsigned)(slot_count - 1u));
     s_state = APPUP_PENDING;
 
     dialog_desc_t d = {
@@ -83,12 +161,14 @@ void app_upload_request(uint32_t slot, uint32_t total, const char *name) {
 }
 
 uint8_t  app_upload_state(void)   { return s_state; }
+uint32_t app_upload_slot(void)    { return s_slot; }
 uint32_t app_upload_written(void) { return s_written; }
 uint32_t app_upload_total(void)   { return s_total; }
 
 bool app_upload_do_erase(uint32_t addr) {
     if (s_state != APPUP_AUTH && s_state != APPUP_ACTIVE) return false;
-    if (!in_area(addr, FLASH_SECTOR_SIZE) || !in_slot(addr, FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE))
+    if (!in_area(addr, FLASH_SECTOR_SIZE) ||
+        !in_upload_region(addr, FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE))
         return false;
     s_state = APPUP_ACTIVE;
     return app_flash_erase_sector(addr);
@@ -97,7 +177,8 @@ bool app_upload_do_erase(uint32_t addr) {
 int app_upload_do_write(uint32_t page_addr, uint8_t poff, uint8_t len, const uint8_t *src) {
     if (s_state != APPUP_AUTH && s_state != APPUP_ACTIVE) return 0;
     if ((page_addr & (FLASH_PAGE_SIZE - 1u)) || (uint16_t)poff + len > FLASH_PAGE_SIZE) return 0;
-    if (!in_area(page_addr, FLASH_PAGE_SIZE) || !in_slot(page_addr, FLASH_PAGE_SIZE, FLASH_PAGE_SIZE))
+    if (!in_area(page_addr, FLASH_PAGE_SIZE) ||
+        !in_upload_region(page_addr, FLASH_PAGE_SIZE, FLASH_PAGE_SIZE))
         return 0;
     s_state = APPUP_ACTIVE;
 
@@ -112,7 +193,7 @@ int app_upload_do_write(uint32_t page_addr, uint8_t poff, uint8_t len, const uin
         bool ok = app_flash_prog_page(page_addr, s_page);
         s_page_dirty = false;
         if (ok) {
-            uint32_t w = page_addr + FLASH_PAGE_SIZE - s_slot; // bytes covered so far
+            uint32_t w = s_written + FLASH_PAGE_SIZE;
             s_written = (w > s_total) ? s_total : w;
         }
         return ok ? 1 : 0;

@@ -29,9 +29,11 @@
 
 // Reserved app RAM window — KEEP IN SYNC WITH apps/sdk/app.ld (RAM ORIGIN/LENGTH),
 // ld/RP2040_FLASH_TIMECRIT_16M.ld (ram0 shrunk to make room) and the host's
-// APP_RAM_BASE/APP_RAM_SPAN (tools/host/common/app_pkg.h). Top 2 KiB of ram0.
-#define APP_RAM_LO 0x2003F800u
+// APP_RAM_BASE/APP_RAM_SPAN (tools/host/common/app_pkg.h). Top 80 KiB of ram0.
+#define APP_RAM_LO 0x2002C000u
 #define APP_RAM_HI 0x20040000u
+
+static uint32_t g_loaded_base = 0; // slot base currently loaded (0 = none)
 
 // Per-app persistence helpers (defined below; they need g_loaded_base). The save
 // sector is the last 4KB of the app's first slot.
@@ -50,6 +52,7 @@ static void loader_menu_run(const app_menu_model_t *model) {
 static bool loader_menu_active(void) {
     return menu_is_active() || menu_open_pending();
 }
+static uint32_t loader_app_base(void) { return g_loaded_base; }
 
 // The firmware services handed to every app. All are core1-safe. Static const:
 // it lives in flash and just holds function addresses + the shared fb pointer.
@@ -84,6 +87,7 @@ static const host_api_t g_api = {
     .reboot         = app_sys_reboot,
     .set_input_mode = app_input_request_mode,
     .input_mode     = app_input_mode,
+    .app_base       = loader_app_base,
     // rgb
     .rgb_get        = app_sys_rgb_get,
     .rgb_set        = app_sys_rgb_set,
@@ -111,7 +115,6 @@ static const host_api_t g_api = {
 };
 
 static const app_desc_t *g_desc        = NULL; // loaded app's descriptor (NULL = none/failed)
-static uint32_t          g_loaded_base = 0;    // slot base currently loaded (0 = none)
 
 // ---- per-app persistence (save sector = last 4KB of the app's first slot) ---
 static uint32_t loader_save_base(void) {
