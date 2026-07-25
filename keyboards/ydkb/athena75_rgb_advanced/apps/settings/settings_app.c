@@ -9,7 +9,7 @@
 //   RGB (on/off toggle)
 //     EFFECT (compiled effect list) / BRIGHT / HUE / SAT / SPEED / CAPS / RGB FOR
 //   SLEEP      -> 1 / 5 / 10 / 15 minutes / never (shared LCD + RGB timeout)
-//   APP        -> firmware installed-app list (launch)
+//   APP        -> installed-app list -> details card / guarded uninstall
 //   LCD TEST   -> firmware panel-alignment screen
 //   REBOOT     -> NORMAL / BOOTSEL
 //   EXIT

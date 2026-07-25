@@ -51,6 +51,9 @@ void app_scan(void) {
         uint32_t img = h->image_size;
         if (img < sizeof(app_header_t)) continue;
         if (b + img > APP_AREA_END) continue;
+        if (h->slot_count == 0u ||
+            b + (uint32_t)h->slot_count * APP_SLOT_SIZE > APP_AREA_END)
+            continue;
 
         // Then the (more expensive) CRC over the XIP image.
         if (image_crc((const uint8_t *)(uintptr_t)b, img) != h->crc32) continue;
@@ -68,6 +71,7 @@ void app_scan(void) {
         e->image_size = img;
         e->entry      = (uint32_t)(uintptr_t)h->entry;
         e->slot       = (uint8_t)((b - APP_AREA_BEGIN) / APP_SLOT_SIZE);
+        e->slot_count = h->slot_count;
     }
 }
 

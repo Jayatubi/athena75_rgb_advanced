@@ -48,6 +48,8 @@ typedef enum {
     MA_REBOOT,      // normal restart (mcu_reset)
     MA_BOOTSEL,     // reboot into the RP2040 UF2 bootloader (BOOTSEL)
     MA_APP_LAUNCH,  // launch the slot app at the focused MN_APP row (index = focus)
+    MA_APP_INFO,    // open selected app's full-screen information card
+    MA_APP_DELETE,  // open selected app's guarded uninstall confirmation
 } menu_action_t;
 
 // Per-item capability flags (configured on the item, static or dynamic alike).
@@ -107,6 +109,8 @@ void        menu_model_set_app(const struct app_menu_model_t *m);
 bool        menu_model_is_app(void);                // true while an app model is bound
 const char *menu_model_app_root_title(void);        // NULL => use firmware default
 void        menu_model_user_action(uint8_t action); // action >= APP_MENU_ACT_USER
+void        menu_model_select_app(uint8_t index);   // selected firmware APP-list row
+uint8_t     menu_model_selected_app(void);
 
 // RGB effect list (alphabetical), so an app can reproduce the RGB mode picker.
 uint8_t     menu_model_rgb_mode_count(void);

@@ -80,10 +80,15 @@ enum { APP_MI_FOLDER = 0, APP_MI_VALUE = 1, APP_MI_ACTION = 2 };
 
 // Reserved child-node ids for firmware-provided screens. Put one of these in an
 // item's `child` (with kind APP_MI_FOLDER) to descend into the OS's own screen:
-//   APP_MENU_CHILD_APP     -- the installed slot-app list (launch on Enter)
+//   APP_MENU_CHILD_APP     -- the installed slot-app list
+// Its rows descend through the remaining firmware-owned APP screens: an
+// app-specific submenu, a one-screen information card, and uninstall confirm.
 //   APP_MENU_CHILD_LCDTEST -- the panel-alignment calibration screen
 // (These never collide with app node ids, which start at 0 and are small.)
 #define APP_MENU_CHILD_NONE    0u
+#define APP_MENU_CHILD_APP_DELETE 0xFAu
+#define APP_MENU_CHILD_APP_INFO   0xFBu
+#define APP_MENU_CHILD_APP_ITEM   0xFCu
 #define APP_MENU_CHILD_APP     0xFDu
 #define APP_MENU_CHILD_LCDTEST 0xFEu
 
@@ -94,6 +99,9 @@ enum {
     APP_MENU_ACT_EXIT    = 1,   // leave the menu (hand control back to the app)
     APP_MENU_ACT_REBOOT  = 2,   // normal restart (does not return)
     APP_MENU_ACT_BOOTSEL = 3,   // reboot into the UF2 bootloader (does not return)
+    // 4 is an internal firmware direct-launch action used by the legacy tree.
+    APP_MENU_ACT_APP_INFO   = 5, // firmware-owned app details card
+    APP_MENU_ACT_APP_DELETE = 6, // firmware-owned guarded uninstall screen
     APP_MENU_ACT_USER    = 64,  // >= this: passed to model->action(value)
 };
 

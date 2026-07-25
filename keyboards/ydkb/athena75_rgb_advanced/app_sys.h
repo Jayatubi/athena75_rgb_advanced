@@ -40,6 +40,10 @@ uint8_t app_sys_app_count(void);
 bool    app_sys_app_get(uint8_t i, app_info_t *out);
 void    app_sys_app_set_enabled(uint8_t slot, bool enabled);
 bool    app_sys_app_enabled(uint8_t slot);
+// Uninstall asynchronously after the slot app has been unloaded. The entire
+// reserved slot span is erased one 4 KiB sector per housekeeping pass.
+bool    app_sys_app_delete(uint32_t base, uint8_t slot_count);
+bool    app_sys_app_delete_busy(void);
 
 // ---- per-app save sector (async, core0-serviced) ---------------------------
 // Request an erase+program of the 4KB sector at `sector_base` (must be 4K-aligned

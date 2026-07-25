@@ -30,8 +30,11 @@ _Static_assert((int)APP_MENU_ACT_EXIT == (int)MA_EXIT && (int)APP_MENU_ACT_REBOO
 // Set on core0 when the menu opens (menu_service) and read by the accessors below
 // on both cores. A single aligned pointer -> atomic to publish.
 static const app_menu_model_t *g_app_model = NULL;
+static volatile uint8_t g_selected_app;
 void menu_model_set_app(const app_menu_model_t *m) { g_app_model = m; }
 bool menu_model_is_app(void) { return g_app_model != NULL; }
+void menu_model_select_app(uint8_t index) { g_selected_app = index; }
+uint8_t menu_model_selected_app(void) { return g_selected_app; }
 
 // CapsLock colour / RGB scope are stored in the Vial "layout options" word (same
 // storage the Vial GUI writes). via_get/set_layout_options persist to eeprom;
@@ -439,10 +442,8 @@ static const char *const caps_color_labels[] = {
 
 // ---- generated APP node (installed slot apps) -------------------------------
 // Items come from the app_scan() table (rebuilt at boot and on every APP-folder
-// open): each installed app is an ACTION row that launches it (Right/Enter). The
-// row's list index == the app's index in the scan table, so menu.c resolves the
-// slot base from the focused index (see MA_APP_LAUNCH). When nothing is installed
-// a single non-actionable "(NONE)" placeholder keeps the screen non-empty.
+// open). Under SETTINGS, each app is a folder leading to INFO and UNINSTALL.
+// The legacy built-in menu retains its direct-launch action.
 static void gen_app(uint8_t idx, menu_item_t *out, char *label) {
     (void)label; // app names live in the scan table (persistent), not the slot buf
     memset(out, 0, sizeof(*out));
@@ -455,8 +456,13 @@ static void gen_app(uint8_t idx, menu_item_t *out, char *label) {
     }
     out->id    = (uint16_t)(0x2001u + idx);
     out->label = a->name;       // valid until the next app_scan()
-    out->kind  = MIK_ACTION;    // Right/Enter -> launch
-    out->value = MA_APP_LAUNCH; // index resolved from the focused row in menu.c
+    if (g_app_model) {
+        out->kind  = MIK_FOLDER;
+        out->child = APP_MENU_CHILD_APP_ITEM;
+    } else {
+        out->kind  = MIK_ACTION;
+        out->value = MA_APP_LAUNCH;
+    }
 }
 
 static void build_enum_node(menu_node_id_t nid, uint8_t group, uint8_t count, const char *const *labels) {
@@ -610,6 +616,9 @@ static uint8_t app_node_count(uint8_t node) {
         uint8_t c = node_tbl[MN_APP].count;
         return c ? c : 1u; // >=1 so the "(NONE)" placeholder can render
     }
+    if (node == APP_MENU_CHILD_APP_ITEM) return 2;
+    if (node == APP_MENU_CHILD_APP_INFO ||
+        node == APP_MENU_CHILD_APP_DELETE) return 0;
     if (node == APP_MENU_CHILD_LCDTEST) return 0;
     if (!g_app_model || node >= g_app_model->node_count) return 0;
     const app_menu_node_t *n = &g_app_model->nodes[node];
@@ -640,7 +649,18 @@ static const menu_item_t *app_item_at(uint8_t id, uint8_t idx) {
         n->gen(idx, &s->it, s->label);
         return &s->it;
     }
-    if (id == APP_MENU_CHILD_LCDTEST) return NULL;
+    if (id == APP_MENU_CHILD_APP_ITEM) {
+        static const app_menu_item_t items[] = {
+            { "DETAILS",   APP_MI_ACTION, 0, 0, APP_MENU_ACT_APP_INFO,   0 },
+            { "UNINSTALL", APP_MI_ACTION, 0, 0, APP_MENU_ACT_APP_DELETE, 0 },
+        };
+        if (idx >= (uint8_t)(sizeof(items) / sizeof(items[0]))) return NULL;
+        app_item_fill(&items[idx], s);
+        return &s->it;
+    }
+    if (id == APP_MENU_CHILD_APP_INFO ||
+        id == APP_MENU_CHILD_APP_DELETE ||
+        id == APP_MENU_CHILD_LCDTEST) return NULL;
     if (!g_app_model || id >= g_app_model->node_count) return NULL;
     if (idx >= app_node_count(id)) return NULL;
     const app_menu_node_t *n = &g_app_model->nodes[id];

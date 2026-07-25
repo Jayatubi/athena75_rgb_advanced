@@ -119,6 +119,31 @@ void app_sys_app_set_enabled(uint8_t slot, bool enabled) {
     else         s_disabled |=  (1u << slot);
 }
 
+// ---- app uninstall (async) -------------------------------------------------
+// Wait until app_slot has actually been left: SETTINGS may request deletion of
+// itself, and its XIP code/menu model must remain valid through the exit fade.
+// Erase one sector per service pass so USB/housekeeping remains responsive.
+static volatile bool     s_delete_busy;
+static volatile uint32_t s_delete_next;
+static volatile uint32_t s_delete_end;
+
+bool app_sys_app_delete(uint32_t base, uint8_t slot_count) {
+    uint32_t bytes = (uint32_t)slot_count * APP_SLOT_SIZE;
+    if (s_delete_busy || slot_count == 0u ||
+        base < APP_AREA_BEGIN || base >= APP_AREA_END ||
+        (base & (APP_SLOT_SIZE - 1u)) || bytes > APP_AREA_END - base)
+        return false;
+    s_delete_next = base;
+    s_delete_end  = base + bytes;
+    __sync_synchronize();
+    s_delete_busy = true;
+    return true;
+}
+
+bool app_sys_app_delete_busy(void) {
+    return s_delete_busy;
+}
+
 // ---- per-app save sector (async) -------------------------------------------
 static volatile bool           s_save_busy;
 static volatile bool           s_save_req;
@@ -219,6 +244,21 @@ void app_sys_service(void) {
         }
         __sync_synchronize();
         s_save_busy = false;
+    }
+
+    if (s_delete_busy && app_current() != &app_slot) {
+        uint32_t addr = s_delete_next;
+        if (addr < s_delete_end) {
+            if (!app_flash_erase_sector(addr)) {
+                s_delete_busy = false;
+            } else {
+                s_delete_next = addr + FLASH_SECTOR_SIZE;
+            }
+        }
+        if (s_delete_next >= s_delete_end) {
+            s_delete_busy = false;
+            app_scan(); // launcher/menu immediately observe the freed slots
+        }
     }
 
     if (s_reboot_req) {

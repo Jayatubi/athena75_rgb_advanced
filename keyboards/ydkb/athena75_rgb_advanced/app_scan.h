@@ -19,6 +19,7 @@ typedef struct app_scan_entry {
     uint32_t image_size;  // total image bytes stored in the slot(s)
     uint32_t entry;       // absolute entry pointer (Thumb bit set) from the header
     uint8_t  slot;        // slot index within the app area (0-based)
+    uint8_t  slot_count;  // contiguous 256 KiB slots reserved by this app
 } app_scan_entry_t;
 
 // Re-scan the whole app area, rebuilding the table. Cheap (reads only); safe to

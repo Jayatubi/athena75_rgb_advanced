@@ -5,11 +5,14 @@
 #include "menu_model.h"
 #include "app/app.h"
 #include "app_scan.h"
+#include "app_sys.h"
+#include "app_upload.h"
 #include "ui.h"
 #include "ui_scene.h"
 #include "config.h"
 #include "quantum.h"
 #include "timer.h"
+#include <stdio.h>
 #include <string.h>
 #include "apps/sdk/host_api.h"  // APP_MENU_CHILD_* / APP_MENU_ACT_* / app_menu_model_t
 
@@ -20,6 +23,15 @@ static inline bool node_is_lcdtest(menu_node_id_t n) {
 }
 static inline bool node_is_app(menu_node_id_t n) {
     return n == MN_APP || (uint8_t)n == APP_MENU_CHILD_APP;
+}
+static inline bool node_is_app_item(menu_node_id_t n) {
+    return (uint8_t)n == APP_MENU_CHILD_APP_ITEM;
+}
+static inline bool node_is_app_info(menu_node_id_t n) {
+    return (uint8_t)n == APP_MENU_CHILD_APP_INFO;
+}
+static inline bool node_is_app_delete(menu_node_id_t n) {
+    return (uint8_t)n == APP_MENU_CHILD_APP_DELETE;
 }
 
 volatile menu_view_t menu_view;
@@ -37,6 +49,30 @@ static uint32_t menu_last_input = 0;
 // Shift state tracked locally: in menu mode we swallow every key (process_record
 // returns false), so QMK never registers the modifier and get_mods() stays 0.
 static bool menu_shift = false;
+
+// Random four-arrow uninstall challenge. It is generated on every entry to the
+// confirmation screen; one wrong arrow immediately cancels back to the app card.
+static uint16_t delete_seq[4];
+static uint8_t  delete_pos;
+static bool     delete_error;
+static bool     delete_verified;
+static uint32_t delete_error_at;
+static uint16_t delete_wrong_key;
+
+static void delete_challenge_new(void) {
+    static const uint16_t arrows[4] = { KC_UP, KC_DOWN, KC_LEFT, KC_RIGHT };
+    memcpy(delete_seq, arrows, sizeof(delete_seq));
+    uint32_t r = timer_read32() ^ ((uint32_t)menu_model_selected_app() << 24);
+    for (uint8_t i = 3; i > 0; i--) {
+        r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+        uint8_t j = (uint8_t)(r % (uint32_t)(i + 1u));
+        uint16_t t = delete_seq[i]; delete_seq[i] = delete_seq[j]; delete_seq[j] = t;
+    }
+    delete_pos = 0;
+    delete_error = false;
+    delete_verified = false;
+    delete_wrong_key = KC_NO;
+}
 
 // LCD TEST calibration: nudge the visible window by dragging one edge live.
 // Left/Right move the left edge, Up/Down move the top edge; hold Shift to drag
@@ -91,6 +127,7 @@ static void menu_push(menu_node_id_t child) {
     menu_wr.path[menu_wr.depth++] = (uint8_t)child;
     menu_wr.focus  = 0;
     menu_wr.scroll = 0;
+    if (node_is_app_delete(child)) delete_challenge_new();
     clamp_focus_scroll();
     menu_publish();
 }
@@ -236,6 +273,52 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
     uint8_t cnt = current_count();
     menu_node_id_t node = current_node();
 
+    // Read-only app card: only Enter/Esc close a terminal screen.
+    if (node_is_app_info(node)) {
+        if (keycode == KC_ENTER || keycode == KC_ESC)
+            menu_pop();
+        return true;
+    }
+
+    // Destructive uninstall confirmation: accept only the four prompted arrows.
+    // A wrong arrow cancels immediately; Esc is explicit cancel (Left may be
+    // part of the generated sequence, so it cannot also mean Back here).
+    if (node_is_app_delete(node)) {
+        if (delete_error) return true; // hold the red error frame for one second
+        if (keycode == KC_ESC) {
+            menu_pop();
+            return true;
+        }
+        if (delete_verified) {
+            if (keycode == KC_ENTER) {
+                const app_scan_entry_t *a =
+                    app_scan_get(menu_model_selected_app());
+                if (a && app_sys_app_delete(a->base, a->slot_count)) {
+                    // Always unload SETTINGS before erasing. app_sys waits until
+                    // the slot adapter has actually exited, so self-delete is safe.
+                    app_return_to_launcher();
+                    menu_exit();
+                } else {
+                    menu_pop();
+                }
+            }
+            return true;
+        }
+        if (keycode != KC_UP && keycode != KC_DOWN &&
+            keycode != KC_LEFT && keycode != KC_RIGHT)
+            return true;
+        if (keycode != delete_seq[delete_pos]) {
+            delete_error    = true;
+            delete_error_at = timer_read32();
+            delete_wrong_key = keycode;
+            menu_publish();
+            return true;
+        }
+        if (++delete_pos == 4u) delete_verified = true;
+        menu_publish();
+        return true;
+    }
+
     // LCD TEST screen: live panel-window calibration. Arrows nudge the window
     // (shift resizes); Enter saves + returns, Esc discards + returns.
     if (node_is_lcdtest(node)) {
@@ -277,9 +360,7 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             menu_rpt_timer = timer_read32();
             menu_rpt_armed = false;
             return true;
-        // Esc mirrors Left (go up one level); at the root it leaves menu mode.
-        // Enter mirrors Right (descend / activate). Only Esc at depth 0 — or an
-        // EXIT action — fully dismisses the menu.
+        // Esc goes up one level; at the root it leaves menu mode.
         case KC_ESC:
             if (menu_wr.depth == 0) {
                 menu_exit();
@@ -293,13 +374,24 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
                 menu_pop();
             }
             return true;
-        // Right and Enter descend into a folder or fire an item action; other
-        // leaves do nothing.
-        case KC_RIGHT:
+        // Right is hierarchy navigation only: it descends into folders, but
+        // never activates a terminal action.
+        case KC_RIGHT: {
+            if (cnt == 0 || menu_wr.focus >= cnt) return true;
+            const menu_item_t *it = menu_item_at(node, menu_wr.focus);
+            if (!menu_item_is_folder(it)) return true;
+            if (node_is_app(node)) menu_model_select_app(menu_wr.focus);
+            if (node_is_lcdtest((menu_node_id_t)it->child)) ui_vscr_edit_begin();
+            if (node_is_app((menu_node_id_t)it->child)) menu_model_refresh_apps();
+            menu_push((menu_node_id_t)it->child);
+            return true;
+        }
+        // Enter descends into a folder or confirms/fires a terminal action.
         case KC_ENTER: {
             if (cnt == 0 || menu_wr.focus >= cnt) return true;
             const menu_item_t *it = menu_item_at(node, menu_wr.focus);
             if (menu_item_is_folder(it)) {
+                if (node_is_app(node)) menu_model_select_app(menu_wr.focus);
                 // Snapshot the window before entering LCD TEST so Esc can undo.
                 if (node_is_lcdtest((menu_node_id_t)it->child)) ui_vscr_edit_begin();
                 // Opening APP re-scans the flash app area (manual re-scan) so the
@@ -320,6 +412,12 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
                         if (a) { app_launch_slot(a->base); menu_exit(); }
                         break;
                     }
+                    case MA_APP_INFO:
+                        menu_push((menu_node_id_t)APP_MENU_CHILD_APP_INFO);
+                        break;
+                    case MA_APP_DELETE:
+                        menu_push((menu_node_id_t)APP_MENU_CHILD_APP_DELETE);
+                        break;
                     default: menu_model_user_action(act); break; // app-defined action
                 }
             }
@@ -342,6 +440,11 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
 
 void menu_housekeeping_task(void) {
     if (!menu_is_active()) return;
+
+    if (node_is_app_delete(current_node()) && delete_error) {
+        if (timer_elapsed32(delete_error_at) >= 1000u) menu_pop();
+        return;
+    }
 
     // Auto-exit after a stretch of no input (only while fully open, not mid-fade).
     if (menu_wr.active && timer_elapsed32(menu_last_input) >= LCD_MENU_IDLE_MS) {
@@ -457,6 +560,10 @@ static const char *menu_node_title(const menu_view_t *v) {
         return t ? t : LCD_MENU_TITLE_ROOT_FULL;
     }
     menu_node_id_t cur    = view_node(v);
+    if (node_is_app_item(cur)) {
+        const app_scan_entry_t *a = app_scan_get(menu_model_selected_app());
+        return a ? a->name : "APP";
+    }
     menu_node_id_t parent = (v->depth == 1) ? MN_ROOT : (menu_node_id_t)v->path[v->depth - 2];
     uint8_t n = menu_node_item_count(parent);
     for (uint8_t i = 0; i < n; i++) {
@@ -848,6 +955,97 @@ static void menu_scene_drop(void) {
     rc_phase = 0;
 }
 
+static void render_app_info(void) {
+    const app_scan_entry_t *a = app_scan_get(menu_model_selected_app());
+    uint8_t *fb = fbShow;
+    ui_clear(fb, 0x0000);
+    ui_fill_rect(fb, 1, 1, UI_W - 2, 15, 0xFFFF);
+    ui_text(fb, 4, 2, "APP DETAILS", 0x0000, 0xFFFF);
+    ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0x4208);
+    if (!a) {
+        ui_text(fb, 8, 56, "APP NOT FOUND", 0xF800, 0x0000);
+        ui_present(fb);
+        return;
+    }
+
+    const uint8_t *icon =
+        (const uint8_t *)(uintptr_t)(a->base + APP_SLOT_ICON_OFFSET);
+    ui_wire_rect(fb, 4, 20, 36, 36, 0x7BEF);
+    ui_blit565(fb, 6, 22, 32, 32, icon);
+
+    ui_clip_set(44, 20, UI_W - 48, 14);
+    ui_text(fb, 44, 20, a->name, 0xFFFF, 0x0000);
+    ui_clip_reset();
+
+    char line[32];
+    snprintf(line, sizeof(line), "IMAGE %lu KB",
+             (unsigned long)((a->image_size + 1023u) / 1024u));
+    ui_text(fb, 44, 36, line, 0xBDF7, 0x0000);
+    snprintf(line, sizeof(line), "USED  %lu KB",
+             (unsigned long)a->slot_count * (APP_SLOT_SIZE / 1024u));
+    ui_text(fb, 44, 49, line, 0xBDF7, 0x0000);
+
+    if (a->slot_count == 1u)
+        snprintf(line, sizeof(line), "SLOT  #%u", a->slot);
+    else
+        snprintf(line, sizeof(line), "SLOTS #%u - #%u", a->slot,
+                 (unsigned)(a->slot + a->slot_count - 1u));
+    ui_text(fb, 6, 67, line, 0xFFFF, 0x0000);
+    snprintf(line, sizeof(line), "BASE  0x%08lX", (unsigned long)a->base);
+    ui_text(fb, 6, 82, line, 0xBDF7, 0x0000);
+    snprintf(line, sizeof(line), "SPAN  %u SLOT%s", a->slot_count,
+             a->slot_count == 1u ? "" : "S");
+    ui_text(fb, 6, 97, line, 0xBDF7, 0x0000);
+    ui_text(fb, 6, UI_H - 15, "ESC / ENTER  BACK", 0x7BEF, 0x0000);
+    ui_present(fb);
+}
+
+static const char *delete_arrow_label(uint16_t kc) {
+    switch (kc) {
+        case KC_UP:    return "↑";
+        case KC_DOWN:  return "↓";
+        case KC_LEFT:  return "←";
+        default:       return "→";
+    }
+}
+
+static void render_app_delete(void) {
+    const app_scan_entry_t *a = app_scan_get(menu_model_selected_app());
+    uint8_t *fb = fbShow;
+    ui_clear(fb, 0x0000);
+    ui_fill_rect(fb, 1, 1, UI_W - 2, 15, 0xF800);
+    ui_text(fb, 4, 2, "UNINSTALL APP", 0xFFFF, 0xF800);
+    ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0xF800);
+
+    if (a) {
+        ui_clip_set(5, 20, UI_W - 10, 14);
+        ui_text(fb, 5, 20, a->name, 0xFFFF, 0x0000);
+        ui_clip_reset();
+    }
+    ui_text(fb, 5, 38, "PRESS IN ORDER", 0xBDF7, 0x0000);
+
+    const int16_t box_w = 24, gap = 5;
+    int16_t x = (int16_t)((UI_W - (4 * box_w + 3 * gap)) / 2);
+    for (uint8_t i = 0; i < 4; i++, x += box_w + gap) {
+        uint16_t color = (delete_error && i == delete_pos) ? 0xF800 :
+                         i < delete_pos ? 0x07E0 :
+                         i == delete_pos ? 0xFFFF : 0x4208;
+        ui_wire_rect(fb, x, 57, box_w, 25, color);
+        const char *s = delete_arrow_label(
+            (delete_error && i == delete_pos) ? delete_wrong_key : delete_seq[i]);
+        ui_text(fb, (int16_t)(x + (box_w - ui_text_width(s)) / 2), 63,
+                s, color, 0x0000);
+    }
+    if (delete_verified) {
+        ui_text(fb, 5, 91, "SEQUENCE OK", 0x07E0, 0x0000);
+        ui_text(fb, 5, UI_H - 17, "ENTER OK   ESC CANCEL", 0xFFFF, 0x0000);
+    } else {
+        ui_text(fb, 5, 91, "WRONG KEY = CANCEL", 0xFBE0, 0x0000);
+        ui_text(fb, 5, UI_H - 17, "ESC  CANCEL", 0x7BEF, 0x0000);
+    }
+    ui_present(fb);
+}
+
 void menu_render_task(void) {
     menu_view_t v = menu_view;
 
@@ -874,6 +1072,16 @@ void menu_render_task(void) {
         }
         ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0xF800); // 1px red = visible-window edge
         ui_present(fb);
+        return;
+    }
+    if (v.phase != 2 && node_is_app_info(node)) {
+        menu_scene_drop();
+        render_app_info();
+        return;
+    }
+    if (v.phase != 2 && node_is_app_delete(node)) {
+        menu_scene_drop();
+        render_app_delete();
         return;
     }
 
