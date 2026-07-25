@@ -67,7 +67,9 @@ if [[ ! -x "${HOST_TOOL}" ]]; then
     cmake --build "${HOST_DIR}/build" --config Release >/dev/null
 fi
 
+# No --name: the package (and the install-dialog) name then mirrors the app's own
+# slot-header name (app_header.name in <app>_app.c), so the two never disagree.
 echo ">> packaging ${APP}.app (native: host_tool app pack)"
-"${HOST_TOOL}" app pack "${BUILD}/${APP}.elf" -o "${APPS_DIR}/${APP}/${APP}.app" --name "${APP}"
+"${HOST_TOOL}" app pack "${BUILD}/${APP}.elf" -o "${APPS_DIR}/${APP}/${APP}.app"
 
 echo ">> done: ${APPS_DIR}/${APP}/${APP}.app"

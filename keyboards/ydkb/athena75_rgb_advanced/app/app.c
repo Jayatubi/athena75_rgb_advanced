@@ -44,7 +44,10 @@ static const app_t *app_desired(void) {
     if (!boot_done) return &app_boot;
     if (menu_is_active()) return &app_menu;
     if (slot_pending) return &app_slot;
-    return (persist_mode == DM_MATRIX) ? &app_matrix : &app_anim;
+    // ANIMATION / MATRIX are removed from the menu for now: with no persistent app
+    // the screen stays black until a slot app is launched. (persist_mode is kept
+    // for eeconfig compatibility but no longer selects anim/matrix here.)
+    return &app_blank;
 }
 
 void app_init(void) {

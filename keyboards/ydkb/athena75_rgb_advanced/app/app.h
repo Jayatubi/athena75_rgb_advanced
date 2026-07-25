@@ -44,6 +44,7 @@ extern const app_t app_anim;
 extern const app_t app_matrix;
 extern const app_t app_menu;
 extern const app_t app_slot;   // adapter that runs a loaded flash slot-app (app_loader.c)
+extern const app_t app_blank;  // black screen: default persistent app (validation)
 
 // ---- Slot-app launcher (core1-only feature) ---------------------------------
 // core0 (menu) requests launching the app whose image starts at XIP `base`; the

@@ -459,8 +459,10 @@ void menu_model_init(void) {
     // exclusive, VG_DISPLAY): Space selects which one the LCD shows after leaving
     // the menu (saved to eeprom). Both also fold into their own settings on
     // Right/Enter (ANIMATION -> keyframe params, MATRIX -> rain params).
-    node_add(MN_ROOT, MI_ROOT_ANIM,     "ANIMATION", MIK_FOLDER, MI_RADIO, VG_DISPLAY, DM_ANIM,   MN_ANIM);
-    node_add(MN_ROOT, MI_ROOT_MATRIX,   "MATRIX",    MIK_FOLDER, MI_RADIO, VG_DISPLAY, DM_MATRIX, MN_MATRIX);
+    // NOTE: ANIMATION / MATRIX root entries are temporarily removed to validate the
+    // slot-app launch path in isolation — after boot the screen stays black and the
+    // only way to show content is to launch an app from the APP folder below.
+    // (The MN_ANIM / MN_MATRIX submenu nodes still exist but are now unreachable.)
 #ifdef RGB_MATRIX_ENABLE
     // RGB itself carries the on/off checkbox (Space toggles in place); Right/Enter
     // still descends into the RGB submenu.
