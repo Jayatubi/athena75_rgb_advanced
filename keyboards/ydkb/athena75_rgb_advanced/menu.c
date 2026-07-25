@@ -390,7 +390,7 @@ static menu_node_id_t view_node(const menu_view_t *v) {
 // into it (root has a fixed title). No per-node title table: it falls out of the
 // existing tree, so renamed/added submenus title themselves automatically.
 static const char *menu_node_title(const menu_view_t *v) {
-    if (v->depth == 0) return LCD_MENU_TITLE_ROOT;
+    if (v->depth == 0) return LCD_MENU_TITLE_ROOT_FULL; // root: name + build number
     menu_node_id_t cur    = view_node(v);
     menu_node_id_t parent = (v->depth == 1) ? MN_ROOT : (menu_node_id_t)v->path[v->depth - 2];
     uint8_t n = menu_node_item_count(parent);

@@ -240,7 +240,10 @@ static void ath_handle_app(uint8_t *data) {
         case APP_BEGIN: {
             uint32_t slot  = rawhid_be32(&data[3]);
             uint32_t total = rawhid_be32(&data[7]);
-            app_upload_request(slot, total);
+            char name[17];
+            memcpy(name, &data[11], 16);   // BEGIN carries name[16] after the header
+            name[16] = 0;
+            app_upload_request(slot, total, name);
             data[3] = app_upload_state();
             break;
         }

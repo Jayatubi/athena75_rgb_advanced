@@ -122,6 +122,16 @@
 #define LCD_MENU_VISIBLE      7    // max rows below the title band on a 128px screen
 #define LCD_MENU_BORDER       2    // outer wire frame inset
 #define LCD_MENU_TITLE_ROOT   "MENU" // title shown at the top level
+
+// Firmware build number (injected by rules.mk as a YYMMDD integer; 0 if unset),
+// stringified and appended to the root menu title, e.g. "MENU  b260725".
+#ifndef FW_BUILD_NUM
+#define FW_BUILD_NUM 0
+#endif
+#define FW_STR2(x) #x
+#define FW_STR(x)  FW_STR2(x)
+#define FW_BUILD_STR FW_STR(FW_BUILD_NUM)
+#define LCD_MENU_TITLE_ROOT_FULL LCD_MENU_TITLE_ROOT "  b" FW_BUILD_STR
 // All tween durations are whole multiples of the 16 ms (60 FPS) frame time so
 // they land exactly on a frame boundary (n frames): 128=8, 176=11, 48=3, 144=9,
 // 160=10. (Input repeat below is already frame-aligned too: 400=25, 80=5.)

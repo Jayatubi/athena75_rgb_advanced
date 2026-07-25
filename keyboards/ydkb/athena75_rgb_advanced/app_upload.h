@@ -29,10 +29,17 @@ enum {
 #define APP_AREA_BEGIN 0x10A00000u
 #define APP_AREA_END   0x11000000u
 
+// Slot geometry (must match apps/sdk/app.ld + tools/host proto.h). A slot is
+// 256 KiB; the first slot's last 4 KiB is the app's save sector, so a code image
+// must fit in 252 KiB. Apps may span more slots for data.
+#define APP_SLOT_SIZE      0x40000u
+#define APP_SLOT_SAVE_SIZE 0x1000u
+#define APP_SLOT_CODE_MAX  (APP_SLOT_SIZE - APP_SLOT_SAVE_SIZE)
+
 // ---- core0 ------------------------------------------------------------------
 // Validate slot/size and raise the confirm dialog (-> PENDING). Rejects anything
 // outside the app area or misaligned (-> DENIED, no dialog).
-void     app_upload_request(uint32_t slot, uint32_t total);
+void     app_upload_request(uint32_t slot, uint32_t total, const char *name);
 uint8_t  app_upload_state(void);
 uint32_t app_upload_written(void);
 uint32_t app_upload_total(void);

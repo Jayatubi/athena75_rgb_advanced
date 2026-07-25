@@ -14,6 +14,11 @@ VPATH += app
 
 MCU_LDSCRIPT = RP2040_FLASH_TIMECRIT_16M
 
+# Firmware build number: UTC date (YYMMDD) from the build host/container, shown in
+# the menu title bar. Override for a specific stamp: make ... FW_BUILD_NUM=260725
+FW_BUILD_NUM ?= $(shell date -u +%y%m%d)
+OPT_DEFS += -DFW_BUILD_NUM=$(FW_BUILD_NUM)
+
 ALLOW_WARNINGS = yes
 
 CUSTOM_MATRIX            = yes # Custom matrix file

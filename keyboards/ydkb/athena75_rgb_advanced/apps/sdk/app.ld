@@ -11,13 +11,18 @@
  *
  * FLASH holds: .app_header (offset 0) + .text + .rodata + .data init image.
  * RAM  holds : .data (copied) + .bss (zeroed) — a firmware-reserved window.
+ *
+ * A slot is 256 KiB. The first slot of an app carries its code image; its last
+ * 4 KiB is reserved as the app's save/data sector, so the linked image must fit
+ * in 252 KiB. An app may span more slots for extra data (e.g. keyframes); those
+ * are managed separately and are not part of this linked image.
  */
 
-LINK_BASE = DEFINED(LINK_BASE) ? LINK_BASE : 0x10A00000;   /* a slot in the 6MB app area */
+LINK_BASE = DEFINED(LINK_BASE) ? LINK_BASE : 0x10A00000;   /* first slot in the 6MB app area */
 RAM_BASE  = DEFINED(RAM_BASE)  ? RAM_BASE  : 0x20040000;   /* placeholder app RAM window */
 
 MEMORY {
-    FLASH (rx) : ORIGIN = 0x10A00000, LENGTH = 1024K
+    FLASH (rx) : ORIGIN = 0x10A00000, LENGTH = 252K   /* 256K slot - 4K save sector */
     RAM   (rw) : ORIGIN = 0x20040000, LENGTH = 8K
 }
 

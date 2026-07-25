@@ -506,8 +506,9 @@ static int app_upload(int argc, char **argv) {
         else { printf("usage: app upload <file.app> [--slot 0xADDR] [--timeout S] [--no-verify]\n"); return 2; }
     }
     if (!path) { printf("usage: app upload <file.app> [--slot 0xADDR] [--timeout S] [--no-verify]\n"); return 2; }
-    if (slot < ATHENA_APP_AREA_BEGIN || slot >= ATHENA_APP_AREA_END || (slot & 0xFFFu)) {
-        printf("error: slot 0x%08X must be 4K-aligned and in the app area 0x%08X..0x%08X\n",
+    if (slot < ATHENA_APP_AREA_BEGIN || slot >= ATHENA_APP_AREA_END ||
+        (slot & (ATHENA_APP_SLOT_SIZE - 1u))) {
+        printf("error: slot 0x%08X must be 256K-aligned and in the app area 0x%08X..0x%08X\n",
                slot, ATHENA_APP_AREA_BEGIN, ATHENA_APP_AREA_END);
         return 1;
     }
@@ -524,23 +525,31 @@ static int app_upload(int argc, char **argv) {
         printf("error: %s\n", err); free(pkg); return 1;
     }
     free(pkg);
+    if (img_len > ATHENA_APP_SLOT_CODE_MAX) {
+        printf("error: image (%zu B) exceeds the 252K code area of a slot\n", img_len);
+        free(img); return 1;
+    }
     if (slot + img_len > ATHENA_APP_AREA_END) {
         printf("error: image (%zu B) at 0x%08X overruns the app area\n", img_len, slot);
         free(img); return 1;
     }
-    printf(">> app '%s': %zu bytes -> slot 0x%08X (RAM %u B, %u relocs)\n",
-           info.name, img_len, slot, info.ram_needed, info.reloc_count);
+    unsigned slot_idx = (unsigned)((slot - ATHENA_APP_AREA_BEGIN) / ATHENA_APP_SLOT_SIZE);
+    printf(">> app '%s': %zu bytes -> slot %u @ 0x%08X (RAM %u B, %u relocs)\n",
+           info.name, img_len, slot_idx, slot, info.ram_needed, info.reloc_count);
 
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) { printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID); free(img); return 1; }
 
     uint8_t req[ATHENA_REPORT_LEN], rep[ATHENA_REPORT_LEN];
 
-    // BEGIN -> raises the on-screen "Install app?" dialog.
+    // BEGIN -> raises the on-screen "Install app?" dialog (with name/size/slot).
     memset(req, 0, sizeof req);
     req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_BEGIN;
-    put_be32(&req[3], slot); put_be32(&req[7], img_len);
-    if (xfer(d, req, 11, rep, 1000) != 0) { printf("error: no BEGIN reply\n"); goto fail; }
+    put_be32(&req[3], slot); put_be32(&req[7], (uint32_t)img_len);
+    memcpy(&req[ATHENA_APP_NAME_OFF], info.name, ATHENA_APP_NAME_LEN);
+    if (xfer(d, req, ATHENA_APP_NAME_OFF + ATHENA_APP_NAME_LEN, rep, 1000) != 0) {
+        printf("error: no BEGIN reply\n"); goto fail;
+    }
     if (rep[3] == ATHENA_APPUP_DENIED) { printf("error: board rejected the request (bad slot/size)\n"); goto fail; }
     printf(">> confirm on the keyboard: INSTALL = load, CANCEL = abort (auto-cancels in 10s)...\n");
 

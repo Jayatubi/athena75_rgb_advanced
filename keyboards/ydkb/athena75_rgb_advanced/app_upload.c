@@ -14,6 +14,7 @@
 #include "hardware/flash.h"   // FLASH_SECTOR_SIZE, FLASH_PAGE_SIZE
 
 #include <string.h>
+#include <stdio.h>
 
 // core0 writes, core1 reads (render). Publish content before raising state.
 static volatile uint8_t  s_state   = APPUP_IDLE;
@@ -43,20 +44,35 @@ static bool in_slot(uint32_t addr, uint32_t len, uint32_t grain) {
 static void app_upload_accept(void)  { s_state = APPUP_AUTH; }
 static void app_upload_decline(void) { s_state = APPUP_IDLE; } // drop the screen entirely
 
-void app_upload_request(uint32_t slot, uint32_t total) {
-    // Reject anything outside the app area, oversized, or not 4K-aligned.
-    if (!in_area(slot, total) || total > (APP_AREA_END - APP_AREA_BEGIN) ||
-        (slot & 0xFFFu)) {
+// Dialog message, built per request (dialog copies the desc but keeps the message
+// pointer, so this must stay resident — only one upload is ever in flight).
+static char s_msg[64];
+
+void app_upload_request(uint32_t slot, uint32_t total, const char *name) {
+    // Reject anything outside the app area, larger than a slot's code area, or
+    // not aligned to a 256K slot boundary.
+    if (!in_area(slot, total) || total == 0 || total > APP_SLOT_CODE_MAX ||
+        (slot & (APP_SLOT_SIZE - 1u))) {
         s_state = APPUP_DENIED;
         return;
     }
     s_slot = slot; s_total = total; s_written = 0;
     s_page_addr = 0; s_page_dirty = false;
+
+    char nm[17];
+    uint8_t k = 0;
+    if (name) for (; k < 16 && name[k]; k++) nm[k] = name[k];
+    nm[k] = 0;
+    if (!k) { nm[0] = 'a'; nm[1] = 'p'; nm[2] = 'p'; nm[3] = 0; }
+    unsigned idx = (unsigned)((slot - APP_AREA_BEGIN) / APP_SLOT_SIZE);
+    // Two centred lines: "<name>  <size>B" / "slot <n>  0x<addr>".
+    snprintf(s_msg, sizeof s_msg, "%s  %uB\nslot %u  0x%08X",
+             nm, (unsigned)total, idx, (unsigned)slot);
     s_state = APPUP_PENDING;
 
-    static const dialog_desc_t d = {
+    dialog_desc_t d = {
         .title      = "LOAD APP",
-        .message    = "Install app?",
+        .message    = s_msg,
         .buttons    = { { "INSTALL", app_upload_accept }, { "CANCEL", app_upload_decline } },
         .n_buttons  = 2,
         .def_focus  = 0,                 // default: INSTALL

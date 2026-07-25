@@ -86,3 +86,11 @@
 // Slot-app flash area: the last 6 MB (never firmware/EEPROM/boot). Matches app.ld.
 #define ATHENA_APP_AREA_BEGIN 0x10A00000u
 #define ATHENA_APP_AREA_END   0x11000000u
+// A slot is 256 KiB (24 slots in 6 MB). The first slot's last 4 KiB is the app's
+// save sector, so a code image must fit in 252 KiB; apps may span more slots.
+#define ATHENA_APP_SLOT_SIZE      0x40000u
+#define ATHENA_APP_SLOT_SAVE_SIZE 0x1000u
+#define ATHENA_APP_SLOT_CODE_MAX  (ATHENA_APP_SLOT_SIZE - ATHENA_APP_SLOT_SAVE_SIZE)
+// BEGIN carries the app name after the header: data[11..26] = name[16].
+#define ATHENA_APP_NAME_OFF 11
+#define ATHENA_APP_NAME_LEN 16

@@ -602,10 +602,24 @@ static void dialog_render(uint8_t text_a) {
 
     int16_t y = (int16_t)(B + TB + 6);
     if (d->message) {
-        ui_text_alpha(fb, (int16_t)((W - ui_text_width(d->message)) / 2), y,
-                      d->message, 0xFFFF, 0x0000, text_a);
+        // Multi-line: each '\n'-separated segment is centred on its own row, so a
+        // prompt can show several fields (e.g. app name / size / slot).
+        const char *p = d->message;
+        while (*p) {
+            char line[32];
+            int n = 0;
+            while (p[n] && p[n] != '\n' && n < 31) { line[n] = p[n]; n++; }
+            line[n] = 0;
+            ui_text_alpha(fb, (int16_t)((W - ui_text_width(line)) / 2), y,
+                          line, 0xFFFF, 0x0000, text_a);
+            y = (int16_t)(y + ui_line_height());
+            p += n;
+            if (*p == '\n') p++;
+        }
+        y = (int16_t)(y + 6);
+    } else {
+        y += 20;
     }
-    y += 20;
 
     // Buttons: centred, one per row; focused row highlighted, negative reads red.
     uint8_t focus = dialog_focus();

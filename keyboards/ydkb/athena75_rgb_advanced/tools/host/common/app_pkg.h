@@ -21,6 +21,13 @@
 #define APP_RAM_BASE  0x20040000u   // fixed RAM window every app links .data/.bss at
 #define APP_RAM_SPAN  0x2000u       // ld RAM LENGTH (8 KiB)
 
+// Slot geometry (must match sdk/app.ld + firmware app_upload.h + proto.h).
+// A slot is 256 KiB; the first slot's last 4 KiB is the app's save sector, so a
+// code image must fit in 252 KiB. Apps may span more slots for data.
+#define APP_SLOT_SIZE      0x40000u                          // 256 KiB
+#define APP_SLOT_SAVE_SIZE 0x1000u                           // 4 KiB save sector
+#define APP_SLOT_CODE_MAX  (APP_SLOT_SIZE - APP_SLOT_SAVE_SIZE) // 252 KiB usable
+
 // ---- slot image header (sits at offset 0 of the image / the flash slot) -----
 // Mirrors app_header_t in apps/sdk/host_api.h. We access it by fixed offsets
 // (not a C struct) because `entry` is a 4-byte *device* pointer, which would be

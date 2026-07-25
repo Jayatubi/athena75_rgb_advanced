@@ -98,6 +98,11 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
         return -1;
     }
     uint32_t image_size = lma_max - lma_min;
+    if (image_size > APP_SLOT_CODE_MAX) {
+        SETERR("image %u B exceeds the %u B code area (256K slot - 4K save)",
+               image_size, APP_SLOT_CODE_MAX);
+        return -1;
+    }
 
     // Build the flat image (objcopy -O binary equivalent, by LMA).
     uint8_t *image = (uint8_t *)calloc(1, image_size);
