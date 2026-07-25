@@ -208,7 +208,10 @@ static void u8_to_str(uint16_t n, char *out) {
 // Rough budget: root + effect submenus + value pickers (ghost/zoom/dir/iv/hold/
 // twn/ft) + the small RGB submenu. Large RGB lists (effect/hue/val/...) are
 // *generated* (see below) and cost no pool slots. Keep headroom.
-#define MENU_ITEM_POOL 96
+// Current static usage is ~98 items (root+anim+matrix+rgb submenus); keep a
+// margin so appended items (e.g. the last RGB SCOPE radios) never get silently
+// dropped when item_alloc() runs out of pool.
+#define MENU_ITEM_POOL 112
 
 static menu_item_t item_pool[MENU_ITEM_POOL];
 static uint8_t     item_pool_used;
