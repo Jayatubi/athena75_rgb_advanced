@@ -251,11 +251,12 @@ static void ath_handle_app(uint8_t *data) {
             char name[17];
             memcpy(name, &data[11], 16);   // BEGIN carries name[16] after the header
             name[16] = 0;
-            uint8_t slot_count = data[27];
+            bool code_only = (data[27] & 0x80u) != 0;
+            uint8_t slot_count = data[27] & 0x7Fu;
             uint32_t data_size = ((uint32_t)data[28] << 24) |
                                  ((uint32_t)data[29] << 16) |
                                  ((uint32_t)data[30] << 8) | data[31];
-            app_upload_request(slot, total, data_size, slot_count, name);
+            app_upload_request(slot, total, data_size, slot_count, code_only, name);
             data[3] = app_upload_state();
             // BEGIN returns the firmware-selected slot (AUTO or explicit). Zero
             // means rejected/no placement. The host relocates only after this.

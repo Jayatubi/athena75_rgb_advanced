@@ -159,6 +159,14 @@ void menu_exit(void) {
     menu_publish();
 }
 
+// After the exit fade finishes on core1, sync the core0 writer mirror and drop the
+// app content binding so a later built-in open cannot briefly serve a stale tree.
+static void menu_exit_finished(void) {
+    menu_wr.phase  = 0;
+    menu_wr.active = false;
+    menu_model_set_app(NULL);
+}
+
 bool menu_is_active(void) {
     return menu_view.active || menu_view.phase != 0;
 }
@@ -187,6 +195,9 @@ void menu_service(void) {              // core0
         menu_model_set_app(s_open_model); // NULL => the built-in tree
         menu_enter();
     }
+    // Once core1 has finished the exit fade (menu_view inactive), sync the writer
+    // mirror and drop any app content binding left over from this session.
+    if (!menu_is_active()) menu_exit_finished();
 }
 bool menu_open_pending(void) { return s_open_pending; }
 void menu_clear_pending(void) { s_open_pending = false; }
@@ -266,7 +277,9 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             menu_rpt_timer = timer_read32();
             menu_rpt_armed = false;
             return true;
-        // Esc mirrors Left (go up); at the top level it leaves menu mode.
+        // Esc mirrors Left (go up one level); at the root it leaves menu mode.
+        // Enter mirrors Right (descend / activate). Only Esc at depth 0 — or an
+        // EXIT action — fully dismisses the menu.
         case KC_ESC:
             if (menu_wr.depth == 0) {
                 menu_exit();
@@ -868,7 +881,16 @@ void menu_render_task(void) {
     uint8_t *fb  = fbShow;
 
     if (v.phase == 2) {
-        // Dismiss: let every element fade out on its own, then close once settled.
+        // App-supplied menus (ACE/MATRIX/SETTINGS): dismiss instantly. The exit
+        // fade otherwise leaves an empty chrome frame for ~160ms that looks like
+        // a blank intermediate menu before the app resumes.
+        if (menu_model_is_app()) {
+            menu_view.phase  = 0;
+            menu_view.active = false;
+            menu_scene_drop();
+            return;
+        }
+        // Built-in menu: let every element fade out, then close once settled.
         if (rc_phase != 2 && rc_open) ui_scene_fade_all(LCD_MENU_FADE_MS);
         rc_phase = 2;
     } else {

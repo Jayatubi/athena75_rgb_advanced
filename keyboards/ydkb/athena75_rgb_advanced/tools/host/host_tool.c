@@ -35,7 +35,8 @@ static int usage(const char *argv0) {
         "  app      pack <elf> --icon icon.rgb565   build a relocatable app + fixed icon\n"
         "           info <file.app>                 inspect a packaged app\n"
         "           relocate <file.app> <slot>      patch an app for a target slot (preview)\n"
-        "           install <file.app> [--method put|uf2] confirm + install into a free slot\n",
+        "           install <file.app> [--method put|uf2] confirm + install into a free slot\n"
+        "           update <file.app> [--slot ADDR]      PUT code/icon; preserve app data/save\n",
         argv0);
     return 2;
 }

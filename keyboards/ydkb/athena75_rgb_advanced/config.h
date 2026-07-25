@@ -142,6 +142,7 @@
 #define LCD_MENU_FADE_MS      160  // enter/exit full-screen fade      (10 frames)
 #define LCD_MENU_ENTER_DX     12   // per-item horizontal fly-in distance (px)
 #define LCD_MENU_IDLE_MS      30000 // auto-exit menu after this long with no input
+#define APP_OS_IDLE_MS        30000 // return to normal keyboard mode after OS inactivity
 #define LCD_FLASH_PROMPT_MS   10000 // auto-cancel the host flash-confirm prompt after 10s idle
 #define LCD_APP_PROMPT_MS     30000 // auto-cancel the slot-app install prompt after 30s idle
 #define LCD_MENU_RADIO_IND    "\xE2\x97\x8F" // UTF-8 ● (selected)

@@ -25,6 +25,9 @@ uint8_t app_input_mode(void);
 void    app_input_set_mode(uint8_t mode);
 // Toggle OS/keyboard (the gif key). core0 only.
 void    app_input_toggle(void);
+// Reset the OS inactivity timer. Core0 only; call for input consumed by modal
+// menus/dialogs too, since those events do not pass through app_input_push().
+void    app_input_note_activity(void);
 // Enqueue one raw key event (core0). Returns false if the ring is full (dropped).
 bool    app_input_push(uint16_t keycode, bool pressed);
 

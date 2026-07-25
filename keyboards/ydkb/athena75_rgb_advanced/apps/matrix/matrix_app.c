@@ -7,8 +7,10 @@
 // firmware symbols and reaches the display/timer/rng only through host_api_t.
 // The core0-side bits of the built-in version (menu_bind_* setters and the raw
 // HID lcd_clock_set) are dropped — rain parameters are the defaults (index 0)
-// and the wall clock comes from host_api.clock_sec(). Everything else (the rain
-// integrator, trail fade, gold digit watermark) is unchanged from the original.
+// and the wall clock comes from host_api.clock_sec(). SPACE opens the firmware
+// menu engine with the original MATRIX menu content; settings persist through
+// host_api.save_* in the first slot's final 4K sector. Enter opens the menu
+// (Esc at root closes it; Left/Right and Esc/Enter navigate levels alike).
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -29,6 +31,58 @@ void *memcpy(void *d, const void *s, unsigned long n) {
 
 // -- the host services table, stashed at app_init --------------------------- //
 static const host_api_t *g_api;
+
+typedef struct {
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  speed;
+    uint8_t  density;
+    uint8_t  clock;
+    uint32_t crc;
+} matrix_save_t;
+
+#define MATRIX_SAVE_MAGIC 0x3158544Du /* "MTX1" */
+static matrix_save_t cfg;
+static bool save_pending, leave_pending;
+
+static uint32_t crc32(const void *data, uint32_t len) {
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t crc = 0xFFFFFFFFu;
+    while (len--) {
+        crc ^= *p++;
+        for (uint8_t b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+static void cfg_defaults(void) {
+    cfg.magic = MATRIX_SAVE_MAGIC;
+    cfg.version = 1;
+    cfg.speed = cfg.density = cfg.clock = 0;
+    cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
+}
+static void cfg_load(void) {
+    matrix_save_t saved;
+    if (!g_api->save_read(0, &saved, sizeof saved) ||
+        saved.magic != MATRIX_SAVE_MAGIC || saved.version != 1 ||
+        saved.speed >= 4 || saved.density >= 4 || saved.clock >= 5 ||
+        saved.crc != crc32(&saved, (uint32_t)__builtin_offsetof(matrix_save_t, crc))) {
+        cfg_defaults();
+        return;
+    }
+    cfg = saved;
+}
+static void cfg_flush(void) {
+    if (save_pending && !g_api->save_busy() &&
+        g_api->save_write(0, &cfg, sizeof cfg))
+        save_pending = false;
+}
+static void cfg_save(void) {
+    cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
+    save_pending = true;
+    cfg_flush();
+}
 
 // Shim the firmware names matrix.c uses onto the host_api table so the rain
 // logic below is a near-verbatim copy of app/matrix.c.
@@ -62,11 +116,60 @@ static const uint8_t  mtx_dens_tmin[4] = {7, 5, 4, 3};
 static const uint8_t  mtx_dens_tspan[4]= {6, 5, 4, 3};
 static const uint8_t  mtx_floor_a[5]   = {191, 128, 158, 224, 255};
 
-static inline uint16_t mtx_step_ms(void)     { return mtx_speed_ms[0]; }
-static inline uint8_t  mtx_gap(void)         { return mtx_dens_gap[0]; }
-static inline uint8_t  mtx_tmin(void)        { return mtx_dens_tmin[0]; }
-static inline uint8_t  mtx_tspan(void)       { return mtx_dens_tspan[0]; }
-static inline uint8_t  mtx_clock_floor(void) { return mtx_floor_a[0]; }
+static inline uint16_t mtx_step_ms(void)     { return mtx_speed_ms[cfg.speed]; }
+static inline uint8_t  mtx_gap(void)         { return mtx_dens_gap[cfg.density]; }
+static inline uint8_t  mtx_tmin(void)        { return mtx_dens_tmin[cfg.density]; }
+static inline uint8_t  mtx_tspan(void)       { return mtx_dens_tspan[cfg.density]; }
+static inline uint8_t  mtx_clock_floor(void) { return mtx_floor_a[cfg.clock]; }
+
+enum { G_SPEED = 1, G_DENSITY, G_CLOCK };
+enum { N_ROOT = 0, N_SPEED, N_DENSITY, N_CLOCK };
+static const app_menu_item_t root_items[] = {
+    { "SPEED",   APP_MI_FOLDER, 0, 0, 0, N_SPEED },
+    { "DENSITY", APP_MI_FOLDER, 0, 0, 0, N_DENSITY },
+    { "CLOCK",   APP_MI_FOLDER, 0, 0, 0, N_CLOCK },
+};
+#define RADIO(label_, group_, value_) \
+    { (label_), APP_MI_VALUE, APP_MI_RADIO, (group_), (value_), 0 }
+static const app_menu_item_t speed_items[] = {
+    RADIO("FAST", G_SPEED, 0), RADIO("MED", G_SPEED, 1),
+    RADIO("SLOW", G_SPEED, 2), RADIO("V.SLOW", G_SPEED, 3),
+};
+static const app_menu_item_t density_items[] = {
+    RADIO("HIGH", G_DENSITY, 0), RADIO("MED", G_DENSITY, 1),
+    RADIO("LOW", G_DENSITY, 2), RADIO("MIN", G_DENSITY, 3),
+};
+static const app_menu_item_t clock_items[] = {
+    RADIO("50%", G_CLOCK, 1), RADIO("62%", G_CLOCK, 2),
+    RADIO("75%", G_CLOCK, 0), RADIO("88%", G_CLOCK, 3),
+    RADIO("100%", G_CLOCK, 4),
+};
+#undef RADIO
+static const app_menu_node_t menu_nodes[] = {
+    [N_ROOT]    = { "MATRIX", root_items, 3 },
+    [N_SPEED]   = { 0, speed_items, 4 },
+    [N_DENSITY] = { 0, density_items, 4 },
+    [N_CLOCK]   = { 0, clock_items, 5 },
+};
+static uint8_t menu_get(uint8_t group) {
+    if (group == G_SPEED) return cfg.speed;
+    if (group == G_DENSITY) return cfg.density;
+    if (group == G_CLOCK) return cfg.clock;
+    return 0;
+}
+static void menu_set(uint8_t group, uint8_t value) {
+    if (group == G_SPEED && value < 4) cfg.speed = value;
+    else if (group == G_DENSITY && value < 4) cfg.density = value;
+    else if (group == G_CLOCK && value < 5) cfg.clock = value;
+    else return;
+    cfg_save();
+}
+static const app_menu_model_t menu_model = {
+    .nodes = menu_nodes,
+    .node_count = sizeof(menu_nodes) / sizeof(menu_nodes[0]),
+    .group_get = menu_get,
+    .group_set = menu_set,
+};
 
 static const uint8_t clock_font[10][5] = {
     {0b111,0b101,0b101,0b101,0b111},
@@ -150,6 +253,8 @@ static bool clock_build_mask(uint8_t cols, uint8_t rows) {
 }
 
 static void matrix_enter(void) {
+    save_pending = leave_pending = false;
+    cfg_load();
     mtx_seed();
 }
 
@@ -158,13 +263,23 @@ static void matrix_enter(void) {
 static void matrix_input(void) {
     app_key_event_t ev;
     while (g_api->poll_event(&ev)) {
-        if (ev.pressed && ev.keycode == APP_KEY_ESC) g_api->exit_to_launcher();
+        if (!ev.pressed) continue;
+        if (ev.keycode == APP_KEY_ESC) {
+            leave_pending = true;
+        } else if (ev.keycode == APP_KEY_ENTER) {
+            g_api->menu_run(&menu_model);
+        }
     }
 }
 
 static void matrix_tick(uint32_t dt_ms) {
     (void)dt_ms;
 
+    cfg_flush();
+    if (leave_pending && !save_pending && !g_api->save_busy()) {
+        g_api->exit_to_launcher();
+        return;
+    }
     matrix_input();
 
     if (timer_elapsed32(mtx_render_t) < MTX_RENDER_MS) return;

@@ -82,6 +82,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         return false;
     }
 
+    // Menu/dialog input bypasses app_input_push(), but still counts as activity
+    // for the 30-second OS-mode idle timeout.
+    if (record->event.pressed && app_input_mode() == APP_INPUT_OS) {
+        app_input_note_activity();
+    }
+
     // Modal dialog: swallow all input while it is up and feed it the keys (focus
     // move / activate / cancel). A host-raised dialog is interactive regardless of
     // input mode, so this is checked first.

@@ -614,6 +614,7 @@ static int probe_xipread_all(hid_dev *d, uint32_t addr, uint8_t *dst, size_t len
 static int app_upload(int argc, char **argv) {
     const char *path = NULL;
     const char *method = "put", *out_path = NULL;
+    int code_only = !strcmp(argv[0], "update");
     uint32_t slot = 0;                       // wire sentinel: firmware auto-selects
     int slot_explicit = 0;
     int wait_s = 20, verify = 1;
@@ -625,6 +626,7 @@ static int app_upload(int argc, char **argv) {
         else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) wait_s = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--no-verify")) verify = 0;
         else if (!strcmp(argv[i], "--method") && i + 1 < argc) method = argv[++i];
+        else if (!strcmp(argv[i], "--code-only")) code_only = 1;
         else if (!strcmp(argv[i], "-o") && i + 1 < argc) out_path = argv[++i];
         else if (argv[i][0] != '-') path = argv[i];
         else { printf("usage: app install <file.app> [--method put|uf2] [--slot 0xADDR] [-o out.uf2]\n"); return 2; }
@@ -632,6 +634,10 @@ static int app_upload(int argc, char **argv) {
     if (!path) { printf("usage: app install <file.app> [--method put|uf2] [--slot 0xADDR] [-o out.uf2]\n"); return 2; }
     if (strcmp(method, "put") && strcmp(method, "uf2")) {
         printf("error: --method must be put or uf2\n");
+        return 2;
+    }
+    if (code_only && strcmp(method, "put")) {
+        printf("error: code-only updates use PUT so data/save sectors remain untouched\n");
         return 2;
     }
     if (slot_explicit &&
@@ -664,6 +670,32 @@ static int app_upload(int argc, char **argv) {
     uint8_t *img = NULL;
     size_t img_len = 0;
 
+    if (code_only && !slot_explicit) {
+        uint32_t found = 0;
+        uint8_t hdr[APPH_SIZE];
+        for (uint32_t a = ATHENA_APP_AREA_BEGIN; a < ATHENA_APP_AREA_END;
+             a += ATHENA_APP_SLOT_SIZE) {
+            if (probe_xipread_all(d, a, hdr, sizeof hdr) != 0) continue;
+            if (memcmp(hdr + APPH_MAGIC, APP_SLOT_MAGIC, 6) == 0 &&
+                !memcmp(hdr + APPH_NAME, info.name, 16) &&
+                hdr[APPH_SLOT_COUNT] == info.slot_count) {
+                if (found) {
+                    printf("error: multiple installed '%s' apps; specify --slot\n", info.name);
+                    goto fail;
+                }
+                found = a;
+            }
+        }
+        if (!found) {
+            printf("error: installed '%s' with matching slot layout not found\n", info.name);
+            goto fail;
+        }
+        slot = found;
+        slot_explicit = 1;
+        printf(">> found installed '%s' at 0x%08X for code-only update\n",
+               info.name, slot);
+    }
+
     // BEGIN first reserves/selects an unoccupied slot, then raises the on-screen
     // confirmation dialog. Relocation happens only after the chosen address is
     // returned because absolute app pointers depend on it.
@@ -671,7 +703,7 @@ static int app_upload(int argc, char **argv) {
     req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_BEGIN;
     put_be32(&req[3], slot); put_be32(&req[7], info.image_size);
     memcpy(&req[ATHENA_APP_NAME_OFF], info.name, ATHENA_APP_NAME_LEN);
-    req[27] = info.slot_count;
+    req[27] = (uint8_t)(info.slot_count | (code_only ? 0x80u : 0u));
     put_be32(&req[28], info.data_blob_size);
     if (xfer(d, req, 32, rep, 1000) != 0) {
         printf("error: no BEGIN reply\n"); goto fail;
@@ -705,7 +737,7 @@ static int app_upload(int argc, char **argv) {
            " (RAM %u B, %u relocs, method %s)\n",
            info.name, img_len, info.icon_size, info.data_blob_size, slot_idx, slot,
            slot_explicit ? "" : " [auto]",
-           info.ram_needed, info.reloc_count, method);
+           info.ram_needed, info.reloc_count, code_only ? "put/code-only" : method);
     printf(">> confirm on the keyboard: INSTALL = load, CANCEL = abort (auto-cancels in 10s)...\n");
 
     // Poll until the user accepts (AUTH) or declines/times out.
@@ -764,22 +796,24 @@ static int app_upload(int argc, char **argv) {
             goto abort_dev;
         }
     }
-    uint32_t data_begin = slot + ATHENA_APP_SLOT_SIZE;
-    uint32_t data_end = (data_begin + info.data_blob_size + 0xFFFu) & ~0xFFFu;
-    for (uint32_t a = data_begin; a < data_end; a += 0x1000u) {
-        memset(req, 0, sizeof req);
-        req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_ERASE;
-        put_be32(&req[3], a);
-        if (xfer(d, req, 7, rep, 5000) != 0 || rep[3] != 1) {
-            printf("\nerror: data erase failed at 0x%08X\n", a);
-            goto abort_dev;
+    if (!code_only) {
+        uint32_t data_begin = slot + ATHENA_APP_SLOT_SIZE;
+        uint32_t data_end = (data_begin + info.data_blob_size + 0xFFFu) & ~0xFFFu;
+        for (uint32_t a = data_begin; a < data_end; a += 0x1000u) {
+            memset(req, 0, sizeof req);
+            req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_ERASE;
+            put_be32(&req[3], a);
+            if (xfer(d, req, 7, rep, 5000) != 0 || rep[3] != 1) {
+                printf("\nerror: data erase failed at 0x%08X\n", a);
+                goto abort_dev;
+            }
         }
     }
 
     if (app_program_region(d, slot, img, img_len, "code") != 0) goto abort_dev;
     if (app_program_region(d, slot + ATHENA_APP_SLOT_ICON_OFFSET,
                            icon, info.icon_size, "icon") != 0) goto abort_dev;
-    if (info.data_blob_size &&
+    if (!code_only && info.data_blob_size &&
         app_program_region(d, slot + ATHENA_APP_SLOT_SIZE,
                            data_blob, info.data_blob_size, "data") != 0)
         goto abort_dev;
@@ -800,7 +834,7 @@ static int app_upload(int argc, char **argv) {
             probe_xipread_all(d, slot + ATHENA_APP_SLOT_ICON_OFFSET,
                               icon_back, sizeof icon_back) == 0 &&
             memcmp(icon_back, icon, sizeof icon_back) == 0 &&
-            (!info.data_blob_size ||
+            (code_only || !info.data_blob_size ||
              (data_back &&
               probe_xipread_all(d, slot + ATHENA_APP_SLOT_SIZE,
                                 data_back, info.data_blob_size) == 0 &&
@@ -811,7 +845,8 @@ static int app_upload(int argc, char **argv) {
         }
         free(data_back);
     }
-    printf(">> done. '%s' is loaded at slot 0x%08X.\n", info.name, slot);
+    printf(">> done. '%s' %s at slot 0x%08X.\n",
+           info.name, code_only ? "code/icon updated" : "is loaded", slot);
     hid_close(d); free(img); free(pkg);
     return 0;
 
@@ -826,7 +861,7 @@ fail:
 
 int cmd_app(int argc, char **argv) {
     if (argc < 2) {
-        printf("usage: app <pack|info|relocate|install|upload> ...\n"
+        printf("usage: app <pack|info|relocate|install|update|upload> ...\n"
                "  app pack     <elf> --icon icon.rgb565 [--data data.bin]\n"
                "               [-o out.app] [--name NAME]              build one complete package\n"
                "  app info     <file.app>                         inspect a .app\n"
@@ -835,6 +870,8 @@ int cmd_app(int argc, char **argv) {
                "               [--slot ADDR] [-o combined.uf2]    code/icon/data share one package\n"
                "               [--timeout S] [--no-verify]        then UF2 reboots via BOOTSEL\n"
                "               explicit occupied slots are never overwritten\n");
+        printf("  app update   <file.app> [--slot ADDR]             PUT code+icon only;\n"
+               "                                                    preserve data + save sector\n");
         return 2;
     }
     const char *sub = argv[1];
@@ -843,6 +880,7 @@ int cmd_app(int argc, char **argv) {
     if (!strcmp(sub, "pack"))     return app_pack(subargc, subargv);
     if (!strcmp(sub, "info"))     return app_info(subargc, subargv);
     if (!strcmp(sub, "relocate")) return app_relocate(subargc, subargv);
+    if (!strcmp(sub, "update"))   return app_upload(subargc, subargv);
     if (!strcmp(sub, "install") || !strcmp(sub, "upload"))
         return app_upload(subargc, subargv);
     printf("unknown app subcommand: %s\n", sub);

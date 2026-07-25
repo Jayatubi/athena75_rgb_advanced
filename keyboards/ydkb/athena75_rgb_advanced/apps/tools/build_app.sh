@@ -28,6 +28,10 @@ ICON_SRC="${APPS_DIR}/${APP}/icon.png"
 DEFAULT_ICON="${APPS_DIR}/sdk/default_app_icon_32.png"
 ICON_RGB="${BUILD}/${APP}_icon.rgb565"
 DATA_BLOB="${APP_DATA:-${BUILD}/data.bin}"
+EXTRA_SRC=""
+if [[ "${APP}" == "ace" ]]; then
+    EXTRA_SRC="/kbd/lib/fixed_math/fixed_math.c"
+fi
 
 if [[ ! -f "${SRC}" ]]; then
     echo "error: app source not found: ${SRC}" >&2
@@ -62,20 +66,22 @@ arm-none-eabi-gcc \
   -ffreestanding -fno-common -fno-builtin \
   -ffunction-sections -fdata-sections \
   -Wall -Wextra \
-  -I sdk \
+  -I sdk -I /kbd \
   -nostartfiles -nostdlib \
   -Wl,--gc-sections -Wl,--emit-relocs \
   -Wl,-Map,${APP}/build/${APP}.map \
   -T sdk/app.ld \
   -o ${APP}/build/${APP}.elf \
   ${APP}/${APP}_app.c \
+  ${EXTRA_SRC} \
   -lgcc
 arm-none-eabi-size ${APP}/build/${APP}.elf
 EOF
 )
 
 echo ">> compiling ${APP} (docker: pinned QMK image)"
-docker run --rm -v "${APPS_DIR}:/apps" -w /apps "${DOCKER_IMAGE}" bash -lc "${DOCKER_CMD}"
+docker run --rm -v "${APPS_DIR}:/apps" -v "${KBD_DIR}:/kbd" \
+    -w /apps "${DOCKER_IMAGE}" bash -lc "${DOCKER_CMD}"
 
 # 2) package the ELF -> .app with the native host_tool. Always run the incremental
 # CMake build so a stale v1 packer cannot silently emit an icon-less package.

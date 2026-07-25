@@ -34,11 +34,23 @@
 #define LAU_NAME_SEL   0xFFFF
 #define LAU_EMPTY_FG   0x7BEF
 
-static uint8_t lau_sel;   // selected app index
+static uint8_t  lau_sel;   // selected app index
+static uint32_t lau_focus; // slot base of the last focused/launched app (0 = none)
 
 static void launcher_enter(void) {
     app_scan();             // fresh registry every time we land on the home screen
+    // Keep the focus on the app that was selected when leaving for a slot app
+    // (or still selected when OS mode was toggled). Fall back to index 0 only
+    // when that slot is gone or this is the first visit.
+    uint8_t n = app_scan_count();
+    if (lau_focus) {
+        for (uint8_t i = 0; i < n; i++) {
+            const app_scan_entry_t *e = app_scan_get(i);
+            if (e && e->base == lau_focus) { lau_sel = i; return; }
+        }
+    }
     lau_sel = 0;
+    lau_focus = 0;
 }
 
 static void launcher_input(uint8_t n) {
@@ -62,7 +74,10 @@ static void launcher_input(uint8_t n) {
             case KC_KP_ENTER:
             case KC_SPACE: {
                 const app_scan_entry_t *e = app_scan_get(lau_sel);
-                if (e) app_launch_slot(e->base);
+                if (e) {
+                    lau_focus = e->base; // restore this focus on return
+                    app_launch_slot(e->base);
+                }
                 break;
             }
             default: break;
@@ -77,6 +92,13 @@ static void launcher_tick(uint32_t dt_ms) {
 
     launcher_input(n);
     if (n && lau_sel >= n) lau_sel = (uint8_t)(n - 1);
+    // Track the current selection by slot base so a later re-enter (return from
+    // an app, or leaving/re-entering OS mode) can restore the same focus even if
+    // the scan index shifts.
+    {
+        const app_scan_entry_t *e = n ? app_scan_get(lau_sel) : NULL;
+        lau_focus = e ? e->base : 0;
+    }
 
     int16_t vw = ui_vw(), vh = ui_vh();
     ui_clear(fbShow, LAU_BG);

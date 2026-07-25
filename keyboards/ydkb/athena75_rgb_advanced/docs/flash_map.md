@@ -50,6 +50,12 @@
 > BOOTSEL 安装。两种方式都可省略 `--slot`；显式地址被占用时均拒绝覆盖。
 > ACE 的 QGF 已内嵌在 `ace.app`，无需也不接受独立 `--data-uf2`。host_tool 从包内
 > 同时取得程序、icon、数据和连续 slot 数；PUT 与 UF2 安装均一次处理完整包。
+> 已安装 App 的纯代码升级使用 `host_tool app update foo.app`：host_tool 按包名
+> 找到首 slot，固件核对名称与 slot_count 后仅擦写代码和 icon；后续数据 slots 以及
+> 首 slot `+0x3F000` 的 4 KiB save sector 均保持不动。
+>
+> MATRIX/ACE 的菜单设置只通过 `host_api.save_read/save_write/save_busy` 访问该
+> save sector；App 不直接调用 flash 擦写接口。
 
 ---
 

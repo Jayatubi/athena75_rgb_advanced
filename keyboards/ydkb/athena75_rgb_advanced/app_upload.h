@@ -43,7 +43,7 @@ enum {
 // requests automatic placement in the first free slot; an explicit occupied
 // slot is rejected. Invalid/full requests become DENIED with no dialog.
 void     app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
-                            uint8_t slot_count, const char *name);
+                            uint8_t slot_count, bool code_only, const char *name);
 uint8_t  app_upload_state(void);
 uint32_t app_upload_slot(void);    // selected slot, or 0 when no slot was accepted
 uint32_t app_upload_written(void);

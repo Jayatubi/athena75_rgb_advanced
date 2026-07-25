@@ -104,6 +104,7 @@ uint8_t menu_item_action(const menu_item_t *it);    // MIK_ACTION -> menu_action
 // then serve it instead of the built-in tree. Set NULL to restore the built-in.
 struct app_menu_model_t;
 void        menu_model_set_app(const struct app_menu_model_t *m);
+bool        menu_model_is_app(void);                // true while an app model is bound
 const char *menu_model_app_root_title(void);        // NULL => use firmware default
 void        menu_model_user_action(uint8_t action); // action >= APP_MENU_ACT_USER
 

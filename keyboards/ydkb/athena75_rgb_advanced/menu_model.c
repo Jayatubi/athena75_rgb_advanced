@@ -31,6 +31,7 @@ _Static_assert((int)APP_MENU_ACT_EXIT == (int)MA_EXIT && (int)APP_MENU_ACT_REBOO
 // on both cores. A single aligned pointer -> atomic to publish.
 static const app_menu_model_t *g_app_model = NULL;
 void menu_model_set_app(const app_menu_model_t *m) { g_app_model = m; }
+bool menu_model_is_app(void) { return g_app_model != NULL; }
 
 // CapsLock colour / RGB scope are stored in the Vial "layout options" word (same
 // storage the Vial GUI writes). via_get/set_layout_options persist to eeprom;

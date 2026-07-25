@@ -67,7 +67,7 @@
 // user accepts; the LCD shows a progress bar while erasing/programming.
 #define ATHENA_APP_CMD     0x64
 #define ATHENA_APP_BEGIN   0x00 // request: data[3..6]=slot(BE32; 0=AUTO), data[7..10]=total,
-                                // data[11..26]=name, data[27]=contiguous slot count,
+                                // data[11..26]=name, data[27]=slot count (bit7=code-only update),
                                 // data[28..31]=packaged data blob size (BE32)
                                 // reply: data[3]=state, data[4..7]=selected slot(BE32; 0=none)
 #define ATHENA_APP_STATUS  0x01 // -> data[3]=state data[4..7]=written(BE32)

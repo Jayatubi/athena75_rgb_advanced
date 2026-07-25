@@ -95,7 +95,7 @@ static void app_upload_decline(void) { s_state = APPUP_IDLE; } // drop the scree
 static char s_msg[64];
 
 void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
-                        uint8_t slot_count, const char *name) {
+                        uint8_t slot_count, bool code_only, const char *name) {
     s_slot = 0;
 
     // Current executable images use one slot (the last 4K is its save sector).
@@ -109,7 +109,20 @@ void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
 
     // Zero is the wire-level AUTO sentinel. Otherwise require a valid explicit
     // slot and reject it before showing the confirmation dialog if occupied.
-    if (slot == 0) {
+    if (code_only) {
+        if (!slot || !in_area(slot, APP_SLOT_SIZE) ||
+            (slot & (APP_SLOT_SIZE - 1u))) {
+            s_state = APPUP_DENIED;
+            return;
+        }
+        const app_header_t *h = (const app_header_t *)(uintptr_t)slot;
+        if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0 ||
+            h->slot_count != slot_count ||
+            (name && strncmp(h->name, name, sizeof h->name) != 0)) {
+            s_state = APPUP_DENIED;
+            return;
+        }
+    } else if (slot == 0) {
         slot = first_free_slot(slot_count);
         if (!slot) {
             s_state = APPUP_DENIED; // app area full
@@ -132,8 +145,8 @@ void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
 
     s_slot = slot;
     s_code_size = code_size;
-    s_data_size = data_size;
-    s_total = code_size + APP_SLOT_ICON_SIZE + data_size;
+    s_data_size = code_only ? 0u : data_size;
+    s_total = code_size + APP_SLOT_ICON_SIZE + s_data_size;
     s_written = 0;
     s_page_addr = 0; s_page_dirty = false;
 
@@ -144,12 +157,12 @@ void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
     if (!k) { nm[0] = 'a'; nm[1] = 'p'; nm[2] = 'p'; nm[3] = 0; }
     unsigned idx = (unsigned)((slot - APP_AREA_BEGIN) / APP_SLOT_SIZE);
     // Two centred lines: "<name>  <size>B" / "slot <n>  0x<addr>".
-    snprintf(s_msg, sizeof s_msg, "%s  %uB\nslot %u +%u data",
-             nm, (unsigned)s_total, idx, (unsigned)(slot_count - 1u));
+    snprintf(s_msg, sizeof s_msg, "%s  %uB\nslot %u  %s",
+             nm, (unsigned)s_total, idx, code_only ? "CODE ONLY" : "FULL APP");
     s_state = APPUP_PENDING;
 
     dialog_desc_t d = {
-        .title      = "LOAD APP",
+        .title      = code_only ? "UPDATE APP" : "LOAD APP",
         .message    = s_msg,
         .buttons    = { { "INSTALL", app_upload_accept }, { "CANCEL", app_upload_decline } },
         .n_buttons  = 2,

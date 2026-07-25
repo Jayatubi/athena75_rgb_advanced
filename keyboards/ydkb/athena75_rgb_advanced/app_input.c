@@ -4,6 +4,8 @@
 // OS input mode + core0->core1 key-event ring. See app_input.h.
 
 #include "quantum.h"          // clear_keyboard()
+#include "timer.h"
+#include "config.h"
 #include "app_input.h"
 
 // ---- mode ------------------------------------------------------------------
@@ -11,6 +13,7 @@
 static volatile uint8_t s_mode = APP_INPUT_KEYBOARD;
 // core1 -> core0 requested mode: 0xFF = no request pending.
 static volatile uint8_t s_req  = 0xFF;
+static uint32_t         s_last_activity;
 
 // ---- SPSC ring (core0 producer, core1 consumer) ----------------------------
 #define APP_IN_QSZ 32u        // must be a power of two
@@ -30,8 +33,12 @@ uint8_t app_input_mode(void) {
 // core0-only: perform the actual transition.
 void app_input_set_mode(uint8_t mode) {
     mode = mode ? APP_INPUT_OS : APP_INPUT_KEYBOARD;
-    if (mode == s_mode) return;
+    if (mode == s_mode) {
+        if (mode == APP_INPUT_OS) s_last_activity = timer_read32();
+        return;
+    }
     s_mode = mode;
+    if (mode == APP_INPUT_OS) s_last_activity = timer_read32();
     clear_keyboard();   // drop any half-pressed keys so nothing sticks on the host
     inq_reset();        // stale events from before the switch are meaningless
 }
@@ -40,18 +47,28 @@ void app_input_toggle(void) {
     app_input_set_mode(s_mode ? APP_INPUT_KEYBOARD : APP_INPUT_OS);
 }
 
+void app_input_note_activity(void) {
+    if (s_mode == APP_INPUT_OS) s_last_activity = timer_read32();
+}
+
 void app_input_request_mode(uint8_t mode) {
     s_req = mode ? APP_INPUT_OS : APP_INPUT_KEYBOARD;
 }
 
 void app_input_service(void) {
     uint8_t r = s_req;
-    if (r == 0xFF) return;
-    s_req = 0xFF;
-    app_input_set_mode(r);
+    if (r != 0xFF) {
+        s_req = 0xFF;
+        app_input_set_mode(r);
+    }
+    if (s_mode == APP_INPUT_OS &&
+        timer_elapsed32(s_last_activity) >= APP_OS_IDLE_MS) {
+        app_input_set_mode(APP_INPUT_KEYBOARD);
+    }
 }
 
 bool app_input_push(uint16_t keycode, bool pressed) {
+    if (pressed) app_input_note_activity();
     uint8_t h = inq_head;
     uint8_t n = (uint8_t)((h + 1u) & (APP_IN_QSZ - 1u));
     if (n == inq_tail) return false;    // full: drop
