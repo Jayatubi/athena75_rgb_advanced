@@ -1,0 +1,4 @@
+# Slot-app build artifacts (regenerate with tools/build_app.sh):
+#   <app>/build/  intermediate ELF/map, <app>/<app>.app packaged image.
+*/build/
+*.app

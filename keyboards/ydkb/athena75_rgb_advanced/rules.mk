@@ -7,6 +7,9 @@ SRC +=  lib/fixed_math/fixed_math.c
 # Low-level flash probes for the raw-HID PROBE command (JEDEC id + sector/page r/w).
 SRC +=  probe_flash.c
 
+# Slot-app upload (raw-HID 0xFD 0x64): confirm dialog + erase/program + progress.
+SRC +=  app_upload.c
+
 VPATH += app
 
 MCU_LDSCRIPT = RP2040_FLASH_TIMECRIT_16M

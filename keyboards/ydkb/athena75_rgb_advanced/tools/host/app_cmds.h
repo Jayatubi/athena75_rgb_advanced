@@ -12,3 +12,6 @@ int cmd_eeprom_restore(int argc, char **argv);
 
 // Hardware probe: JEDEC flash size, XIP readability map, raw XIP read/erase/prog.
 int cmd_probe(int argc, char **argv);
+
+// Slot apps: pack an ELF into a .app, inspect one, or relocate for a slot.
+int cmd_app(int argc, char **argv);

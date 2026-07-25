@@ -31,6 +31,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(COMMON_SRC
     common/png.c
     common/paths.c
+    common/app_pkg.c
 )
 
 if(WIN32)

@@ -11,6 +11,7 @@
 #include "menu.h"
 #include "menu_model.h"
 #include "dialog.h"
+#include "app_upload.h"
 
 #include "color.h"
 #include "config.h"
@@ -668,6 +669,74 @@ static bool dialog_render_tick(void) {
     return false;
 }
 
+// ---- Slot-app upload progress (core1 render) --------------------------------
+// A dialog-styled screen with a progress bar, shown while a slot-app upload is
+// authorized/active/just-finished (app_upload.c owns the state). The per-page
+// flash writes park core1; between them core1 resumes here and repaints, so the
+// bar advances page by page. Same force-wake/teardown contract as the dialog.
+static void app_upload_render(void) {
+    uint8_t      *fb = fbShow;
+    const int16_t W  = ui_vw();
+    const int16_t H  = ui_vh();
+    const int16_t B  = LCD_MENU_BORDER;
+    const int16_t TB = 15;
+    const bool    done = (app_upload_state() == APPUP_DONE);
+
+    ui_clear(fb, 0x0000);
+    ui_wire_rect(fb, 0, 0, W, H, 0x4208);
+    ui_fill_rect(fb, B, B, (int16_t)(W - 2 * B), TB, 0xFFFF);
+    ui_hline(fb, B, (int16_t)(B + TB), (int16_t)(W - 2 * B), 0x4208);
+
+    const char *title = done ? "APP LOADED" : "LOADING APP";
+    ui_text_alpha(fb, (int16_t)((W - ui_text_width(title)) / 2), (int16_t)(B + 1),
+                  title, 0x0000, 0xFFFF, 255);
+
+    uint32_t total = app_upload_total();
+    uint32_t wr    = app_upload_written();
+    uint16_t pct   = done ? 100u : (total ? (uint16_t)((uint64_t)wr * 100u / total) : 0u);
+    if (pct > 100) pct = 100;
+
+    // Progress bar: outer wire + green fill proportional to pct.
+    const int16_t bx = (int16_t)(B + 6);
+    const int16_t bw = (int16_t)(W - 2 * B - 12);
+    const int16_t by = (int16_t)(H / 2 - 6);
+    const int16_t bh = 12;
+    ui_wire_rect(fb, bx, by, bw, bh, 0xFFFF);
+    int16_t fillw = (int16_t)((int32_t)(bw - 2) * pct / 100);
+    if (fillw > 0) ui_fill_rect(fb, (int16_t)(bx + 1), (int16_t)(by + 1), fillw, (int16_t)(bh - 2), 0x07E0);
+
+    char buf[8];
+    uint8_t k = 0;
+    if (pct >= 100) { buf[k++] = '1'; buf[k++] = '0'; buf[k++] = '0'; }
+    else { if (pct >= 10) buf[k++] = (char)('0' + pct / 10); buf[k++] = (char)('0' + pct % 10); }
+    buf[k++] = '%'; buf[k] = 0;
+    ui_text_alpha(fb, (int16_t)((W - ui_text_width(buf)) / 2), (int16_t)(by + bh + 6),
+                  buf, 0xFFFF, 0x0000, 255);
+
+    ui_present(fb);
+}
+
+bool app_upload_render_tick(void) {
+    static bool on = false, woke = false;
+    uint8_t st = app_upload_state();
+    bool show = (st == APPUP_AUTH || st == APPUP_ACTIVE || st == APPUP_DONE);
+    if (show) {
+        if (!on) {
+            on = true; woke = false;
+            if (now_lcd_off || lcd_idle_off) { lcd_switch(true); woke = true; }
+        }
+        app_upload_render();
+        return true;
+    }
+    if (on) {
+        on = false;
+        if (woke) lcd_switch(false);
+        app_request_reinit();
+        return true;
+    }
+    return false;
+}
+
 void display_task_user(void)
 {
     // Screenshot freeze: hold the shown frame so core0 can read it tear-free.
@@ -687,6 +756,11 @@ void display_task_user(void)
     // every app (boot/anim/matrix/menu), so it runs before the lcd_off early-out
     // and the idle-sleep logic below.
     if (dialog_render_tick()) return;
+
+    // Slot-app upload progress: also force-woken and interrupts every app, right
+    // after the dialog (the dialog raises the accept prompt; once accepted the
+    // dialog closes and this takes over to show the bar).
+    if (app_upload_render_tick()) return;
 
     if (!app_boot_active() && user_eeconfig.lcd_off) return;
 

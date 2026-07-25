@@ -25,6 +25,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "config.h"
 #include "menu.h"
 #include "dialog.h"
+#include "app_upload.h"
 
 void reboot(bool bootloader)
 {
@@ -193,6 +194,8 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 }
 
 void housekeeping_task_user(void) {
+    app_upload_task();          // release the "app loaded" banner shortly after a load
+
     if (dialog_is_active()) {
         dialog_task();          // drives the idle timeout (fires the negative button)
         return;

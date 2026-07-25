@@ -4,6 +4,8 @@
 #include "app_cmds.h"
 #include "hid.h"
 #include "proto.h"
+#include "app_pkg.h"
+#include "sys.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -335,4 +337,305 @@ int cmd_eeprom_restore(int argc, char **argv) {
     hid_close(d);
     printf("\n>> restored %u bytes. Reboot the keyboard to apply the restored config.\n", size);
     return 0;
+}
+
+// ---- slot apps: pack / info / relocate -------------------------------------
+// Local, symmetric with the (future) upload path: pack and relocate share the
+// same container code in common/app_pkg.c. No HID/flash here — packaging and
+// preview are offline; writing to a slot will reuse app_pkg_relocate().
+
+static uint8_t *read_file(const char *path, size_t *len, char *err, size_t errlen) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { snprintf(err, errlen, "cannot open %s", path); return NULL; }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { snprintf(err, errlen, "empty/invalid %s", path); fclose(f); return NULL; }
+    uint8_t *buf = (uint8_t *)malloc((size_t)sz);
+    if (!buf || fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+        snprintf(err, errlen, "read failed %s", path);
+        free(buf); fclose(f); return NULL;
+    }
+    fclose(f);
+    *len = (size_t)sz;
+    return buf;
+}
+
+static int write_file(const char *path, const uint8_t *buf, size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    size_t n = fwrite(buf, 1, len, f);
+    fclose(f);
+    return n == len ? 0 : -1;
+}
+
+// Replace a path's extension (or append) with `ext` (includes the dot).
+static void with_ext(const char *in, const char *ext, char *out, size_t outlen) {
+    snprintf(out, outlen, "%s", in);
+    char *dot = strrchr(out, '.');
+    char *slash = strrchr(out, '/');
+#ifdef _WIN32
+    char *bslash = strrchr(out, '\\');
+    if (bslash > slash) slash = bslash;
+#endif
+    if (dot && dot > slash) *dot = 0;
+    size_t used = strlen(out);
+    snprintf(out + used, outlen - used, "%s", ext);
+}
+
+static void print_info(const app_pkg_info_t *in) {
+    printf("   name        : %s\n", in->name);
+    printf("   abi version : %u\n", in->abi_ver);
+    printf("   link base   : 0x%08X\n", in->link_base);
+    printf("   image size  : %u bytes (%.1f KiB)\n", in->image_size, in->image_size / 1024.0);
+    printf("   entry       : 0x%08X (off 0x%X)\n", in->entry, (in->entry & ~1u) - in->link_base);
+    printf("   RAM needed  : %u bytes (.data %u + .bss %u @ 0x%08X)\n",
+           in->ram_needed, in->data_size, in->bss_size, in->data_vma);
+    printf("   relocs      : %u flash words to patch at upload\n", in->reloc_count);
+    printf("   crc32       : 0x%08X (verified)\n", in->pkg_crc32);
+}
+
+static int app_pack(int argc, char **argv) {
+    const char *elf_path = NULL, *out_path = NULL, *name = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-o") && i + 1 < argc) out_path = argv[++i];
+        else if (!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
+        else if (argv[i][0] != '-') elf_path = argv[i];
+        else { printf("usage: app pack <elf> [-o out.app] [--name NAME]\n"); return 2; }
+    }
+    if (!elf_path) { printf("usage: app pack <elf> [-o out.app] [--name NAME]\n"); return 2; }
+
+    char err[160] = {0};
+    size_t elf_len = 0;
+    uint8_t *elf = read_file(elf_path, &elf_len, err, sizeof err);
+    if (!elf) { printf("error: %s\n", err); return 1; }
+
+    uint8_t *pkg = NULL; size_t pkg_len = 0;
+    if (app_pkg_from_elf(elf, elf_len, name, &pkg, &pkg_len, err, sizeof err) != 0) {
+        printf("error: %s\n", err); free(elf); return 1;
+    }
+    free(elf);
+
+    char out_buf[1024];
+    if (!out_path) { with_ext(elf_path, ".app", out_buf, sizeof out_buf); out_path = out_buf; }
+    if (write_file(out_path, pkg, pkg_len) != 0) {
+        printf("error: cannot write %s\n", out_path); free(pkg); return 1;
+    }
+
+    app_pkg_info_t info;
+    app_pkg_parse(pkg, pkg_len, &info, err, sizeof err);
+    printf(">> packed %s (%zu bytes)\n", out_path, pkg_len);
+    print_info(&info);
+    free(pkg);
+    return 0;
+}
+
+static int app_info(int argc, char **argv) {
+    if (argc < 2) { printf("usage: app info <file.app>\n"); return 2; }
+    char err[160] = {0};
+    size_t len = 0;
+    uint8_t *pkg = read_file(argv[1], &len, err, sizeof err);
+    if (!pkg) { printf("error: %s\n", err); return 1; }
+    app_pkg_info_t info;
+    if (app_pkg_parse(pkg, len, &info, err, sizeof err) != 0) {
+        printf("error: %s\n", err); free(pkg); return 1;
+    }
+    printf(">> %s\n", argv[1]);
+    print_info(&info);
+    free(pkg);
+    return 0;
+}
+
+static int app_relocate(int argc, char **argv) {
+    const char *app_path = NULL, *slot_str = NULL, *out_path = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-o") && i + 1 < argc) out_path = argv[++i];
+        else if (!app_path) app_path = argv[i];
+        else if (!slot_str) slot_str = argv[i];
+        else { printf("usage: app relocate <file.app> <slot> [-o out.bin]\n"); return 2; }
+    }
+    if (!app_path || !slot_str) {
+        printf("usage: app relocate <file.app> <slot> [-o out.bin]\n");
+        printf("  slot: XIP address of the target slot, e.g. 0x10A00000\n");
+        return 2;
+    }
+    uint32_t slot = (uint32_t)strtoul(slot_str, NULL, 0);
+
+    char err[160] = {0};
+    size_t len = 0;
+    uint8_t *pkg = read_file(app_path, &len, err, sizeof err);
+    if (!pkg) { printf("error: %s\n", err); return 1; }
+
+    uint8_t *img = NULL; size_t img_len = 0;
+    if (app_pkg_relocate(pkg, len, slot, &img, &img_len, err, sizeof err) != 0) {
+        printf("error: %s\n", err); free(pkg); return 1;
+    }
+    free(pkg);
+
+    char out_buf[1024];
+    if (!out_path) {
+        snprintf(out_buf, sizeof out_buf, "app_%08X.bin", slot);
+        out_path = out_buf;
+    }
+    if (write_file(out_path, img, img_len) != 0) {
+        printf("error: cannot write %s\n", out_path); free(img); return 1;
+    }
+    printf(">> relocated to slot 0x%08X -> %s (%zu bytes)\n", slot, out_path, img_len);
+    printf("   entry -> 0x%08X\n", app_le32(img + APPH_ENTRY));
+    free(img);
+    return 0;
+}
+
+static void put_be32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
+// Upload a .app into a flash slot: relocate for the slot, confirm on-screen, then
+// erase + program page-by-page (the board shows a progress bar). Symmetric with
+// packing — both use common/app_pkg.c; here we drive the flash over raw-HID.
+static int app_upload(int argc, char **argv) {
+    const char *path = NULL;
+    uint32_t slot = ATHENA_APP_AREA_BEGIN;   // default: first slot in the app area
+    int wait_s = 20, verify = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--slot") && i + 1 < argc) slot = (uint32_t)strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--timeout") && i + 1 < argc) wait_s = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-verify")) verify = 0;
+        else if (argv[i][0] != '-') path = argv[i];
+        else { printf("usage: app upload <file.app> [--slot 0xADDR] [--timeout S] [--no-verify]\n"); return 2; }
+    }
+    if (!path) { printf("usage: app upload <file.app> [--slot 0xADDR] [--timeout S] [--no-verify]\n"); return 2; }
+    if (slot < ATHENA_APP_AREA_BEGIN || slot >= ATHENA_APP_AREA_END || (slot & 0xFFFu)) {
+        printf("error: slot 0x%08X must be 4K-aligned and in the app area 0x%08X..0x%08X\n",
+               slot, ATHENA_APP_AREA_BEGIN, ATHENA_APP_AREA_END);
+        return 1;
+    }
+
+    char err[160] = {0};
+    size_t plen = 0;
+    uint8_t *pkg = read_file(path, &plen, err, sizeof err);
+    if (!pkg) { printf("error: %s\n", err); return 1; }
+
+    app_pkg_info_t info;
+    if (app_pkg_parse(pkg, plen, &info, err, sizeof err) != 0) { printf("error: %s\n", err); free(pkg); return 1; }
+    uint8_t *img = NULL; size_t img_len = 0;
+    if (app_pkg_relocate(pkg, plen, slot, &img, &img_len, err, sizeof err) != 0) {
+        printf("error: %s\n", err); free(pkg); return 1;
+    }
+    free(pkg);
+    if (slot + img_len > ATHENA_APP_AREA_END) {
+        printf("error: image (%zu B) at 0x%08X overruns the app area\n", img_len, slot);
+        free(img); return 1;
+    }
+    printf(">> app '%s': %zu bytes -> slot 0x%08X (RAM %u B, %u relocs)\n",
+           info.name, img_len, slot, info.ram_needed, info.reloc_count);
+
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) { printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID); free(img); return 1; }
+
+    uint8_t req[ATHENA_REPORT_LEN], rep[ATHENA_REPORT_LEN];
+
+    // BEGIN -> raises the on-screen "Install app?" dialog.
+    memset(req, 0, sizeof req);
+    req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_BEGIN;
+    put_be32(&req[3], slot); put_be32(&req[7], img_len);
+    if (xfer(d, req, 11, rep, 1000) != 0) { printf("error: no BEGIN reply\n"); goto fail; }
+    if (rep[3] == ATHENA_APPUP_DENIED) { printf("error: board rejected the request (bad slot/size)\n"); goto fail; }
+    printf(">> confirm on the keyboard: INSTALL = load, CANCEL = abort (auto-cancels in 10s)...\n");
+
+    // Poll until the user accepts (AUTH) or declines/times out.
+    int authorized = 0;
+    for (int t = 0; t < wait_s * 3; t++) {
+        memset(req, 0, sizeof req);
+        req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_STATUS;
+        if (xfer(d, req, 3, rep, 1000) != 0) { printf("error: no STATUS reply\n"); goto fail; }
+        uint8_t st = rep[3];
+        if (st == ATHENA_APPUP_AUTH || st == ATHENA_APPUP_ACTIVE) { authorized = 1; break; }
+        if (st == ATHENA_APPUP_DENIED || st == ATHENA_APPUP_IDLE) { printf(">> cancelled on the keyboard.\n"); goto fail; }
+        sys_msleep(333);
+    }
+    if (!authorized) { printf(">> timed out waiting for confirmation.\n"); goto abort_dev; }
+
+    // Erase every 4K sector the image covers.
+    uint32_t esec = slot & ~0xFFFu;
+    uint32_t eend = (slot + (uint32_t)img_len + 0xFFFu) & ~0xFFFu;
+    for (uint32_t a = esec; a < eend; a += 0x1000u) {
+        memset(req, 0, sizeof req);
+        req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_ERASE;
+        put_be32(&req[3], a);
+        if (xfer(d, req, 7, rep, 5000) != 0 || rep[3] != 1) {
+            printf("\nerror: erase failed at 0x%08X\n", a); goto abort_dev;
+        }
+    }
+
+    // Program page by page; each page streams across several write reports.
+    for (uint32_t off = 0; off < img_len; off += 256) {
+        uint32_t page = slot + off;
+        uint8_t  pg[256];
+        memset(pg, 0xFF, sizeof pg);
+        size_t n = (img_len - off < 256) ? (img_len - off) : 256;
+        memcpy(pg, img + off, n);
+        for (int po = 0; po < 256; po += ATHENA_APP_CHUNK) {
+            int l = 256 - po; if (l > ATHENA_APP_CHUNK) l = ATHENA_APP_CHUNK;
+            memset(req, 0, sizeof req);
+            req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_WRITE;
+            put_be32(&req[3], page); req[7] = (uint8_t)po; req[8] = (uint8_t)l;
+            memcpy(&req[9], &pg[po], l);
+            if (xfer(d, req, 9 + l, rep, 2000) != 0 || rep[3] == 0) {
+                printf("\nerror: write failed at 0x%08X+%d\n", page, po); goto abort_dev;
+            }
+        }
+        printf(">> programmed %u / %zu bytes\r", (unsigned)(off + n), img_len);
+        fflush(stdout);
+    }
+    printf("\n");
+
+    // END -> keep the slot, drop the progress screen.
+    memset(req, 0, sizeof req);
+    req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_END;
+    xfer(d, req, 3, rep, 1000);
+
+    // Verify: read the slot header back and compare to the relocated image.
+    if (verify) {
+        uint8_t back[24] = {0};
+        if (probe_xipread(d, slot, back, sizeof back) == (int)sizeof back &&
+            memcmp(back, img, sizeof back) == 0) {
+            printf(">> verified slot header (magic + image_size + entry match)\n");
+        } else {
+            printf("!! verify: slot header does not match (read-back differs)\n");
+        }
+    }
+    printf(">> done. '%s' is loaded at slot 0x%08X.\n", info.name, slot);
+    hid_close(d); free(img);
+    return 0;
+
+abort_dev:
+    memset(req, 0, sizeof req);
+    req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_ABORT;
+    xfer(d, req, 3, rep, 1000);
+fail:
+    hid_close(d); free(img);
+    return 1;
+}
+
+int cmd_app(int argc, char **argv) {
+    if (argc < 2) {
+        printf("usage: app <pack|info|relocate|upload> ...\n"
+               "  app pack     <elf> [-o out.app] [--name NAME]   build a .app from an ELF\n"
+               "  app info     <file.app>                         inspect a .app\n"
+               "  app relocate <file.app> <slot> [-o out.bin]     patch a .app for a slot\n"
+               "  app upload   <file.app> [--slot 0xADDR]         confirm + flash into a slot\n"
+               "               [--timeout S] [--no-verify]\n");
+        return 2;
+    }
+    const char *sub = argv[1];
+    int subargc = argc - 1;
+    char **subargv = argv + 1;
+    if (!strcmp(sub, "pack"))     return app_pack(subargc, subargv);
+    if (!strcmp(sub, "info"))     return app_info(subargc, subargv);
+    if (!strcmp(sub, "relocate")) return app_relocate(subargc, subargv);
+    if (!strcmp(sub, "upload"))   return app_upload(subargc, subargv);
+    printf("unknown app subcommand: %s\n", sub);
+    return 2;
 }

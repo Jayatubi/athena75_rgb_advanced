@@ -79,7 +79,22 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define PROBE_ERASE   0x02 // args: data[3..6]=addr(BE32) -> data[3]=ok  (erase 4K sector)
 #define PROBE_PROG    0x03 // args: data[3..6]=addr(BE32) -> data[3]=ok  (write test page)
 
+// Slot-app upload (0xFD 0x64 <sub>): confirm on the LCD, then erase/program an
+// independently compiled .app into a flash slot. See app_upload.{c,h}.
+#define APP_CMD    0x64
+#define APP_BEGIN  0x00 // data[3..6]=slot(BE32) data[7..10]=total(BE32) -> data[3]=state
+#define APP_STATUS 0x01 // -> data[3]=state data[4..7]=written(BE32)
+#define APP_ERASE  0x02 // data[3..6]=addr(BE32) -> data[3]=ok
+#define APP_WRITE  0x03 // data[3..6]=page(BE32) data[7]=poff data[8]=len data[9..]=bytes -> data[3]=1/2/0
+#define APP_END    0x04 // -> data[3]=ok
+#define APP_ABORT  0x05 // -> data[3]=ok
+
 #include "probe_flash.h"
+#include "app_upload.h"
+
+static inline uint32_t rawhid_be32(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
 
 #if __has_include("wear_leveling_rp2040_flash_config.h")
 #    include "wear_leveling_rp2040_flash_config.h"
@@ -212,6 +227,53 @@ static void ath_handle_probe(uint8_t *data) {
             data[3] = app_flash_prog_page(addr, page) ? 1u : 0u;
             break;
         }
+        default:
+            break;
+    }
+}
+
+// Slot-app upload: authorize via on-screen dialog, then erase/program pages into
+// a flash slot with an LCD progress bar (see app_upload.c). All addressing is
+// validated against the app area there; core1 is parked per write automatically.
+static void ath_handle_app(uint8_t *data) {
+    switch (data[2]) {
+        case APP_BEGIN: {
+            uint32_t slot  = rawhid_be32(&data[3]);
+            uint32_t total = rawhid_be32(&data[7]);
+            app_upload_request(slot, total);
+            data[3] = app_upload_state();
+            break;
+        }
+        case APP_STATUS: {
+            data[3] = app_upload_state();
+            uint32_t w = app_upload_written();
+            data[4] = (uint8_t)(w >> 24);
+            data[5] = (uint8_t)(w >> 16);
+            data[6] = (uint8_t)(w >> 8);
+            data[7] = (uint8_t)(w);
+            break;
+        }
+        case APP_ERASE: {
+            uint32_t addr = rawhid_be32(&data[3]);
+            data[3] = app_upload_do_erase(addr) ? 1u : 0u;
+            break;
+        }
+        case APP_WRITE: {
+            uint32_t page = rawhid_be32(&data[3]);
+            uint8_t  poff = data[7];
+            uint8_t  len  = data[8];
+            if (len > 23) len = 23;
+            data[3] = (uint8_t)app_upload_do_write(page, poff, len, &data[9]);
+            break;
+        }
+        case APP_END:
+            app_upload_finish(true);
+            data[3] = 1;
+            break;
+        case APP_ABORT:
+            app_upload_finish(false);
+            data[3] = 1;
+            break;
         default:
             break;
     }
@@ -358,6 +420,8 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             ath_handle_ee(data);
         } else if (data[1] == PROBE_CMD) {
             ath_handle_probe(data);
+        } else if (data[1] == APP_CMD) {
+            ath_handle_app(data);
         }
     }
 }

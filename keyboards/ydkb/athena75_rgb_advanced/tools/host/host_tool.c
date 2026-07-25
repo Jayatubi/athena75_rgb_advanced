@@ -31,7 +31,11 @@ static int usage(const char *argv0) {
         "  backup  [-o file.bin]                    save Vial/VIA config (EEPROM) to a file\n"
         "  restore file.bin                         write a saved Vial/VIA config back\n"
         "  probe   [read ADDR [len]]                JEDEC flash size + XIP readability map\n"
-        "          [erase ADDR] [prog ADDR]         erase a 4K sector / program a test page\n",
+        "          [erase ADDR] [prog ADDR]         erase a 4K sector / program a test page\n"
+        "  app      pack <elf> [-o out.app]         build a relocatable slot app from an ELF\n"
+        "           info <file.app>                 inspect a packaged app\n"
+        "           relocate <file.app> <slot>      patch an app for a target slot (preview)\n"
+        "           upload <file.app> [--slot ADDR] confirm on the LCD, then flash into a slot\n",
         argv0);
     return 2;
 }
@@ -54,6 +58,7 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "backup"))   return cmd_eeprom_backup(subargc, subargv);
     if (!strcmp(cmd, "restore"))  return cmd_eeprom_restore(subargc, subargv);
     if (!strcmp(cmd, "probe"))    return cmd_probe(subargc, subargv);
+    if (!strcmp(cmd, "app"))      return cmd_app(subargc, subargv);
     if (!strcmp(cmd, "-h") || !strcmp(cmd, "--help") || !strcmp(cmd, "help")) { usage(prog); return 0; }
 
     printf("unknown command: %s\n\n", cmd);

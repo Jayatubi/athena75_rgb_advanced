@@ -60,3 +60,29 @@
 #define ATHENA_PROBE_PROG    0x03
 #define ATHENA_PROBE_CHUNK   24
 #define ATHENA_XIP_BASE      0x10000000u
+
+// Slot-app upload: 0xFD 0x64 <sub>. Load an independently compiled .app into a
+// flash slot in the last-6MB app area. Like the firmware-flash prompt, BEGIN
+// raises an on-screen "Install app?" dialog and the write only proceeds once the
+// user accepts; the LCD shows a progress bar while erasing/programming.
+#define ATHENA_APP_CMD     0x64
+#define ATHENA_APP_BEGIN   0x00 // data[3..6]=slot(BE32) data[7..10]=total(BE32) -> data[3]=state
+#define ATHENA_APP_STATUS  0x01 // -> data[3]=state data[4..7]=written(BE32)
+#define ATHENA_APP_ERASE   0x02 // data[3..6]=addr(BE32) -> data[3]=1 ok
+#define ATHENA_APP_WRITE   0x03 // data[3..6]=page(BE32) data[7]=poff data[8]=len data[9..]=bytes
+                                //   -> data[3]: 1=page programmed, 2=buffered, 0=error
+#define ATHENA_APP_END     0x04 // -> data[3]=1 ok (finish, keep the loaded slot)
+#define ATHENA_APP_ABORT   0x05 // -> data[3]=1 ok (cancel, drop progress screen)
+#define ATHENA_APP_CHUNK   23   // data bytes per write report (9-byte header)
+
+// app-upload state machine (returned by BEGIN/STATUS).
+#define ATHENA_APPUP_IDLE    0
+#define ATHENA_APPUP_PENDING 1  // dialog up, waiting for the user
+#define ATHENA_APPUP_AUTH    2  // user accepted; host may erase/write
+#define ATHENA_APPUP_DENIED  3  // user cancelled / timed out
+#define ATHENA_APPUP_ACTIVE  4  // erasing/programming in progress
+#define ATHENA_APPUP_DONE    5  // finished; slot holds the app
+
+// Slot-app flash area: the last 6 MB (never firmware/EEPROM/boot). Matches app.ld.
+#define ATHENA_APP_AREA_BEGIN 0x10A00000u
+#define ATHENA_APP_AREA_END   0x11000000u
