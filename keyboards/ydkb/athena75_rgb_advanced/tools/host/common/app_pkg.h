@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 // Must match sdk/app.ld (ORIGIN of FLASH/RAM).
-#define APP_LINK_BASE 0x10A00000u   // reference slot the app is linked at
+#define APP_LINK_BASE 0x10800000u   // reference slot the app is linked at (slot0)
 #define APP_RAM_BASE  0x2003F800u   // fixed RAM window every app links .data/.bss at
 #define APP_RAM_SPAN  0x800u        // ld RAM LENGTH (2 KiB, top of ram0)
 

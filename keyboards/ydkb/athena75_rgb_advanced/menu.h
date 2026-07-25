@@ -26,6 +26,15 @@ void menu_exit(void);
 bool menu_is_active(void);
 bool menu_process_key(uint16_t keycode, bool pressed);
 void menu_housekeeping_task(void);
+void menu_service(void);        // apply a core1 open request (call from housekeeping)
+
+// cross-core open request (menu_run in host_api): an app/launcher on core1 asks
+// the core0 engine to open the menu on the given content model (NULL = the
+// firmware's built-in tree); the app runtime overlays it meanwhile.
+struct app_menu_model_t;
+void menu_request_open(const struct app_menu_model_t *model); // core1: request open
+bool menu_open_pending(void);   // core1: requested but core0 hasn't opened it yet
+void menu_clear_pending(void);  // core1: clear the pending flag once open
 
 // Called when menu closes; clears gif+ hold state in user_function.c
 void menu_input_reset(void);

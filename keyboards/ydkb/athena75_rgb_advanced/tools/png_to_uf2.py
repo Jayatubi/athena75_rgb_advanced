@@ -2,8 +2,10 @@
 
 两个子命令, 各自对应一个 flash 分区槽:
 
-  boot   单张 PNG -> alpha 淡入淡出的开机动画  -> boot 区 (0x10400000, 2MB)
-  anim   Icon_*.png 序列 -> 关键帧/补间大动画  -> keyframe 区 (0x10600000, 10MB)
+  boot   单张 PNG -> alpha 淡入淡出的开机动画  -> boot 区 (0x10400000, 4MB)
+  anim   Icon_*.png 序列 -> 关键帧/补间大动画  -> [LEGACY] 旧 keyframe 区 (0x10600000)
+         注意: keyframe 独立分区已废弃, SLIDES 改为 slot app 自带数据槽 (0x10800000+);
+         anim 子命令仅为历史保留, 目标地址现已落在 boot 区内, 不再被固件使用。
 
 每帧在黑底上合成为大端 RGB565, 组成 QGF (可选 RLE 压缩, 与固件
 qp_drawimage_byte_rle_decoder 对应), 由固件的 qp_animate 播放。产物统一
@@ -30,13 +32,15 @@ SIZE = 128
 BG = (0, 0, 0)           # 不透明背景 (RGBA 帧在此黑底上合成)
 
 # --- flash 分区 (与固件地址一致) ---
-#   0x10400000..0x10600000  boot 区 (2MB)   <- boot 子命令
-#   0x10600000..0x11000000  keyframe 区 (10MB) <- anim 子命令
+#   0x10000000..0x10400000  firmware (4MB, LD-managed)
+#   0x10400000..0x10800000  boot 区 (4MB)          <- boot 子命令 (仅用开头)
+#   0x10800000..0x11000000  app slots (8MB = 32x256K) <- slot apps (host_tool app ...)
 BOOT_ADDR = 0x10400000   # 固件里的 BOOT_QGF_ADDR
-BOOT_END = 0x10600000    # boot 区结束 = keyframe 区起点
-SLOT_ADDR = 0x10600000   # 固件里的 ANIM_QGF_ADDR
-SLOT_BYTES = 0x11000000 - 0x10600000  # 10MB 槽容量 (压缩后按字节数限制)
-MAX_FRAMES = 319         # 10MB / ~32.8KB 每帧 (未压缩时的帧数上限)
+BOOT_END = 0x10800000    # boot 区结束 = app slots 起点 (4MB boot 区)
+# LEGACY: 独立 keyframe 分区已废弃; anim 子命令仅历史保留 (地址现落在 boot 区内)。
+SLOT_ADDR = 0x10600000   # [legacy] 旧 ANIM_QGF_ADDR
+SLOT_BYTES = BOOT_END - SLOT_ADDR  # [legacy] 剩余 boot 区容量 (仅防溢出)
+MAX_FRAMES = 319         # [legacy] 未压缩帧数上限
 
 # --- anim 时序 (与 make_montage.py 对齐, 但补间帧默认抬到 100ms 抗撕裂) ---
 HOLD_MS = 800            # 每个表情停留时长

@@ -89,8 +89,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define APP_END    0x04 // -> data[3]=ok
 #define APP_ABORT  0x05 // -> data[3]=ok
 
+// OS input-mode control (mirrors proto.h ATHENA_MODE_*): 0xFD 0x65 <sub>.
+#define MODE_CMD    0x65
+#define MODE_KBD    0x00
+#define MODE_OS     0x01
+#define MODE_TOGGLE 0x02
+#define MODE_QUERY  0x10
+
 #include "probe_flash.h"
 #include "app_upload.h"
+#include "app_input.h"
 
 static inline uint32_t rawhid_be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
@@ -425,6 +433,15 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             ath_handle_probe(data);
         } else if (data[1] == APP_CMD) {
             ath_handle_app(data);
+        } else if (data[1] == MODE_CMD) {
+            // 0xFD 0x65 <sub>: grab/release OS input mode from the host.
+            switch (data[2]) {
+                case MODE_KBD:    app_input_set_mode(APP_INPUT_KEYBOARD); break;
+                case MODE_OS:     app_input_set_mode(APP_INPUT_OS);       break;
+                case MODE_TOGGLE: app_input_toggle();                    break;
+                case MODE_QUERY:  default:                                break;
+            }
+            data[3] = app_input_mode();
         }
     }
 }

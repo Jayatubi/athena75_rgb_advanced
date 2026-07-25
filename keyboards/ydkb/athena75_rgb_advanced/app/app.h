@@ -43,8 +43,9 @@ extern const app_t app_boot;
 extern const app_t app_anim;
 extern const app_t app_matrix;
 extern const app_t app_menu;
-extern const app_t app_slot;   // adapter that runs a loaded flash slot-app (app_loader.c)
-extern const app_t app_blank;  // black screen: default persistent app (validation)
+extern const app_t app_slot;     // adapter that runs a loaded flash slot-app (app_loader.c)
+extern const app_t app_blank;    // black screen (validation fallback)
+extern const app_t app_launcher; // OS home screen: icon grid of installed apps
 
 // ---- Slot-app launcher (core1-only feature) ---------------------------------
 // core0 (menu) requests launching the app whose image starts at XIP `base`; the
@@ -53,3 +54,7 @@ extern const app_t app_blank;  // black screen: default persistent app (validati
 void     app_launch_slot(uint32_t base);
 bool     app_slot_pending(void);   // a slot app is requested/active
 uint32_t app_slot_req_base(void);  // requested slot base (for the loader)
+// Return-to-launcher: clears the slot request so the reconciler switches back to
+// the launcher next frame (the runtime calls the slot app's exit() first for a
+// clean teardown). Called by host_api exit_to_launcher() (an app's own Esc/back).
+void     app_return_to_launcher(void);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Slot-app upload (raw-HID 0xFD 0x64). Loads an independently compiled .app into
-// a flash slot in the last-6MB app area. Mirrors the firmware-flash prompt: the
+// a flash slot in the last-8MB app area. Mirrors the firmware-flash prompt: the
 // host asks (BEGIN), the board raises the generic "Install app?" dialog and the
 // write only proceeds once the user accepts; while erasing/programming the LCD
 // shows a progress bar (rendered on core1 between the per-page flash writes).
@@ -24,9 +24,9 @@ enum {
     APPUP_DONE    = 5,  // finished; slot holds the app
 };
 
-// Allowed flash window for slot apps: the last 6 MB (never firmware/EEPROM/boot).
+// Allowed flash window for slot apps: the last 8 MB (never firmware/EEPROM/boot).
 // Matches apps/sdk/app.ld and tools/host proto.h ATHENA_APP_AREA_*.
-#define APP_AREA_BEGIN 0x10A00000u
+#define APP_AREA_BEGIN 0x10800000u
 #define APP_AREA_END   0x11000000u
 
 // Slot geometry (must match apps/sdk/app.ld + tools/host proto.h). A slot is

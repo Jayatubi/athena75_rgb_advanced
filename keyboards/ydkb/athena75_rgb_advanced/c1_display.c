@@ -530,6 +530,32 @@ void ui_ring(uint8_t *fb, int16_t cx, int16_t cy, int16_t r, bool filled, uint16
     }
 }
 
+// Blit a w*h big-endian RGB565 image at window-logical (x,y). Coordinates and
+// clipping mirror ui_fill_rect (virtual window + stencil + panel edge); source
+// pixels are copied opaque (no alpha). img is row-major, 2 bytes/pixel.
+void ui_blit565(uint8_t *fb, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *img) {
+    (void)fb;
+    if (w <= 0 || h <= 0 || !img) return;
+    for (int16_t ry = 0; ry < h; ry++) {
+        int16_t ly = (int16_t)(y + ry);
+        if (ly < 0 || ly >= vscr_h) continue;
+        if (ly < clip_y0 || ly >= clip_y1) continue;
+        int16_t fy = (int16_t)(vscr_oy + ly);
+        if (fy >= ANIM_SIZE) continue;
+        const uint8_t *srow = img + (uint32_t)ry * (uint32_t)w * 2u;
+        uint32_t       base = (uint32_t)fy * ANIM_SIZE;
+        for (int16_t rx = 0; rx < w; rx++) {
+            int16_t lx = (int16_t)(x + rx);
+            if (lx < 0 || lx >= vscr_w) continue;
+            if (lx < clip_x0 || lx >= clip_x1) continue;
+            int16_t fx = (int16_t)(vscr_ox + lx);
+            if (fx >= ANIM_SIZE) continue;
+            uint16_t v = (uint16_t)((srow[rx * 2] << 8) | srow[rx * 2 + 1]);
+            px_wr(fbShow, base + (uint32_t)fx, v);
+        }
+    }
+}
+
 void ui_text(uint8_t *fb, int16_t x, int16_t y, const char *str, uint16_t fg, uint16_t bg) {
     (void)bg;
     mf_blit(fb, x, y, str, fg, 255);

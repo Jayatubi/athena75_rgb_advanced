@@ -12,6 +12,26 @@
 #    include "rgb_matrix.h"
 #endif
 
+#include "apps/sdk/host_api.h"   // app_menu_model_t: an app supplies the menu CONTENT
+
+// The app model reuses the engine's kind/flag numbering and mirrors menu_action_t
+// for the reserved actions, so items need no field translation and menu.c's action
+// switch handles EXIT/REBOOT/BOOTSEL identically for built-in and app menus.
+_Static_assert((int)APP_MI_FOLDER == (int)MIK_FOLDER && (int)APP_MI_VALUE == (int)MIK_VALUE &&
+                   (int)APP_MI_ACTION == (int)MIK_ACTION,
+               "app menu item kind ABI drift");
+_Static_assert((int)APP_MI_RADIO == (int)MI_RADIO && (int)APP_MI_TOGGLE == (int)MI_TOGGLE,
+               "app menu item flag ABI drift");
+_Static_assert((int)APP_MENU_ACT_EXIT == (int)MA_EXIT && (int)APP_MENU_ACT_REBOOT == (int)MA_REBOOT &&
+                   (int)APP_MENU_ACT_BOOTSEL == (int)MA_BOOTSEL,
+               "app menu action ABI drift");
+
+// Active app-supplied menu model, or NULL for the firmware's own built-in tree.
+// Set on core0 when the menu opens (menu_service) and read by the accessors below
+// on both cores. A single aligned pointer -> atomic to publish.
+static const app_menu_model_t *g_app_model = NULL;
+void menu_model_set_app(const app_menu_model_t *m) { g_app_model = m; }
+
 // CapsLock colour / RGB scope are stored in the Vial "layout options" word (same
 // storage the Vial GUI writes). via_get/set_layout_options persist to eeprom;
 // user_eeconfig_init re-parses that word and re-applies indicator colour, RGB
@@ -577,14 +597,75 @@ void menu_model_refresh_apps(void) {
     node_tbl[MN_APP].count = n ? n : 1; // >=1 so the "(NONE)" placeholder shows
 }
 
+// ---- app-supplied model (content by app; engine by firmware) ----------------
+// When g_app_model is set, the accessors serve the app's node tree instead of the
+// built-in one. Two node ids stay firmware-owned even under an app model: the
+// installed-app list (APP_MENU_CHILD_APP -> the generated MN_APP node + app_scan)
+// and the LCD calibration screen (APP_MENU_CHILD_LCDTEST, no items). App node ids
+// are small (0..node_count) and never collide with those reserved high ids.
+static uint8_t app_node_count(uint8_t node) {
+    if (node == APP_MENU_CHILD_APP) {
+        menu_model_init(); // ensures the MN_APP gen hook + a scanned count exist
+        uint8_t c = node_tbl[MN_APP].count;
+        return c ? c : 1u; // >=1 so the "(NONE)" placeholder can render
+    }
+    if (node == APP_MENU_CHILD_LCDTEST) return 0;
+    if (!g_app_model || node >= g_app_model->node_count) return 0;
+    const app_menu_node_t *n = &g_app_model->nodes[node];
+    if (!n->items) { // generated node
+        if (n->count) return n->count;
+        return g_app_model->count_fn ? g_app_model->count_fn(node) : 0u;
+    }
+    return n->count;
+}
+
+static void app_item_fill(const app_menu_item_t *a, gen_slot_t *s) {
+    s->it.next  = NULL;
+    s->it.id    = 0; // ids are only used to disambiguate the built-in static tree
+    s->it.label = a->label;
+    s->it.kind  = a->kind;
+    s->it.flags = a->flags;
+    s->it.group = a->group;
+    s->it.value = a->value;
+    s->it.child = a->child;
+}
+
+static const menu_item_t *app_item_at(uint8_t id, uint8_t idx) {
+    gen_slot_t *s = &gen_slot[mcu_core_id()]; // per-core scratch (no cross-core tearing)
+    if (id == APP_MENU_CHILD_APP) {           // firmware-owned installed-app list
+        menu_model_init();
+        menu_node_t *n = &node_tbl[MN_APP];
+        if (!n->gen || idx >= n->count) return NULL;
+        n->gen(idx, &s->it, s->label);
+        return &s->it;
+    }
+    if (id == APP_MENU_CHILD_LCDTEST) return NULL;
+    if (!g_app_model || id >= g_app_model->node_count) return NULL;
+    if (idx >= app_node_count(id)) return NULL;
+    const app_menu_node_t *n = &g_app_model->nodes[id];
+    if (n->items) {
+        app_item_fill(&n->items[idx], s);
+    } else {                                  // generated: app fills item + label buf
+        app_menu_item_t tmp = {0};
+        tmp.kind  = APP_MI_VALUE;
+        tmp.child = APP_MENU_CHILD_NONE;
+        if (g_app_model->gen) g_app_model->gen(id, idx, &tmp, s->label);
+        app_item_fill(&tmp, s);
+        if (!tmp.label) s->it.label = s->label; // gen wrote into the scratch buffer
+    }
+    return &s->it;
+}
+
 // ---- accessors --------------------------------------------------------------
 uint8_t menu_node_item_count(menu_node_id_t id) {
+    if (g_app_model) return app_node_count((uint8_t)id);
     menu_model_init();
     if (id >= MN_COUNT) return 0;
     return node_tbl[id].count;
 }
 
 const menu_item_t *menu_item_at(menu_node_id_t id, uint8_t idx) {
+    if (g_app_model) return app_item_at((uint8_t)id, idx);
     menu_model_init();
     if (id >= MN_COUNT) return NULL;
     menu_node_t *n = &node_tbl[id];
@@ -602,6 +683,22 @@ const menu_item_t *menu_item_at(menu_node_id_t id, uint8_t idx) {
     return it;
 }
 
+// Root title of the active app model (NULL => menu.c falls back to the firmware
+// default). Deeper nodes derive their title from the parent folder item's label.
+const char *menu_model_app_root_title(void) {
+    if (g_app_model && g_app_model->nodes && g_app_model->node_count) {
+        return g_app_model->nodes[0].title;
+    }
+    return NULL;
+}
+
+// Deliver a user action (value >= APP_MENU_ACT_USER) to the app model's callback.
+void menu_model_user_action(uint8_t action) {
+    if (g_app_model && g_app_model->action && action >= APP_MENU_ACT_USER) {
+        g_app_model->action(action);
+    }
+}
+
 bool menu_item_is_folder(const menu_item_t *it) {
     return it && it->kind == MIK_FOLDER;
 }
@@ -612,6 +709,11 @@ bool menu_item_has_mark(const menu_item_t *it) {
 
 bool menu_item_selected(const menu_item_t *it) {
     if (!it) return false;
+    if (g_app_model) { // app owns selection state (firmware-owned rows have no mark)
+        if (!(it->flags & (MI_RADIO | MI_TOGGLE)) || !g_app_model->group_get) return false;
+        uint8_t g = g_app_model->group_get(it->group);
+        return (it->flags & MI_TOGGLE) ? (g != 0) : (g == it->value);
+    }
     if (it->flags & MI_TOGGLE) return group_get(it->group) != 0;
     if (it->flags & MI_RADIO)  return group_get(it->group) == it->value;
     return false;
@@ -619,11 +721,49 @@ bool menu_item_selected(const menu_item_t *it) {
 
 void menu_item_toggle(const menu_item_t *it) {
     if (!it) return;
+    if (g_app_model) {
+        if (!g_app_model->group_set) return;
+        if (it->flags & MI_TOGGLE) {
+            uint8_t cur = g_app_model->group_get ? g_app_model->group_get(it->group) : 0u;
+            g_app_model->group_set(it->group, cur ? 0u : 1u);
+        } else if (it->flags & MI_RADIO) {
+            g_app_model->group_set(it->group, it->value);
+        }
+        return;
+    }
     if (it->flags & MI_TOGGLE) {
         group_set(it->group, group_get(it->group) ? 0u : 1u);
     } else if (it->flags & MI_RADIO) {
         group_set(it->group, it->value);
     }
+}
+
+// ---- RGB effect enumeration (for an app's mode-picker menu) ------------------
+// Exposes the same alphabetically-sorted effect list the built-in RGB menu uses,
+// so an app can reproduce it. disp_idx is the display position; *out_mode is the
+// true rgb_matrix mode id (mode 0 = NONE is not offered, so it is disp+1 pre-sort).
+uint8_t menu_model_rgb_mode_count(void) {
+#ifdef RGB_MATRIX_ENABLE
+    return (uint8_t)RGB_MODE_COUNT;
+#else
+    return 0;
+#endif
+}
+const char *menu_model_rgb_mode_info(uint8_t disp_idx, uint8_t *out_mode) {
+#ifdef RGB_MATRIX_ENABLE
+    menu_model_init(); // guarantees rgb_mode_order[] is sorted
+    if (disp_idx >= RGB_MODE_COUNT) {
+        if (out_mode) *out_mode = 0;
+        return "";
+    }
+    uint8_t m = rgb_mode_order[disp_idx];
+    if (out_mode) *out_mode = (uint8_t)(m + 1);
+    return rgb_mode_names[m];
+#else
+    (void)disp_idx;
+    if (out_mode) *out_mode = 0;
+    return "";
+#endif
 }
 
 uint8_t menu_item_action(const menu_item_t *it) {

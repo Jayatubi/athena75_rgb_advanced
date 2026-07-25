@@ -17,6 +17,9 @@ void ui_wire_rect(uint8_t *fb, int16_t x, int16_t y, int16_t w, int16_t h, uint1
 void ui_hline(uint8_t *fb, int16_t x, int16_t y, int16_t w, uint16_t color);
 void ui_vline(uint8_t *fb, int16_t x, int16_t y, int16_t h, uint16_t color);
 void ui_ring(uint8_t *fb, int16_t cx, int16_t cy, int16_t r, bool filled, uint16_t color);
+// Blit a w*h big-endian RGB565 image (row-major, same byte order as fb) at the
+// window-logical (x,y); clipped to the virtual window + stencil like ui_fill_rect.
+void ui_blit565(uint8_t *fb, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *img);
 void ui_text(uint8_t *fb, int16_t x, int16_t y, const char *str, uint16_t fg, uint16_t bg);
 void ui_text_alpha(uint8_t *fb, int16_t x, int16_t y, const char *str, uint16_t fg, uint16_t bg, uint8_t alpha);
 int16_t ui_text_width(const char *str);

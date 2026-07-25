@@ -26,14 +26,20 @@
 |---|---|---|---|---|---|
 | `0x00_0000` | `0x1F_0000` | `0x1000_0000` | ≈ 1.94 MiB | **固件镜像区** | boot2 + 固件代码/只读数据（LD 管理）。实际约 110 KiB，其余为余量。 |
 | `0x1F_0000` | `0x20_0000` | `0x101F_0000` | 64 KiB | **Vial/VIA EEPROM** | wear-leveling 备份区（逻辑 32 KiB）。**禁写**（见写预算规则）。 |
-| `0x20_0000` | `0x40_0000` | `0x1020_0000` | 2 MiB | **保留空隙** | 属于"≤4 MiB 固件 LD 预留"的尾部，当前未使用。 |
-| `0x40_0000` | `0x60_0000` | `0x1040_0000` | 2 MiB | **开机动画槽 (boot)** | QGF 开机图，由独立 UF2 烧录。`BOOT_QGF_ADDR`。 |
-| `0x60_0000` | `0x100_0000` | `0x1060_0000` | 10 MiB | **关键帧动画槽 (anim)** | QGF 关键帧，由 anim UF2 烧录；固件 MCU 实时补间。`ANIM_QGF_ADDR`，`MAX_ANIM_FRAMES=319`。 |
+| `0x20_0000` | `0x40_0000` | `0x1020_0000` | 2 MiB | **固件预留尾部** | "≤4 MiB 固件 LD 预留"的尾部，当前未使用。 |
+| `0x40_0000` | `0x80_0000` | `0x1040_0000` | 4 MiB | **开机动画区 (boot)** | QGF 开机图 + 余量，由独立 UF2 烧录。`BOOT_QGF_ADDR`（splash 只用开头）。 |
+| `0x80_0000` | `0x100_0000` | `0x1080_0000` | 8 MiB | **App 槽区 (slots)** | 32 × 256 KiB slot，relocatable slot app（SETTINGS/SLIDES/MATRIX）。`ATHENA_APP_AREA_*`。 |
 
-> 注：`app/c1_gfx.h` 把 `0x1000_0000..0x1040_0000`（4 MiB）整体标为"固件区
-> (code+rodata, ≤4MB, LD-managed)"。其中 EEPROM 被固定在 `0x1F_0000`（= 2 MiB − 64 KiB，
-> 沿用 16M 之前的旧布局），所以固件实际代码必须落在 `0x1F_0000` 之下；
+> 注 1：固件区仍为 4 MiB（`0x1000_0000..0x1040_0000`）。EEPROM 固定在 `0x1F_0000`
+> （= 2 MiB − 64 KiB，沿用旧布局），固件代码必须落在 `0x1F_0000` 之下；
 > `0x20_0000..0x40_0000` 这 2 MiB 是该 4 MiB 预留里未用的尾部。
+>
+> 注 2：旧的"独立 10 MiB keyframe 动画区"已废弃 —— 开机动画区扩到 4 MiB，其后 8 MiB
+> 全部规划为 app 槽。SLIDES（关键帧播放器）将以 slot app + 自带数据槽的形式回来。
+>
+> 注 3：App 槽几何（`app_upload.h` / `proto.h` / `app_pkg.h` / `apps/sdk/app.ld`）：
+> slot0 = `0x1080_0000` .. slot31 = `0x10FC_0000`，每 slot 256 KiB；每个 app 首 slot 的
+> 末 4 KiB 为 save/data sector，故代码镜像 ≤ 252 KiB，可跨更多 slot 存数据。
 
 ---
 
@@ -53,8 +59,9 @@
 |---|---|
 | `PICO_FLASH_SIZE_BYTES` (16 MiB) | `config.h` |
 | EEPROM base `0x001F_0000` / backing 64 KiB / logical 32 KiB | `keymaps/vial/config.h`（`WEAR_LEVELING_RP2040_FLASH_BASE`、`WEAR_LEVELING_BACKING_SIZE`） |
-| 固件区 / boot 槽 / keyframe 槽边界 | `app/c1_gfx.h`（`BOOT_QGF_ADDR`、`ANIM_QGF_ADDR`、注释里的分区图） |
-| 打包/烧录地址（boot=`0x1040_0000`、anim=`0x1060_0000`、10 MiB 容量） | `tools/png_to_uf2.py`（`BOOT_ADDR`/`BOOT_END`/`SLOT_ADDR`/`SLOT_BYTES`） |
+| 固件区 / boot 区 / app 槽区边界 | `app/c1_gfx.h`（`BOOT_QGF_ADDR`、注释里的分区图；`ANIM_QGF_ADDR` 为 legacy） |
+| App 槽区 begin/end + slot 几何 | `app_upload.h`、`tools/host/common/proto.h`（`*_APP_AREA_*` / `*_APP_SLOT_*`）、`tools/host/common/app_pkg.h`（`APP_LINK_BASE`）、`apps/sdk/app.ld`（`LINK_BASE`/FLASH ORIGIN） |
+| 打包/烧录地址（boot=`0x1040_0000`、boot 区 4 MiB） | `tools/png_to_uf2.py`（`BOOT_ADDR`/`BOOT_END`；`SLOT_*` 为 legacy） |
 | JEDEC / diag 报告 | `probe_flash.c`、`user_rawhid.c`（`ath_handle_diag` / `ath_handle_probe`） |
 
 ---
@@ -100,6 +107,8 @@ app slots: 5 x 1 MiB from 0x10A0_0000 (reserve last 1 MiB from 0x10F0_0000)
 
 - **禁写区**：固件镜像区 `0x00_0000`–`0x40_0000`（XIP `0x1000_0000`–`0x1040_0000`）；
   其中 EEPROM `0x1F_0000`–`0x20_0000`（XIP `0x101F_0000`–`0x1020_0000`）尤其不能碰。
-- **安全刮擦区**：数据区 `0x40_0000`–`0x100_0000`（XIP `0x1040_0000`–`0x1100_0000`，如 `0x1080_0000`）。
-  注意这会覆盖 boot/anim 动画内容——测试后需重烧对应 UF2 才能恢复动画。
+- **App 槽区**：`0x80_0000`–`0x100_0000`（XIP `0x1080_0000`–`0x1100_0000`）由 slot app
+  安装流程（`host_tool app ...` / BOOTSEL UF2）管理；手动 probe 刮擦会覆盖已装 app。
+- **安全刮擦区**：boot 区/app 槽区 `0x40_0000`–`0x100_0000`（XIP `0x1040_0000`–`0x1100_0000`，
+  如 `0x1080_0000`）。注意这会覆盖 boot 动画或已装 app——测试后需重烧才能恢复。
 - `probe erase/prog` 只校验地址在 XIP 窗口内，**不保护固件/EEPROM**，地址由调用方负责。

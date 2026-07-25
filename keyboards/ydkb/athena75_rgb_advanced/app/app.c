@@ -33,21 +33,33 @@ void app_launch_slot(uint32_t base) {
     slot_base = base;
     __sync_synchronize();     // publish base before pending
     slot_pending = true;
+    // If a slot app is already running (e.g. SETTINGS launching another app), the
+    // desired app is still app_slot, so force a re-enter of the adapter to make it
+    // tear down the old app and load the new base.
+    reinit_req = true;
 }
 bool     app_slot_pending(void)  { return slot_pending; }
 uint32_t app_slot_req_base(void) { return slot_base; }
+
+// Leave the running slot app and fall back to the launcher. Clearing slot_pending
+// makes app_desired() return app_launcher next frame; app_run() then calls the
+// slot adapter's exit() (which invokes the app's exit()) before entering the
+// launcher, so teardown stays clean. Safe from core1 (the app) or core0.
+void app_return_to_launcher(void) {
+    slot_pending = false;
+}
 
 // Desired app for this frame, derived purely from state (no control-flow coupling
 // in the display loop): boot until the splash ends, then menu when open, then a
 // requested slot app, else the persistent display mode.
 static const app_t *app_desired(void) {
     if (!boot_done) return &app_boot;
-    if (menu_is_active()) return &app_menu;
     if (slot_pending) return &app_slot;
-    // ANIMATION / MATRIX are removed from the menu for now: with no persistent app
-    // the screen stays black until a slot app is launched. (persist_mode is kept
-    // for eeconfig compatibility but no longer selects anim/matrix here.)
-    return &app_blank;
+    // Home screen: the OS launcher (icon grid of installed apps). A launched slot
+    // app takes over via slot_pending; leaving it (return-to-launcher) drops back
+    // here. (persist_mode is kept for eeconfig compatibility but no longer selects
+    // the removed built-in anim/matrix renderers.)
+    return &app_launcher;
 }
 
 void app_init(void) {
@@ -60,6 +72,25 @@ void app_init(void) {
 }
 
 void app_run(void) {
+    // Modal menu overlay: while the OS menu is open (or an app just requested it
+    // via host_api menu_run), suspend the current app -- keep it loaded, don't
+    // tick it and don't switch apps -- and render the menu instead. The suspended
+    // app resumes on the first frame after the menu closes. Menu input and model
+    // updates run on core0 (menu_process_key / menu_housekeeping_task /
+    // menu_service); this is purely the core1 render + suspend half.
+    if (menu_is_active()) {
+        menu_clear_pending();           // core0 has entered it; drop the local flag
+        menu_render_task();
+        last_tick = timer_read32();     // reset the delta so the app doesn't see a jump
+        return;
+    }
+    if (menu_open_pending()) {
+        // Requested this frame but core0 hasn't opened it yet: hold the frame
+        // (don't tick the app) so it can't observe a false "menu closed".
+        last_tick = timer_read32();
+        return;
+    }
+
     const app_t *want   = app_desired();
     bool         reinit = reinit_req || (c1_wake_seq() != wake_ack);
 

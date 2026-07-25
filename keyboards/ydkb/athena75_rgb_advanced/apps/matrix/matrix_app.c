@@ -153,8 +153,19 @@ static void matrix_enter(void) {
     mtx_seed();
 }
 
+// Drain the OS input ring: Esc returns to the launcher (the app's own back
+// convention over the raw key stream; gif stays the OS input-mode toggle).
+static void matrix_input(void) {
+    app_key_event_t ev;
+    while (g_api->poll_event(&ev)) {
+        if (ev.pressed && ev.keycode == APP_KEY_ESC) g_api->exit_to_launcher();
+    }
+}
+
 static void matrix_tick(uint32_t dt_ms) {
     (void)dt_ms;
+
+    matrix_input();
 
     if (timer_elapsed32(mtx_render_t) < MTX_RENDER_MS) return;
     mtx_render_t = timer_read32();

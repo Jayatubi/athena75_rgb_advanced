@@ -98,3 +98,15 @@ bool    menu_item_has_mark(const menu_item_t *it);  // draws a radio/checkbox ci
 bool    menu_item_selected(const menu_item_t *it);  // circle filled vs hollow
 void    menu_item_toggle(const menu_item_t *it);    // Space: select (radio) / flip (toggle)
 uint8_t menu_item_action(const menu_item_t *it);    // MIK_ACTION -> menu_action_t, else MA_NONE
+
+// ---- app-supplied menu model (content by app; engine by firmware) -----------
+// menu_run() (host_api) hands the engine an app_menu_model_t; the accessors above
+// then serve it instead of the built-in tree. Set NULL to restore the built-in.
+struct app_menu_model_t;
+void        menu_model_set_app(const struct app_menu_model_t *m);
+const char *menu_model_app_root_title(void);        // NULL => use firmware default
+void        menu_model_user_action(uint8_t action); // action >= APP_MENU_ACT_USER
+
+// RGB effect list (alphabetical), so an app can reproduce the RGB mode picker.
+uint8_t     menu_model_rgb_mode_count(void);
+const char *menu_model_rgb_mode_info(uint8_t disp_idx, uint8_t *out_mode);

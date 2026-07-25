@@ -62,7 +62,7 @@
 #define ATHENA_XIP_BASE      0x10000000u
 
 // Slot-app upload: 0xFD 0x64 <sub>. Load an independently compiled .app into a
-// flash slot in the last-6MB app area. Like the firmware-flash prompt, BEGIN
+// flash slot in the last-8MB app area. Like the firmware-flash prompt, BEGIN
 // raises an on-screen "Install app?" dialog and the write only proceeds once the
 // user accepts; the LCD shows a progress bar while erasing/programming.
 #define ATHENA_APP_CMD     0x64
@@ -83,10 +83,12 @@
 #define ATHENA_APPUP_ACTIVE  4  // erasing/programming in progress
 #define ATHENA_APPUP_DONE    5  // finished; slot holds the app
 
-// Slot-app flash area: the last 6 MB (never firmware/EEPROM/boot). Matches app.ld.
-#define ATHENA_APP_AREA_BEGIN 0x10A00000u
+// Slot-app flash area: the last 8 MB (never firmware/EEPROM/boot). Matches app.ld.
+// Layout: firmware 0x10000000..0x10400000 (4MB), boot region 0x10400000..0x10800000
+// (4MB), app slots 0x10800000..0x11000000 (8MB).
+#define ATHENA_APP_AREA_BEGIN 0x10800000u
 #define ATHENA_APP_AREA_END   0x11000000u
-// A slot is 256 KiB (24 slots in 6 MB). The first slot's last 4 KiB is the app's
+// A slot is 256 KiB (32 slots in 8 MB). The first slot's last 4 KiB is the app's
 // save sector, so a code image must fit in 252 KiB; apps may span more slots.
 #define ATHENA_APP_SLOT_SIZE      0x40000u
 #define ATHENA_APP_SLOT_SAVE_SIZE 0x1000u
@@ -94,3 +96,11 @@
 // BEGIN carries the app name after the header: data[11..26] = name[16].
 #define ATHENA_APP_NAME_OFF 11
 #define ATHENA_APP_NAME_LEN 16
+
+// OS input-mode control: 0xFD 0x65 <sub>. Lets the host grab/release keyboard
+// input the same way the gif key / apps do. Reply: data[3] = current mode.
+#define ATHENA_MODE_CMD    0x65
+#define ATHENA_MODE_KBD    0x00   // set normal keyboard mode
+#define ATHENA_MODE_OS     0x01   // set OS input mode
+#define ATHENA_MODE_TOGGLE 0x02   // toggle
+#define ATHENA_MODE_QUERY  0x10   // just report the current mode

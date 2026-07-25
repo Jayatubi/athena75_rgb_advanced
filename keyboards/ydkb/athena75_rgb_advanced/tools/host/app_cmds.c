@@ -456,7 +456,7 @@ static int app_relocate(int argc, char **argv) {
     }
     if (!app_path || !slot_str) {
         printf("usage: app relocate <file.app> <slot> [-o out.bin]\n");
-        printf("  slot: XIP address of the target slot, e.g. 0x10A00000\n");
+        printf("  slot: XIP address of the target slot, e.g. 0x10800000\n");
         return 2;
     }
     uint32_t slot = (uint32_t)strtoul(slot_str, NULL, 0);

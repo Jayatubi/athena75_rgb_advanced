@@ -11,6 +11,16 @@
 #include "quantum.h"
 #include "timer.h"
 #include <string.h>
+#include "apps/sdk/host_api.h"  // APP_MENU_CHILD_* / APP_MENU_ACT_* / app_menu_model_t
+
+// Firmware-owned screens can be reached from either the built-in tree (MN_*) or an
+// app model (reserved APP_MENU_CHILD_* ids); recognise both.
+static inline bool node_is_lcdtest(menu_node_id_t n) {
+    return n == MN_LCD_TEST || (uint8_t)n == APP_MENU_CHILD_LCDTEST;
+}
+static inline bool node_is_app(menu_node_id_t n) {
+    return n == MN_APP || (uint8_t)n == APP_MENU_CHILD_APP;
+}
 
 volatile menu_view_t menu_view;
 
@@ -153,6 +163,34 @@ bool menu_is_active(void) {
     return menu_view.active || menu_view.phase != 0;
 }
 
+// ---- open request (core1 app/launcher -> core0) -----------------------------
+// The menu engine's state + input live on core0, but apps/the launcher run on
+// core1. menu_run() (host_api) calls menu_request_open() on core1; menu_service()
+// (core0 housekeeping) performs the actual menu_enter(). s_open_pending is a
+// core1-local flag so the app runtime can overlay the menu on the very next frame
+// -- before core0 has serviced the request -- and thus never tick the suspended
+// app in that one-frame gap (which would make a trivial "open then exit" app see
+// a false "menu already closed").
+static volatile bool s_open_req;      // core1 -> core0: enter the menu
+static volatile bool s_open_pending;  // core1-local: requested, not yet open
+static const app_menu_model_t *volatile s_open_model; // content for this open (NULL=built-in)
+
+void menu_request_open(const app_menu_model_t *model) {
+    s_open_model  = model;
+    s_open_pending = true;
+    __sync_synchronize();
+    s_open_req = true;
+}
+void menu_service(void) {              // core0
+    if (s_open_req) {
+        s_open_req = false;
+        menu_model_set_app(s_open_model); // NULL => the built-in tree
+        menu_enter();
+    }
+}
+bool menu_open_pending(void) { return s_open_pending; }
+void menu_clear_pending(void) { s_open_pending = false; }
+
 static bool is_nav_key(uint16_t keycode) {
     switch (keycode) {
         case KC_UP:
@@ -189,7 +227,7 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
 
     // LCD TEST screen: live panel-window calibration. Arrows nudge the window
     // (shift resizes); Enter saves + returns, Esc discards + returns.
-    if (node == MN_LCD_TEST) {
+    if (node_is_lcdtest(node)) {
         switch (keycode) {
             case KC_ENTER:
                 menu_repeat_reset();
@@ -250,13 +288,14 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             const menu_item_t *it = menu_item_at(node, menu_wr.focus);
             if (menu_item_is_folder(it)) {
                 // Snapshot the window before entering LCD TEST so Esc can undo.
-                if ((menu_node_id_t)it->child == MN_LCD_TEST) ui_vscr_edit_begin();
+                if (node_is_lcdtest((menu_node_id_t)it->child)) ui_vscr_edit_begin();
                 // Opening APP re-scans the flash app area (manual re-scan) so the
                 // list reflects anything uploaded since the last scan.
-                if ((menu_node_id_t)it->child == MN_APP) menu_model_refresh_apps();
+                if (node_is_app((menu_node_id_t)it->child)) menu_model_refresh_apps();
                 menu_push((menu_node_id_t)it->child);
             } else {
-                switch (menu_item_action(it)) {
+                uint8_t act = menu_item_action(it);
+                switch (act) {
                     case MA_EXIT:    menu_exit();          break;
                     case MA_REBOOT:  menu_exit();          // restore keyboard, then restart
                                      soft_reset_keyboard(); break; // mcu_reset (does not return)
@@ -268,7 +307,7 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
                         if (a) { app_launch_slot(a->base); menu_exit(); }
                         break;
                     }
-                    default: break;
+                    default: menu_model_user_action(act); break; // app-defined action
                 }
             }
             return true;
@@ -299,7 +338,7 @@ void menu_housekeeping_task(void) {
 
     if (menu_rpt_kc == KC_NO) return;
 
-    bool lcd_test = (current_node() == MN_LCD_TEST);
+    bool lcd_test = node_is_lcdtest(current_node());
 
     const uint16_t delay = LCD_GIF_REPEAT_DELAY;
     const uint16_t rate  = LCD_GIF_REPEAT_RATE;
@@ -400,7 +439,10 @@ static menu_node_id_t view_node(const menu_view_t *v) {
 // into it (root has a fixed title). No per-node title table: it falls out of the
 // existing tree, so renamed/added submenus title themselves automatically.
 static const char *menu_node_title(const menu_view_t *v) {
-    if (v->depth == 0) return LCD_MENU_TITLE_ROOT_FULL; // root: name + build number
+    if (v->depth == 0) { // root: app model's own title, else firmware name + build
+        const char *t = menu_model_app_root_title();
+        return t ? t : LCD_MENU_TITLE_ROOT_FULL;
+    }
     menu_node_id_t cur    = view_node(v);
     menu_node_id_t parent = (v->depth == 1) ? MN_ROOT : (menu_node_id_t)v->path[v->depth - 2];
     uint8_t n = menu_node_item_count(parent);
@@ -806,7 +848,7 @@ void menu_render_task(void) {
     // LCD TEST: 8px checkerboard + red edge frame drawn into the *virtual window*
     // (the ui_* layer translates/clips to it) so the calibrated visible area can
     // be aligned to the glass by eye while it is edited live. Bypasses the scene.
-    if (node == MN_LCD_TEST) {
+    if (node_is_lcdtest(node)) {
         menu_scene_drop();
         uint8_t *fb = fbShow;
         ui_clear(fb, 0x0000);

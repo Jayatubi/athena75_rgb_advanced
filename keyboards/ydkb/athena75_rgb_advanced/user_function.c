@@ -27,6 +27,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "menu_model.h"
 #include "dialog.h"
 #include "app_upload.h"
+#include "app_input.h"
+#include "app_sys.h"
 
 void reboot(bool bootloader)
 {
@@ -41,63 +43,11 @@ void reboot(bool bootloader)
     }
 }
 
-// gif key (0x7e04): first press/combo only shows HUD status; while HUD is up,
-// further gif+/combos apply (effect / GAP / dir / tween / FT). See gif_ctl_armed.
-// Arrow / - / = support short press (one step) and long-press repeat.
-static bool     gif_held       = false;
-static bool     gif_combo_used = false;
-static uint16_t gif_rpt_kc     = KC_NO; // combo key held for long-press repeat
-static uint32_t gif_rpt_timer  = 0;
-static bool     gif_rpt_armed  = false; // true after initial delay elapsed
-
-static void gif_combo_fire(uint16_t keycode) {
-    switch (keycode) {
-        case KC_UP:     next_gif_speed(-1); break;
-        case KC_DOWN:   next_gif_speed(+1); break;
-        case KC_LEFT:   next_gif_dir(-1);   break;
-        case KC_RIGHT:  next_gif_dir(+1);   break;
-        case KC_MINUS:  next_gif_tween(-1); break;
-        case KC_EQUAL:  next_gif_tween(+1); break;
-        default:        break;
-    }
-}
-
-static bool gif_combo_is_repeatable(uint16_t keycode) {
-    switch (keycode) {
-        case KC_UP:
-        case KC_DOWN:
-        case KC_LEFT:
-        case KC_RIGHT:
-        case KC_MINUS:
-        case KC_EQUAL:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static void gif_rpt_begin(uint16_t keycode) {
-    gif_combo_fire(keycode);
-    gif_combo_used = true;
-    if (gif_combo_is_repeatable(keycode)) {
-        gif_rpt_kc    = keycode;
-        gif_rpt_timer = timer_read32();
-        gif_rpt_armed = false;
-    }
-}
-
-static void gif_rpt_end(uint16_t keycode) {
-    if (gif_rpt_kc == keycode) {
-        gif_rpt_kc    = KC_NO;
-        gif_rpt_armed = false;
-    }
-}
-
+// The gif key (0x7e04) is now a dedicated, fixed OS-input-mode toggle (see
+// app_input.h). Its old roles (tap = cycle effect, hold+combos = anim params,
+// gif+Space = open menu, gif+F = FT HUD) are gone — those behaviours move into
+// apps. menu_input_reset() is kept as a no-op for menu.c's call site.
 void menu_input_reset(void) {
-    gif_held        = false;
-    gif_combo_used  = false;
-    gif_rpt_kc      = KC_NO;
-    gif_rpt_armed   = false;
 }
 
 // The firmware-flash confirmation is just a generic dialog: FLASH (default focus,
@@ -119,79 +69,43 @@ void flash_prompt_request(void) {
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // gif key (0x7e04): the dedicated OS-input-mode toggle. Always intercepted, in
+    // either mode; never sent to the host and never enqueued as an app event.
+    if (keycode == 0x7e04) {
+        if (record->event.pressed) app_input_toggle();
+        return false;
+    }
+
+    // via/vial reset to bootloader stays available in both modes.
+    if (keycode == 0x5c00) {
+        if (record->event.pressed) reboot(1);
+        return false;
+    }
+
     // Modal dialog: swallow all input while it is up and feed it the keys (focus
-    // move / activate / cancel). Checked before the menu so it takes over whatever
-    // is on screen.
+    // move / activate / cancel). A host-raised dialog is interactive regardless of
+    // input mode, so this is checked first.
     if (dialog_is_active()) {
         dialog_process_key(keycode, record->event.pressed);
         return false;
     }
 
+    // Legacy on-screen menu (core0-driven; still consumed until SETTINGS replaces
+    // it via the OS menu service). Swallows keys while up.
     if (menu_is_active()) {
         menu_process_key(keycode, record->event.pressed);
         return false;
     }
 
-    switch (keycode) {
-        case 0x5c00: // via/vial reset to bootloader
-            if (record->event.pressed) {
-                reboot(1);
-            }
-            return false;
-        case 0x7e04: // gif key: hold + combos; plain tap = cycle effect
-            if (record->event.pressed) {
-                gif_held       = true;
-                gif_combo_used = false;
-            } else {
-                gif_held   = false;
-                gif_rpt_kc = KC_NO;
-                gif_rpt_armed = false;
-                if (!gif_combo_used) next_gif_id(); // pure tap -> next effect
-            }
-            return false;
-        case KC_UP:
-        case KC_DOWN:
-        case KC_LEFT:
-        case KC_RIGHT:
-        case KC_MINUS:
-        case KC_EQUAL:
-            if (gif_held) {
-                if (record->event.pressed) {
-                    gif_rpt_begin(keycode);
-                } else {
-                    gif_rpt_end(keycode);
-                }
-                return false;
-            }
-            return true;
-        case KC_SPACE:
-            if (gif_held) {
-                if (record->event.pressed) {
-                    menu_enter();
-                    gif_combo_used = true;
-                }
-                return false;
-            }
-            return true;
-        case KC_F:
-            if (gif_held) {
-                if (record->event.pressed) {
-                    toggle_ft_hud(); // no long-press repeat (toggle)
-                    gif_combo_used = true;
-                }
-                return false;
-            }
-            return true;
-#if 0
-        case 0x7820 ... 0x7833:
-            if (record->event.pressed) {
-                rgbinfo_display_on = 30;
-            }
-            return true;
-#endif
-        default:
-            return true;
+    // OS input mode: keys drive the core1 OS (launcher/apps), NOT the host. Swallow
+    // and forward the raw event into the core0->core1 ring.
+    if (app_input_mode() == APP_INPUT_OS) {
+        app_input_push(keycode, record->event.pressed);
+        return false;
     }
+
+    // Normal keyboard mode: everything else is a normal keyboard.
+    return true;
 }
 
 void keyboard_post_init_user(void) {
@@ -202,6 +116,9 @@ void keyboard_post_init_user(void) {
 
 void housekeeping_task_user(void) {
     app_upload_task();          // release the "app loaded" banner shortly after a load
+    app_input_service();        // apply any core1-requested input-mode change (core0-side)
+    app_sys_service();          // publish RGB; apply core1 reboot/RGB/save requests
+    menu_service();             // apply a core1 menu_run() open request (core0-side)
 
     if (dialog_is_active()) {
         dialog_task();          // drives the idle timeout (fires the negative button)
@@ -211,21 +128,6 @@ void housekeeping_task_user(void) {
     if (menu_is_active()) {
         menu_housekeeping_task();
         return;
-    }
-
-    if (!gif_held || gif_rpt_kc == KC_NO) return;
-
-    const uint16_t delay = LCD_GIF_REPEAT_DELAY;
-    const uint16_t rate  = LCD_GIF_REPEAT_RATE;
-    if (!gif_rpt_armed) {
-        if (timer_elapsed32(gif_rpt_timer) >= delay) {
-            gif_rpt_armed = true;
-            gif_rpt_timer = timer_read32();
-            gif_combo_fire(gif_rpt_kc);
-        }
-    } else if (timer_elapsed32(gif_rpt_timer) >= rate) {
-        gif_rpt_timer = timer_read32();
-        gif_combo_fire(gif_rpt_kc);
     }
 }
 
@@ -268,7 +170,8 @@ bool socd_key_state[2][2] = { {0,0},{0,0}};
 
 void post_process_record_user(uint16_t keycode, keyrecord_t *record)
 {
-    if (menu_is_active()) return;
+    // No host key output while a menu is up or the OS owns input (SOCD included).
+    if (menu_is_active() || app_input_mode() == APP_INPUT_OS) return;
 
     if (keycode >= 0x7e00 && keycode <= 0x7e03) {
         uint8_t key = keycode - 0x7e00;

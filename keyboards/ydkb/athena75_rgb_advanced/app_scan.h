@@ -1,7 +1,7 @@
 // Copyright 2026 YANG
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Slot-app discovery. Walks the last-6MB app area (see app_upload.h) slot by
+// Slot-app discovery. Walks the last-8MB app area (see app_upload.h) slot by
 // slot, validates each slot header (magic / ABI / size / CRC over the XIP image)
 // and keeps a small table of the apps that are actually installed. Reads only —
 // scanning is free (no erase/program), so it may run at boot and again whenever

@@ -19,11 +19,15 @@
 
 // External-flash partition (16MB), laid out after the firmware image:
 //   0x10000000..0x10400000  firmware (code + rodata, <=4MB; LD-managed)
-//   0x10400000..0x10600000  boot splash slot (2MB)   -> replaceable via its own UF2
-//   0x10600000..0x11000000  keyframe slot   (10MB)   -> keyframe UF2
-#define BOOT_QGF_ADDR ((const uint8_t *)(0x1040u << 16)) // boot splash slot base (2MB)
-#define ANIM_QGF_ADDR ((const uint8_t *)(0x1060u << 16)) // keyframe slot base (10MB)
-#define MAX_ANIM_FRAMES 319 // 10MB slot / ~32.8KB per uncompressed frame; sanity bound
+//   0x10400000..0x10800000  boot region (4MB)         -> boot splash UF2 (uses the start)
+//   0x10800000..0x11000000  app slots  (8MB = 32x256K)-> slot apps (SETTINGS/SLIDES/MATRIX)
+#define BOOT_QGF_ADDR ((const uint8_t *)(0x1040u << 16)) // boot splash slot base (in boot region)
+// LEGACY: the standalone keyframe region is gone (SLIDES becomes a slot app with its
+// own data slots). ANIM_QGF_ADDR/MAX_ANIM_FRAMES remain only until the built-in anim
+// renderer is removed from the OS (see os-launcher); the address now points into the
+// boot region and holds no valid keyframe data.
+#define ANIM_QGF_ADDR ((const uint8_t *)(0x1060u << 16)) // legacy keyframe base (pending removal)
+#define MAX_ANIM_FRAMES 319 // legacy sanity bound (pending removal)
 
 // ---- Shared state -----------------------------------------------------------
 extern uint8_t         fbShow[ANIM_BYTES]; // present buffer + menu/UI canvas
