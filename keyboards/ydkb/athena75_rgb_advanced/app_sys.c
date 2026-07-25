@@ -22,10 +22,13 @@
 #endif
 
 #include "via.h"                 // via_get/set_layout_options (CapsLock colour / scope)
+#include "c1.h"                  // lcd_sleep_timeout_{load,store}
 extern void user_eeconfig_init(void); // re-parse + apply layout options after a change
 
 // Bit layout inside the layout-options word (mirrors menu_model.c / user_rawhid.c):
 // bits[0:2] = CapsLock colour, bits[3:5] = RGB scope.
+// Sleep timeout is NOT here — VIA_EEPROM_LAYOUT_OPTIONS_SIZE is 1 byte on this
+// board, so bits[9:11] would never persist. Sleep lives in user_eeconfig.sleep.
 #define LO_CAPS_SHIFT  0u
 #define LO_SCOPE_SHIFT 3u
 #define LO_FIELD_MASK  0x07u
@@ -57,13 +60,14 @@ void app_sys_rgb_set(const app_rgb_state_t *in) {
     s_rgb_req = true;
 }
 
-// ---- CapsLock colour / RGB scope (layout options) --------------------------
-static volatile uint8_t s_caps_pub, s_scope_pub;                 // published (core0)
-static volatile bool    s_caps_req, s_scope_req;                 // pending set (core1)
-static volatile uint8_t s_caps_want, s_scope_want;
+// ---- CapsLock colour / RGB scope / sleep timeout (layout options) ----------
+static volatile uint8_t s_caps_pub, s_scope_pub, s_sleep_pub;    // published (core0)
+static volatile bool    s_caps_req, s_scope_req, s_sleep_req;    // pending set (core1)
+static volatile uint8_t s_caps_want, s_scope_want, s_sleep_want;
 
 uint8_t app_sys_caps_color_get(void) { return s_caps_pub; }
 uint8_t app_sys_rgb_scope_get(void)  { return s_scope_pub; }
+uint8_t app_sys_sleep_timeout_get(void) { return s_sleep_pub; }
 
 void app_sys_caps_color_set(uint8_t idx) {
     s_caps_want = idx & LO_FIELD_MASK;
@@ -75,6 +79,15 @@ void app_sys_rgb_scope_set(uint8_t scope) {
     __sync_synchronize();
     s_scope_req = true;
 }
+void app_sys_sleep_timeout_set(uint8_t code) {
+    if (code > 4u) return;
+    s_sleep_want = code;
+    __sync_synchronize();
+    s_sleep_req = true;
+}
+
+// Publish the persisted sleep code once at first service (and after sets).
+static bool s_sleep_loaded;
 
 // ---- app registry / management ---------------------------------------------
 // Session-only enable/disable bitmap (bit set = disabled). Persistence across a
@@ -160,6 +173,10 @@ void app_sys_service(void) {
         uint32_t lo = via_get_layout_options();
         s_caps_pub  = (uint8_t)((lo >> LO_CAPS_SHIFT)  & LO_FIELD_MASK);
         s_scope_pub = (uint8_t)((lo >> LO_SCOPE_SHIFT) & LO_FIELD_MASK);
+        if (!s_sleep_loaded) {
+            s_sleep_pub    = lcd_sleep_timeout_load();
+            s_sleep_loaded = true;
+        }
         bool changed = false;
         if (s_caps_req) {
             s_caps_req = false;
@@ -172,6 +189,14 @@ void app_sys_service(void) {
             lo = (lo & ~((uint32_t)LO_FIELD_MASK << LO_SCOPE_SHIFT)) |
                  (((uint32_t)s_scope_want & LO_FIELD_MASK) << LO_SCOPE_SHIFT);
             changed = true;
+        }
+        if (s_sleep_req) {
+            s_sleep_req = false;
+            // Persist outside layout-options (1-byte EEPROM); publish immediately
+            // so Space-selected radios update on the next menu frame.
+            lcd_sleep_timeout_store(s_sleep_want);
+            s_sleep_pub    = s_sleep_want;
+            s_sleep_loaded = true;
         }
         if (changed) {
             via_set_layout_options(lo); // persists to eeprom

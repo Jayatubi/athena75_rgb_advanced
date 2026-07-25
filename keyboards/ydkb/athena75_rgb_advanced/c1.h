@@ -23,6 +23,14 @@ void     lcd_capture_end(void);
 int16_t  lcd_capture_dim(void);
 
 void display_power_toggle(void);
+
+// Shared LCD/RGB inactivity policy. The persisted code is:
+// 0=5 min (default), 1=1 min, 2=10 min, 3=15 min, 4=never.
+// Runtime setter (no eeprom); load/store use user_eeconfig.sleep.
+void     lcd_sleep_timeout_set(uint8_t code);
+uint8_t  lcd_sleep_timeout_load(void);  // read eeprom -> apply runtime, return code
+void     lcd_sleep_timeout_store(uint8_t code); // write eeprom + apply runtime
+uint16_t lcd_sleep_timeout_ticks(void); // kb_idle_timer ticks (500 ms), 0=never
 void next_gif_id(void);
 void next_gif_speed(int8_t dir);
 void next_gif_dir(int8_t step);
@@ -48,14 +56,13 @@ uint8_t  menu_bind_get_tween_idx(void);
 bool     menu_bind_get_ft(void);
 uint8_t  menu_bind_get_effect(void);
 
-// Persistent display mode (what the LCD shows after leaving the menu): keyframe
-// animation vs Matrix digital-rain. Saved in eeconfig, restored on boot.
+// Legacy firmware-menu display radio (RAM-only; home is always the launcher).
 void     menu_bind_set_display(uint8_t mode); // 0 = ANIMATION, 1 = MATRIX
 uint8_t  menu_bind_get_display(void);
 
-// MATRIX rain tunables (persisted in eeconfig, applied live by app/matrix.c).
-// Each is an index into a small table owned by matrix.c: speed = per-cell fall
-// time, density = drop spacing + trail length, clock = digit-region floor alpha.
+// Legacy MATRIX menu stubs (live settings are in the MATRIX slot-app save sector).
+// Each is an index into a small table: speed = per-cell fall time, density =
+// drop spacing + trail length, clock = digit-region floor alpha.
 void     menu_bind_set_mtx_speed(uint8_t idx);
 uint8_t  menu_bind_get_mtx_speed(void);
 void     menu_bind_set_mtx_density(uint8_t idx);
@@ -78,34 +85,20 @@ uint32_t lcd_clock_sec(void);
 void flash_prompt_request(void);
 
 /* user config saved in eeprom */
-// NOTE ON FIELD ORDER: GCC allocates uint8_t/bool bit-fields into 1-byte
-// containers and never lets a field straddle a byte boundary -- it pads instead.
-// Only the 4-byte `raw` is persisted (eeconfig_update_user takes raw). The fields
-// below are ordered to fill each byte exactly (8+8+8+8) so nothing spills into a
-// 5th byte outside `raw`. The MATRIX fields slot into the padding the original
-// layout left (byte0 had 3 free bits after gif_id, byte2 had 4 after rand_iv),
-// so every pre-existing field keeps its original bit position -- old eeprom values
-// (anim/display settings) stay valid across this change. The _Static_assert below
-// guards the whole thing: if it ever exceeds 4 bytes, persistence breaks silently.
+// OS-owned settings only. ACE/MATRIX persist their own tunables in each app's
+// slot save sector (host_api.save_*), so the old anim/matrix bitfields here are
+// gone. Keep lcd_off at bit0 so an existing eeprom word still reads the panel
+// power flag correctly; sleep reuses the next 3 bits (clamp >4 -> 0 = 5 min).
+// GCC packs uint8_t/bool bit-fields into 1-byte containers without straddling.
 typedef union {
     uint32_t raw;
     struct {
-        // byte 0
-        bool     lcd_off  :1;
-        uint8_t  gif_id   :4;
-        uint8_t  mtx_clock:3; // MATRIX clock digit floor alpha (index into the floor table)
-        // byte 1
-        uint8_t  speed_id :4; // index into LCD_HOLD_FRAMES_LIST
-        uint8_t  dir_id   :3;
-        uint8_t  zoom_dir :1; // dissolve zoom direction (0 = grow-out, 1 = shrink-out)
-        // byte 2
-        uint8_t  rand_iv  :4; // RANDOM: index into LCD_RAND_FRAMES_LIST
-        uint8_t  mtx_speed:2; // MATRIX rain fall speed (index into the speed table)
-        uint8_t  mtx_dens :2; // MATRIX rain density   (index into the density table)
-        // byte 3
-        uint8_t  tween_n  :5; // tween frame count (LCD_TWEEN_FRAMES_MIN..MAX)
-        uint8_t  ghost_id :2; // SLIDE afterimage strength (index into ghost_decay_list)
-        uint8_t  disp_mode:1; // persistent display mode: 0 = animation, 1 = matrix rain
+        bool     lcd_off :1; // bit0: manual LCD power (unchanged position)
+        uint8_t  sleep   :3; // 0=5m, 1=1m, 2=10m, 3=15m, 4=never
+        uint8_t  _rsv0   :4;
+        uint8_t  _rsv1;
+        uint8_t  _rsv2;
+        uint8_t  _rsv3;
     };
 } user_eeconfig_t;
 _Static_assert(sizeof(user_eeconfig_t) == 4, "user_eeconfig must stay within the 4-byte eeconfig raw word");

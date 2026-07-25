@@ -67,8 +67,9 @@
 // Timeout configuration, default 30000 (30 sek). 0 = No timeout. Beware of image retention.
 #define QUANTUM_PAINTER_DISPLAY_TIMEOUT 0
 
-// Idle auto-sleep for the LCD, independent of (unreliable) USB suspend.
-// Unit: kb_idle_timer ticks (0.5s each). 600 = 5 minutes. Key press wakes it.
+// Enable idle auto-sleep for LCD + RGB. This is the default (5 minutes);
+// SETTINGS can persist 1/5/10/15 minutes or disable sleep at runtime.
+// Unit: kb_idle_timer ticks (0.5s each). Key press wakes both LCD and RGB.
 #define LCD_IDLE_TIMEOUT 600
 
 // ---- MCU real-time tweening (keyframe-only QGF in flash) ----

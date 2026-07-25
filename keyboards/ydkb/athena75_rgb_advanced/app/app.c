@@ -65,7 +65,7 @@ static const app_t *app_desired(void) {
 void app_init(void) {
     cur          = NULL;                              // first app_run() enters boot
     boot_done    = false;
-    persist_mode = user_eeconfig.disp_mode % DM_COUNT;
+    persist_mode = DM_ANIM;                           // legacy; home is always launcher
     last_tick    = timer_read32();
     wake_ack     = c1_wake_seq();
     reinit_req   = false;
@@ -117,14 +117,12 @@ bool         app_boot_active(void) { return cur == NULL || cur == &app_boot; }
 void         app_boot_finish(void) { boot_done = true; }
 void         app_request_reinit(void) { reinit_req = true; }
 
-// ---- Persistent display mode (root radio: ANIMATION vs MATRIX) --------------
-// Switching just updates the selector + eeprom; the reconciler then swaps apps on
-// the next frame and the new app's enter() does the mode-specific (re)init.
+// ---- Legacy display-mode radio (firmware fallback menu only) ----------------
+// Home is always the launcher now; ACE/MATRIX settings live in slot save data.
+// Keep a RAM-only selector so old menu nodes still compile/link.
 void menu_bind_set_display(uint8_t mode) {
-    persist_mode            = mode % DM_COUNT;
-    user_eeconfig.disp_mode = persist_mode;
-    eeconfig_update_user(user_eeconfig.raw);
-    slot_pending            = false; // picking a persistent mode leaves any slot app
+    persist_mode = mode % DM_COUNT;
+    slot_pending = false; // picking a persistent mode leaves any slot app
 }
 uint8_t menu_bind_get_display(void) { return persist_mode % DM_COUNT; }
 

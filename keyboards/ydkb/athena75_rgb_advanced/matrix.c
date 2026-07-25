@@ -179,7 +179,7 @@ uint8_t matrix_scan(void)
     static uint16_t half_second_timer = 0;
     if (half_second_timer != timer_read() && timer_elapsed(half_second_timer) >= 500) {
         half_second_timer = timer_read();
-        kb_idle_timer++;
+        if (kb_idle_timer != UINT16_MAX) kb_idle_timer++;
 
         dprintf("\nScan: %d/s, idle: %d", scan_speed*2, kb_idle_timer);
         scan_speed = 0;

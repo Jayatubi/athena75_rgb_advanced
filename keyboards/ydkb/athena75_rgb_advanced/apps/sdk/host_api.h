@@ -232,6 +232,12 @@ typedef struct host_api_t {
     //           else         { api->exit_to_launcher(); }   // menu has closed
     void     (*menu_run)(const app_menu_model_t *model);
     bool     (*menu_active)(void);
+
+    // ---- shared LCD/RGB inactivity sleep (persisted by firmware) -----------
+    // Codes: 0=5 min (default), 1=1 min, 2=10 min, 3=15 min, 4=never.
+    // Appended to ABI v3 so existing v3 apps retain all earlier field offsets.
+    uint8_t  (*sleep_timeout_get)(void);
+    void     (*sleep_timeout_set)(uint8_t code);
 } host_api_t;
 
 // ---- What an app exposes back to the firmware -------------------------------

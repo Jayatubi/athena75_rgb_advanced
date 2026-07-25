@@ -33,6 +33,21 @@ bool is_st7735 = false;
 painter_device_t display;
 static bool now_lcd_off = 0;
 static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
+static volatile uint8_t lcd_sleep_code = 0; // 0=5m default, 1=1m, 2=10m, 3=15m, 4=never
+
+void lcd_sleep_timeout_set(uint8_t code) {
+    lcd_sleep_code = code <= 4u ? code : 0u;
+}
+
+uint16_t lcd_sleep_timeout_ticks(void) {
+    switch (lcd_sleep_code) {
+        case 1: return 120u;                 // 1 minute
+        case 2: return 1200u;                // 10 minutes
+        case 3: return 1800u;                // 15 minutes
+        case 4: return 0u;                   // never
+        default: return LCD_IDLE_TIMEOUT;    // 5 minutes
+    }
+}
 
 // Bumped on every panel power-on (cold init / wake). The app runtime re-enters
 // the active app when this changes so it re-inits its frame (GRAM was lost).
@@ -225,12 +240,13 @@ void c1_lcd_apply_persisted(void) {
 static volatile uint8_t vscr_ox = 0, vscr_oy = 0, vscr_w = ANIM_SIZE, vscr_h = ANIM_SIZE;
 static uint8_t vscr_sav_ox, vscr_sav_oy, vscr_sav_w, vscr_sav_h; // LCD TEST cancel snapshot
 
-typedef union {
-    uint32_t raw;
-    struct {
-        uint8_t ox, oy, w, h;
-    };
-} vscr_pack_t;
+// Persisted kb datablock: virtual-screen rect only (ox,oy,w,h). Sleep timeout
+// lives in user_eeconfig (see lcd_sleep_timeout_*), not here — growing this
+// block would shift VIA_EEPROM_MAGIC_ADDR and invalidate keymaps.
+typedef struct {
+    uint8_t ox, oy, w, h;
+} kb_data_t;
+_Static_assert(sizeof(kb_data_t) == 4, "kb_data_t must match EECONFIG_KB_DATA_SIZE");
 
 int16_t ui_vw(void) { return vscr_w; }
 int16_t ui_vh(void) { return vscr_h; }
@@ -239,9 +255,23 @@ static inline bool vscr_is_full(void) {
     return vscr_ox == 0 && vscr_oy == 0 && vscr_w == ANIM_SIZE && vscr_h == ANIM_SIZE;
 }
 
+uint8_t lcd_sleep_timeout_load(void) {
+    uint8_t code = user_eeconfig.sleep;
+    if (code > 4u) code = 0u;
+    lcd_sleep_timeout_set(code);
+    return code;
+}
+
+void lcd_sleep_timeout_store(uint8_t code) {
+    if (code > 4u) code = 0u;
+    user_eeconfig.sleep = code;
+    eeconfig_update_user(user_eeconfig.raw);
+    lcd_sleep_timeout_set(code);
+}
+
 void lcd_vscr_init(void) {
-    vscr_pack_t p;
-    eeconfig_read_kb_datablock(&p); // 4-byte kb datablock; zeros if never written
+    kb_data_t p;
+    eeconfig_read_kb_datablock(&p); // zeros if never written
     // Fresh/never-written eeprom reads 0 (w==0); reject anything out of range.
     // Origin may sit anywhere in [0,127] and the window may extend past the panel
     // (clipped on render), so only sanity-check the individual fields.
@@ -256,6 +286,7 @@ void lcd_vscr_init(void) {
         vscr_w  = p.w;
         vscr_h  = p.h;
     }
+    lcd_sleep_timeout_load(); // apply shared LCD/RGB idle timeout from user_eeconfig
 }
 
 void ui_vscr_edit_begin(void) {
@@ -304,7 +335,7 @@ void ui_vscr_edit_bottom(int8_t d) {
 }
 
 void ui_vscr_edit_commit(void) {
-    vscr_pack_t p;
+    kb_data_t p;
     p.ox = vscr_ox;
     p.oy = vscr_oy;
     p.w  = vscr_w;
@@ -810,14 +841,15 @@ void display_task_user(void)
 #ifdef LCD_IDLE_TIMEOUT
     // Idle auto-sleep: power-gate the panel after inactivity, wake on key press.
     if (!app_boot_active() && !menu_is_active()) {
+        uint16_t idle_limit = lcd_sleep_timeout_ticks();
         if (lcd_idle_off) {
-            if (kb_idle_timer < LCD_IDLE_TIMEOUT) {
+            if (!idle_limit || kb_idle_timer < idle_limit) {
                 lcd_idle_off = 0;
                 lcd_switch(true);  // wake: identical switch to the LCD ON/OFF key
             } else {
                 return;            // already powered off by lcd_switch(false) on the sleep transition
             }
-        } else if (kb_idle_timer >= LCD_IDLE_TIMEOUT) {
+        } else if (idle_limit && kb_idle_timer >= idle_limit) {
             lcd_idle_off = 1;
             lcd_switch(false);     // idle sleep: identical switch to the LCD ON/OFF key
             return;

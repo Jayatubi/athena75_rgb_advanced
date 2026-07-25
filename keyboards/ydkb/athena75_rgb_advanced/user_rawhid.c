@@ -498,6 +498,8 @@ void user_eeconfig_init(void)
         else            indicator_color[i] = hsv_to_rgb((HSV){hue, 255, val});
         if (i < 1) xprintf("\n indicator %d R: %d, G: %d, B:%d", i, indicator_color[i].r, indicator_color[i].g, indicator_color[i].b);
     }
+// Sleep timeout is stored in user_eeconfig.sleep (see lcd_sleep_timeout_*), not
+// in layout-options — that EEPROM word is only 1 byte on this board.
     update_debounce_level(indicator_color_config[2]);
     led_wakeup();
     rprint("Layout set change\n");

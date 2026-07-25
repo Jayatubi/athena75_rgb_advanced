@@ -22,6 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "stdint.h"
 #include "quantum.h"
+#include "c1.h"
 
 #ifndef LOGIC_INDICATOR_NUM
 #define LOGIC_INDICATOR_NUM PHY_INDICATOR_NUM
@@ -80,12 +81,13 @@ void hook_keyboard_loop(void)
     }
 
 #if defined(LCD_IDLE_TIMEOUT) && defined(RGB_MATRIX_ENABLE)
-    // RGB 与 LCD 熄屏联动：复用同一个 kb_idle_timer 和同一个 LCD_IDLE_TIMEOUT 阈值，
+    // RGB 与 LCD 熄屏联动：复用同一个 kb_idle_timer 和运行时休眠阈值，
     // 所以灯和屏幕会同时休眠、同时被按键唤醒。用 rgb_matrix_set_suspend_state 做临时
     // 挂起（配合 RGB_MATRIX_SLEEP 立即全灭，不写 eeprom），按键会把 kb_idle_timer 清零
     // 从而自动恢复。每次循环同步：USB 挂起期间主循环不跑本 hook，故不会与 QMK 自身的
     // USB suspend 状态相互覆盖。
     extern uint16_t kb_idle_timer;
-    rgb_matrix_set_suspend_state(kb_idle_timer >= LCD_IDLE_TIMEOUT);
+    uint16_t idle_limit = lcd_sleep_timeout_ticks();
+    rgb_matrix_set_suspend_state(idle_limit && kb_idle_timer >= idle_limit);
 #endif
 }

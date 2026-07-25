@@ -8,6 +8,7 @@
 //
 //   RGB (on/off toggle)
 //     EFFECT (compiled effect list) / BRIGHT / HUE / SAT / SPEED / CAPS / RGB FOR
+//   SLEEP      -> 1 / 5 / 10 / 15 minutes / never (shared LCD + RGB timeout)
 //   APP        -> firmware installed-app list (launch)
 //   LCD TEST   -> firmware panel-alignment screen
 //   REBOOT     -> NORMAL / BOOTSEL
@@ -23,9 +24,9 @@ static bool             opened;   // have we opened the menu this session?
 
 // ---- app-defined ids --------------------------------------------------------
 // Value groups (arbitrary, app-local; passed to group_get/set).
-enum { G_RGB_ON = 1, G_RGB_MODE, G_RGB_VAL, G_RGB_HUE, G_RGB_SAT, G_RGB_SPD, G_CAPS, G_SCOPE };
+enum { G_RGB_ON = 1, G_RGB_MODE, G_RGB_VAL, G_RGB_HUE, G_RGB_SAT, G_RGB_SPD, G_CAPS, G_SCOPE, G_SLEEP };
 // Node ids (index into nodes[]).
-enum { N_ROOT = 0, N_RGB, N_REBOOT, N_EFFECT, N_VAL, N_HUE, N_SAT, N_SPD, N_CAPS, N_SCOPE };
+enum { N_ROOT = 0, N_RGB, N_REBOOT, N_EFFECT, N_VAL, N_HUE, N_SAT, N_SPD, N_CAPS, N_SCOPE, N_SLEEP };
 // Radio resolutions (match the firmware's original menu so the feel is identical).
 #define LV_VAL 8
 #define LV_HUE 12
@@ -74,6 +75,7 @@ static void deg_label(char *buf, uint8_t level, uint8_t levels) {
 // Field order: { label, kind, flags, group, value, child }.
 static const app_menu_item_t root_items[] = {
     { "RGB",      APP_MI_FOLDER, APP_MI_TOGGLE, G_RGB_ON, 0, N_RGB },
+    { "SLEEP",    APP_MI_FOLDER, 0, 0, 0, N_SLEEP },
     { "APP",      APP_MI_FOLDER, 0, 0, 0, APP_MENU_CHILD_APP },
     { "LCD TEST", APP_MI_FOLDER, 0, 0, 0, APP_MENU_CHILD_LCDTEST },
     { "REBOOT",   APP_MI_FOLDER, 0, 0, 0, N_REBOOT },
@@ -109,9 +111,18 @@ static const app_menu_item_t scope_items[] = {
     { "SWITCH", APP_MI_VALUE, APP_MI_RADIO, G_SCOPE, 2, 0 },
     { "GLOW",   APP_MI_VALUE, APP_MI_RADIO, G_SCOPE, 1, 0 },
 };
+// Code 0 deliberately means 5 minutes so existing/fresh layout options retain
+// the requested default without an EEPROM migration.
+static const app_menu_item_t sleep_items[] = {
+    { "1 MIN",  APP_MI_VALUE, APP_MI_RADIO, G_SLEEP, 1, 0 },
+    { "5 MIN",  APP_MI_VALUE, APP_MI_RADIO, G_SLEEP, 0, 0 },
+    { "10 MIN", APP_MI_VALUE, APP_MI_RADIO, G_SLEEP, 2, 0 },
+    { "15 MIN", APP_MI_VALUE, APP_MI_RADIO, G_SLEEP, 3, 0 },
+    { "NEVER",  APP_MI_VALUE, APP_MI_RADIO, G_SLEEP, 4, 0 },
+};
 
 static const app_menu_node_t nodes[] = {
-    [N_ROOT]   = { "SETTINGS", root_items,   5 },
+    [N_ROOT]   = { "SETTINGS", root_items,   6 },
     [N_RGB]    = { 0,          rgb_items,    7 },
     [N_REBOOT] = { 0,          reboot_items, 2 },
     [N_EFFECT] = { 0,          0,            0 },      // generated; count via count_fn
@@ -121,6 +132,7 @@ static const app_menu_node_t nodes[] = {
     [N_SPD]    = { 0,          0,            LV_SPD },
     [N_CAPS]   = { 0,          caps_items,   8 },
     [N_SCOPE]  = { 0,          scope_items,  3 },
+    [N_SLEEP]  = { 0,          sleep_items,  5 },
 };
 
 // ---- generated rows ---------------------------------------------------------
@@ -158,6 +170,7 @@ static uint8_t group_get(uint8_t gid) {
         case G_RGB_SPD:  g->rgb_get(&s); return lin_to_level(s.speed, LV_SPD, 255);
         case G_CAPS:     return g->caps_color_get();
         case G_SCOPE:    return g->rgb_scope_get();
+        case G_SLEEP:    return g->sleep_timeout_get();
         default:         return 0;
     }
 }
@@ -172,6 +185,7 @@ static void group_set(uint8_t gid, uint8_t v) {
         case G_RGB_SPD:  g->rgb_get(&s); s.speed = level_to_lin(v, LV_SPD, 255);       g->rgb_set(&s); break;
         case G_CAPS:     g->caps_color_set(v);  break;
         case G_SCOPE:    g->rgb_scope_set(v);   break;
+        case G_SLEEP:    g->sleep_timeout_set(v); break;
         default: break;
     }
 }

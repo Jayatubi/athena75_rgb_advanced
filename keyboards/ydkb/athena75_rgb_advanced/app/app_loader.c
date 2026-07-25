@@ -112,6 +112,9 @@ static const host_api_t g_api = {
     // UI services: the OS menu engine (common look), exposed as a modal service
     .menu_run    = loader_menu_run,
     .menu_active = loader_menu_active,
+    // Shared LCD/RGB inactivity sleep policy (persisted in layout options).
+    .sleep_timeout_get = app_sys_sleep_timeout_get,
+    .sleep_timeout_set = app_sys_sleep_timeout_set,
 };
 
 static const app_desc_t *g_desc        = NULL; // loaded app's descriptor (NULL = none/failed)
