@@ -117,6 +117,19 @@ static uint32_t crc32(const void *data, uint32_t len) {
     return crc ^ 0xFFFFFFFFu;
 }
 
+#define LIFE_SIZE_LEVELS 2u
+
+// Stored size index: 0 = 2px, 1 = 4px (1px removed — too heavy on MCU).
+static uint8_t size_idx_normalize(uint8_t raw) {
+    if (raw >= 2u) return 1u;
+    return 0u;
+}
+
+static uint8_t cell_px_from_idx(uint8_t idx) {
+    static const uint8_t tbl[2] = { 2, 4 };
+    return tbl[idx < LIFE_SIZE_LEVELS ? idx : 0u];
+}
+
 static void cfg_defaults(void) {
     cfg.magic       = LIFE_SAVE_MAGIC;
     cfg.version     = 3;
@@ -156,6 +169,7 @@ static void cfg_load(void) {
         saved.density >= 1u && saved.density <= 100u && saved.seed != 0u &&
         saved.crc == crc32(&saved, (uint32_t)__builtin_offsetof(life_save_t, crc))) {
         cfg = saved;
+        cfg.size = size_idx_normalize(cfg.size);
         return;
     }
     life_save_v2_t v2;
@@ -164,7 +178,7 @@ static void cfg_load(void) {
         v2.crc == crc32(&v2, (uint32_t)__builtin_offsetof(life_save_v2_t, crc))) {
         cfg_defaults();
         cfg.speed      = v2.speed;
-        cfg.size       = v2.size;
+        cfg.size       = size_idx_normalize(v2.size);
         cfg.cell_color = v2.cell_color;
         return;
     }
@@ -258,7 +272,7 @@ static void preset_apply(const life_preset_t *p) {
 
 static void preset_apply_now(const life_preset_t *p) {
     if (!p) return;
-    cfg.size    = p->size <= 2u ? p->size : 0u;
+    cfg.size    = size_idx_normalize(p->size);
     cfg.density = p->density >= 1u && p->density <= 100u ? p->density : cfg.density;
     if (p->seed) cfg.seed = p->seed;
     cfg_save();
@@ -269,8 +283,7 @@ static void preset_apply_now(const life_preset_t *p) {
 }
 
 static uint8_t preset_size_px(uint8_t size_idx) {
-    static const uint8_t tbl[3] = { 1, 2, 4 };
-    return tbl[size_idx <= 2u ? size_idx : 0u];
+    return cell_px_from_idx(size_idx_normalize(size_idx));
 }
 
 static void preset_format_label(const life_preset_t *p, char *buf, unsigned bufsz) {
@@ -293,8 +306,7 @@ static void preset_format_label(const life_preset_t *p, char *buf, unsigned bufs
 }
 
 static uint8_t cell_px_from_cfg(void) {
-    static const uint8_t tbl[3] = { 1, 2, 4 };
-    return tbl[cfg.size <= 2u ? cfg.size : 0u];
+    return cell_px_from_idx(size_idx_normalize(cfg.size));
 }
 
 static void rng_seed(uint32_t s) {
@@ -536,7 +548,7 @@ static const app_menu_item_t speed_items[] = {
     RADIO("SLOW", G_SPEED, 2), RADIO("V.SLOW", G_SPEED, 3),
 };
 static const app_menu_item_t size_items[] = {
-    RADIO("1 PX", G_SIZE, 0), RADIO("2 PX", G_SIZE, 1), RADIO("4 PX", G_SIZE, 2),
+    RADIO("2 PX", G_SIZE, 0), RADIO("4 PX", G_SIZE, 1),
 };
 static const app_menu_item_t seed_items[] = {
     { "RANDOM",   APP_MI_ACTION, 0, 0, ACT_RESEED_RANDOM, 0 },
@@ -547,7 +559,7 @@ static const app_menu_node_t menu_nodes[] = {
     [N_ROOT]   = { "LIFE", root_items, 5 },
     [N_SPEED]  = { 0, speed_items, 4 },
     [N_PRESET] = { 0, preset_items, 3 },
-    [N_SIZE]   = { 0, size_items, 3 },
+    [N_SIZE]   = { 0, size_items, 2 },
     [N_SEED]   = { 0, seed_items, 2 },
     [N_LOAD]   = { 0, 0, 0 },
 };
@@ -586,7 +598,7 @@ static void root_title_fill(char *buf, unsigned bufsz) {
 
 static uint8_t menu_get(uint8_t group) {
     if (group == G_SPEED) return cfg.speed;
-    if (group == G_SIZE) return cfg.size;
+    if (group == G_SIZE) return size_idx_normalize(cfg.size);
     return 0;
 }
 
@@ -594,7 +606,7 @@ static void menu_set(uint8_t group, uint8_t value) {
     if (group == G_SPEED && value < 4) {
         cfg.speed = value;
         cfg_save();
-    } else if (group == G_SIZE && value < 3) {
+    } else if (group == G_SIZE && value < LIFE_SIZE_LEVELS) {
         cfg.size = value;
         cfg_save();
         gw = 0;
