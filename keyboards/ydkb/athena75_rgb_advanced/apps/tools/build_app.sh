@@ -100,4 +100,9 @@ fi
 PACK_ARGS+=(-o "${APPS_DIR}/${APP}/${APP}.app")
 "${HOST_TOOL}" "${PACK_ARGS[@]}"
 
+ART_DIR="${KBD_DIR}/artifacts/apps"
+mkdir -p "${ART_DIR}"
+cp "${APPS_DIR}/${APP}/${APP}.app" "${ART_DIR}/${APP}.app"
+
 echo ">> done: ${APPS_DIR}/${APP}/${APP}.app"
+echo ">> archived: ${ART_DIR}/${APP}.app"

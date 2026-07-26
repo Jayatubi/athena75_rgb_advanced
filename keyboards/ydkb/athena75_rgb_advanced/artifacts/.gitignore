@@ -1,7 +1,11 @@
-# Committed build outputs (firmware + host binaries).
+# Committed build outputs (firmware + host binaries + slot apps).
 #
 # The repo-root .gitignore ignores *.uf2 globally; re-include ONLY the firmware
 # image below. User content is NOT committed here: the boot animation and the
 # ANIMATION keyframe UF2s stay local (they live in tools/builds/ and are flashed
 # to their own flash partitions per user).
 !firmware/ydkb_athena75_rgb_advanced_vial.uf2
+
+# Packaged slot apps (apps/.gitignore ignores *.app under apps/<name>/).
+!apps/
+!apps/*.app
