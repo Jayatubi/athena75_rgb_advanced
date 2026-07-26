@@ -99,6 +99,9 @@ void app_run(void) {
         cur = want;
         if (cur && cur->enter) cur->enter();
     } else if (reinit && cur) {                       // same app, but woke / asked: re-init
+        // Slot apps must tear down loader state first: a code-only flash update can
+        // leave g_desc pointing at the old image while XIP already holds the new one.
+        if (cur == &app_slot && cur->exit) cur->exit();
         if (cur->enter) cur->enter();
     }
     wake_ack   = c1_wake_seq();

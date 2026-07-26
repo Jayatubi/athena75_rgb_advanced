@@ -6,6 +6,7 @@
 
 #include "quantum.h"
 #include "dialog.h"
+#include "app_input.h"
 
 // Content is set once on open and then only read; focus/active/timer change while
 // it is up. core0 writes, core1 reads: publish the content (a full-barrier store)
@@ -17,6 +18,7 @@ static volatile uint32_t dlg_t0     = 0; // idle timer origin (reset on interact
 
 void dialog_open(const dialog_desc_t *d) {
     if (!d || d->n_buttons == 0) return;
+    app_input_release_all();
     dlg = *d;
     if (dlg.n_buttons > DIALOG_MAX_BTN) dlg.n_buttons = DIALOG_MAX_BTN;
     if (dlg.def_focus >= dlg.n_buttons) dlg.def_focus = 0;
@@ -42,6 +44,7 @@ static void dialog_fire(int8_t idx) {
     dialog_action_fn fn = NULL;
     if (idx >= 0 && idx < (int8_t)dlg.n_buttons) fn = dlg.buttons[idx].on_select;
     dlg_active = 0;
+    app_input_release_all(); // e.g. Enter still held after confirm
     if (fn) fn();
 }
 

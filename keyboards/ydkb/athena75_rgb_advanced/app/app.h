@@ -58,3 +58,6 @@ uint32_t app_slot_req_base(void);  // requested slot base (for the loader)
 // the launcher next frame (the runtime calls the slot app's exit() first for a
 // clean teardown). Called by host_api exit_to_launcher() (an app's own Esc/back).
 void     app_return_to_launcher(void);
+// core0: flash at `base` was rewritten (app install/update). Next slot_enter reloads
+// from XIP even if that slot is already loaded (code-only update while running).
+void     app_slot_invalidate(uint32_t base);

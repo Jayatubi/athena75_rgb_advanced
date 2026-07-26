@@ -792,6 +792,7 @@ static void app_upload_render(void) {
 
 bool app_upload_render_tick(void) {
     static bool on = false, woke = false;
+    app_upload_release_linger_if_due_from_core1();
     uint8_t st = app_upload_state();
     bool show = (st == APPUP_AUTH || st == APPUP_ACTIVE || st == APPUP_DONE);
     if (show) {

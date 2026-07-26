@@ -47,6 +47,11 @@ void app_input_toggle(void) {
     app_input_set_mode(s_mode ? APP_INPUT_KEYBOARD : APP_INPUT_OS);
 }
 
+void app_input_release_all(void) {
+    clear_keyboard();
+    inq_reset();
+}
+
 void app_input_note_activity(void) {
     if (s_mode == APP_INPUT_OS) s_last_activity = timer_read32();
 }

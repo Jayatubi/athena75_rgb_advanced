@@ -12,6 +12,9 @@
 #include "probe_flash.h"
 #include "config.h"
 #include "apps/sdk/host_api.h" // ATHENA_APP_MAGIC / app_header_t
+#include "app/app.h"           // app_slot_invalidate
+#include "app_scan.h"
+#include "app_input.h"
 #include "hardware/flash.h"   // FLASH_SECTOR_SIZE, FLASH_PAGE_SIZE
 
 #include <string.h>
@@ -87,7 +90,12 @@ static bool in_upload_region(uint32_t addr, uint32_t len, uint32_t grain) {
 }
 
 // ---- dialog actions (INSTALL / CANCEL) --------------------------------------
-static void app_upload_accept(void)  { s_state = APPUP_AUTH; }
+static void app_upload_accept(void) {
+    app_input_release_all();
+    // Leave any running slot app before flash erase/program (same XIP window).
+    app_return_to_launcher();
+    s_state = APPUP_AUTH;
+}
 static void app_upload_decline(void) { s_state = APPUP_IDLE; } // drop the screen entirely
 
 // Dialog message, built per request (dialog copies the desc but keeps the message
@@ -183,6 +191,7 @@ bool app_upload_do_erase(uint32_t addr) {
     if (!in_area(addr, FLASH_SECTOR_SIZE) ||
         !in_upload_region(addr, FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE))
         return false;
+    if (s_state == APPUP_AUTH) app_input_release_all();
     s_state = APPUP_ACTIVE;
     return app_flash_erase_sector(addr);
 }
@@ -193,6 +202,7 @@ int app_upload_do_write(uint32_t page_addr, uint8_t poff, uint8_t len, const uin
     if (!in_area(page_addr, FLASH_PAGE_SIZE) ||
         !in_upload_region(page_addr, FLASH_PAGE_SIZE, FLASH_PAGE_SIZE))
         return 0;
+    if (s_state == APPUP_AUTH) app_input_release_all();
     s_state = APPUP_ACTIVE;
 
     if (!s_page_dirty || s_page_addr != page_addr) {  // start a fresh page (erased state)
@@ -219,13 +229,23 @@ void app_upload_finish(bool ok) {
         s_written = s_total;
         s_state   = APPUP_DONE;
         s_done_t  = timer_read32();
+        app_scan();
+        if (s_slot) app_slot_invalidate(s_slot);
     } else {
         s_state = APPUP_IDLE;
     }
     s_page_dirty = false;
 }
 
-void app_upload_task(void) {
+static void app_upload_release_linger_if_due(void) {
     if (s_state == APPUP_DONE && timer_elapsed32(s_done_t) > 1500u)
         s_state = APPUP_IDLE;   // let the "loaded" banner linger briefly, then release
+}
+
+void app_upload_task(void) {
+    app_upload_release_linger_if_due();
+}
+
+void app_upload_release_linger_if_due_from_core1(void) {
+    app_upload_release_linger_if_due();
 }

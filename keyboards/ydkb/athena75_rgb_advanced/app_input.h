@@ -30,6 +30,10 @@ void    app_input_toggle(void);
 void    app_input_note_activity(void);
 // Enqueue one raw key event (core0). Returns false if the ring is full (dropped).
 bool    app_input_push(uint16_t keycode, bool pressed);
+// Drop all keys to the USB host and flush the OS event queue (core0). Call before
+// host-driven work (snapshot, modal dialogs, flash upload) that can interrupt
+// normal key processing and leave keys stuck on the host.
+void    app_input_release_all(void);
 
 // A core1 app may REQUEST a mode change (host_api set_input_mode); core0 applies it
 // in housekeeping so clear_keyboard() runs on the owning core. Returns 0 if none.

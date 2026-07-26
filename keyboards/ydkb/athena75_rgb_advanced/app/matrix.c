@@ -262,7 +262,11 @@ static void matrix_tick(uint32_t dt_ms) {
             uint8_t  a;
             uint8_t  gi;                                                       // glyph to draw
             if (digit) {
-                fg = MTX_CLOCK_FG;                                             // gold digit region
+                if (covered && k == 0) {
+                    fg = MTX_HEAD_FG;
+                } else {
+                    fg = MTX_CLOCK_FG;                                             // gold digit region
+                }
                 if (covered) {
                     mtx_dep[c][r] = (uint8_t)(mtx_glyph[c][r] + 1);           // deposit residue
                     gi = mtx_glyph[c][r];

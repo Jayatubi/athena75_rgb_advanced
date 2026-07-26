@@ -172,6 +172,7 @@ static void ath_handle_ee(uint8_t *data) {
             break;
         }
         case EE_WRITE: {
+            app_input_release_all();
             uint16_t addr = ((uint16_t)data[3] << 8) | data[4];
             uint8_t  len  = data[5];
             if (len > EE_CHUNK) len = EE_CHUNK;
@@ -218,12 +219,14 @@ static void ath_handle_probe(uint8_t *data) {
             break;
         }
         case PROBE_ERASE: {
+            app_input_release_all();
             uint32_t addr = ((uint32_t)data[3] << 24) | ((uint32_t)data[4] << 16) |
                             ((uint32_t)data[5] << 8) | data[6];
             data[3] = app_flash_erase_sector(addr) ? 1u : 0u;
             break;
         }
         case PROBE_PROG: {
+            app_input_release_all();
             uint32_t addr = ((uint32_t)data[3] << 24) | ((uint32_t)data[4] << 16) |
                             ((uint32_t)data[5] << 8) | data[6];
             uint8_t page[256];
@@ -246,6 +249,7 @@ static void ath_handle_probe(uint8_t *data) {
 static void ath_handle_app(uint8_t *data) {
     switch (data[2]) {
         case APP_BEGIN: {
+            app_input_release_all();
             uint32_t slot  = rawhid_be32(&data[3]);
             uint32_t total = rawhid_be32(&data[7]);
             char name[17];
@@ -373,6 +377,7 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
         } else if (data[1] == CAP_CMD) {
             switch (data[2]) {
                 case CAP_SUB_BEGIN: {
+                    app_input_release_all();
                     uint32_t total = lcd_capture_begin();  // freeze + size (0 = off)
                     int16_t  dim   = lcd_capture_dim();
                     data[3]  = (uint8_t)(dim >> 8);
@@ -395,6 +400,7 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
                     break;                                  // data[3..4] echo the index
                 }
                 case CAP_SUB_STREAM: {
+                    app_input_release_all();
                     // One request, all chunks: push each chunk as its own IN report
                     // without waiting for a per-chunk request. The freeze is already
                     // held from CAP_SUB_BEGIN. raw_hid_send() blocks per report (the
@@ -423,6 +429,7 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
         } else if (data[1] == BSEL_CMD) {
             // 0xFD 0x5D 0xB0 0x07: reboot into the RP2040 UF2 bootloader (BOOTSEL).
             if (data[2] == BSEL_M0 && data[3] == BSEL_M1) {
+                app_input_release_all();
                 bootloader_jump();                          // does not return
             }
         } else if (data[1] == CLK_CMD) {
@@ -435,6 +442,7 @@ void raw_hid_receive_kb(uint8_t *data, uint8_t length) {
             // user can accept (Enter -> BOOTSEL) or cancel before the host flashes.
             // The two magic bytes guard against an accidental trigger.
             if (data[2] == FLASH_M0 && data[3] == FLASH_M1) {
+                app_input_release_all();
                 flash_prompt_request();
             }
         } else if (data[1] == DIAG_CMD) {

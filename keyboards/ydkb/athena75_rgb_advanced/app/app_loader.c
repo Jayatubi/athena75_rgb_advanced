@@ -34,6 +34,12 @@
 #define APP_RAM_HI 0x20040000u
 
 static uint32_t g_loaded_base = 0; // slot base currently loaded (0 = none)
+// Published by core0 after a successful upload; consumed on the next slot_enter.
+static volatile uint32_t s_invalidate_base = 0;
+
+void app_slot_invalidate(uint32_t base) {
+    s_invalidate_base = base;
+}
 
 // Per-app persistence helpers (defined below; they need g_loaded_base). The save
 // sector is the last 4KB of the app's first slot.
@@ -176,7 +182,9 @@ static bool loader_load(uint32_t base) {
 // ---- app_slot adapter (app runtime app_t) ----------------------------------
 static void slot_enter(void) {
     uint32_t base = app_slot_req_base();
-    if (base != g_loaded_base || !g_desc) {
+    bool flash_updated = (s_invalidate_base != 0u && s_invalidate_base == base);
+    if (flash_updated) s_invalidate_base = 0;
+    if (base != g_loaded_base || !g_desc || flash_updated) {
         if (g_desc && g_desc->exit) g_desc->exit(); // tear down the previous app first
         if (!loader_load(base)) return; // failed -> tick() shows the error banner
     }

@@ -55,6 +55,7 @@ bool     app_upload_do_erase(uint32_t addr);
 int      app_upload_do_write(uint32_t page_addr, uint8_t poff, uint8_t len, const uint8_t *src);
 void     app_upload_finish(bool ok);   // END (ok) / ABORT (!ok)
 void     app_upload_task(void);         // housekeeping: DONE -> IDLE after a moment
+void     app_upload_release_linger_if_due_from_core1(void); // same, safe from core1 render
 
 // ---- core1 (render, read-only) ----------------------------------------------
 // Draws the progress bar while an upload is authorized/active/just-finished.
