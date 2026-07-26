@@ -1,4 +1,5 @@
 # Local animation UF2 outputs — never commit or publish.
-# PNG/emoji sources are covered by tools/emojis/.gitignore and repo *.png.
+# PNG/emoji sources: tools/emojis/ (local only, not in git).
 *.uf2
 penta_kill*.uf2
+emojis/

@@ -5,9 +5,9 @@ a Mac. The committed `host_tool` here is a native arm64 (Apple Silicon) Mach-O.
 
 Rebuild + refresh this artifact:
 
-    cmake -S ../../../tools/host -B ../../../tools/host/build -DCMAKE_BUILD_TYPE=Release
-    cmake --build ../../../tools/host/build --config Release
-    cp ../../../tools/host/build/Release/host_tool .
+    cmake -S ../../../src/host -B ../../../src/host/build -DCMAKE_BUILD_TYPE=Release
+    cmake --build ../../../src/host/build --config Release
+    cp ../../../src/host/build/Release/host_tool .
 
 First USB/HID access may need Input Monitoring permission for the running
 terminal (System Settings > Privacy & Security). See the host-tool-athena75 skill.

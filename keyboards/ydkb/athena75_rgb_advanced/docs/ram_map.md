@@ -90,7 +90,7 @@ core1 复用同样尺寸（`rules_stacks_c1.ld`：`__c1_*_stack_size__ = __*_sta
 ## 5. Slot-app 的 RAM 窗口（已实施）
 
 独立编译的 slot app 需要一小块固定地址的 RAM 放它的 `.data/.bss`（链接时写死，
-上传时 RAM 指针不做重定位，见 `apps/sdk/app.ld` + `tools/host/common/app_pkg.*`）。
+上传时 RAM 指针不做重定位，见 `src/app/sdk/app.ld` + `src/host/common/app_pkg.*`）。
 
 - **占位基址 `0x2004_0000` 不可用**：它正是 SRAM4（core0 主栈）起点，其后 8 KiB
   还会盖到 SRAM5（core1 栈）。直接加载会踩栈崩溃。
@@ -99,8 +99,8 @@ core1 复用同样尺寸（`rules_stacks_c1.ld`：`__c1_*_stack_size__ = __*_sta
   (`0x2002_C000..0x2004_0000`)；固件 ram0 缩为 176 KiB。
 - 三处 source of truth 必须同步：
   - `ld/RP2040_FLASH_TIMECRIT_16M.ld`：firmware `ram0` = 176K；
-  - `apps/sdk/app.ld`：app RAM `ORIGIN = 0x2002_C000`、`LENGTH = 80K`；
-  - `tools/host/common/app_pkg.h`：`APP_RAM_BASE = 0x2002_C000`、`APP_RAM_SPAN = 0x14000`。
+  - `src/app/sdk/app.ld`：app RAM `ORIGIN = 0x2002_C000`、`LENGTH = 80K`；
+  - `src/host/common/app_pkg.h`：`APP_RAM_BASE = 0x2002_C000`、`APP_RAM_SPAN = 0x14000`。
 
 ---
 

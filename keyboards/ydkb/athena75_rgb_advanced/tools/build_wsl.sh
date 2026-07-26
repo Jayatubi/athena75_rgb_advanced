@@ -12,7 +12,7 @@
 #     all             full repo (needed once before the first mirror build)
 #
 # Core work (delegated): python3 build.py  (docker / archive)
-# To flash, build & run `host_tool upload` (tools/host) on the host (Windows) —
+# To flash, build & run `host_tool upload` (src/host) on the host (Windows) —
 # not here (WSL2 has no USB).
 #
 # Usage:
@@ -73,7 +73,8 @@ sync_keyboard() {
     rsync -a --delete \
         --exclude '.git/' \
         --exclude '.build/' \
-        --exclude 'tools/builds/' \
+        --exclude 'artifacts/firmware/history/' \
+        --exclude 'src/host/build/' \
         "${src}/${KB_REL}/" "${dst}/${KB_REL}/"
 }
 
@@ -87,7 +88,8 @@ sync_all() {
     rsync -a --delete \
         --exclude '.git/' \
         --exclude '.build/' \
-        --exclude "${KB_REL}/tools/builds/" \
+        --exclude "${KB_REL}/artifacts/firmware/history/" \
+        --exclude "${KB_REL}/src/host/build/" \
         --info=progress2 \
         "${src}/" "${dst}/"
     echo ">> full sync done"

@@ -1,12 +1,4 @@
-"""共享 UF2 工具: 打包字节为 UF2, 并把所有产物统一归档到 tools/builds/。
-
-统一约定 (固件 / boot / keyframe 三类产物都遵循):
-  - 稳定 latest:  builds/<base>.uf2                        (永远是最新一份, 名字固定)
-  - 时间戳历史:  builds/history/<base>_<YYYYmmdd_HHMMSS>.uf2  (每次构建各留一份)
-  - 历史保留:    每个 <base> 在 history/ 只保留最近 KEEP 份, 更旧的自动删除
-
-这样 builds/ 顶层只有最新可刷写的固定名字, 历史都收在 builds/history/。
-"""
+"""共享 UF2 工具: 打包字节为 UF2, 并把所有产物统一归档到 artifacts/firmware/。"""
 import glob
 import os
 import shutil
@@ -17,9 +9,9 @@ FAMILY_ID = 0xE48BFF56   # RP2040 UF2 family id
 UF2_PAYLOAD = 256        # 每个 512B block 的有效载荷
 KEEP = 10                # 每个 base 保留的历史版本数
 
-# tools/builds  (本文件位于 tools/ 下); 历史收在 builds/history 子目录
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-BUILDS_DIR = os.path.join(TOOLS_DIR, "builds")
+KBD_DIR = os.path.dirname(TOOLS_DIR)
+BUILDS_DIR = os.path.join(KBD_DIR, "artifacts", "firmware")
 HISTORY_DIR = os.path.join(BUILDS_DIR, "history")
 
 

@@ -159,15 +159,15 @@ bash    keyboards/ydkb/athena75_rgb_advanced/tools/build_mac.sh   # macOS
 
 通用 QMK 环境说明见 [QMK Docs](https://docs.qmk.fm/#/getting_started_build_tools)。
 
-### 主机端原生工具（`tools/host`）
+### 主机端原生工具（`src/host`）
 
 上位机是一个原生 C（C11）单一多命令程序 `host_tool`（类似 adb 用子命令区分功能），
 CMake 工程，跨平台（Windows / macOS），不依赖第三方库：Windows 走 SetupAPI + `hid.dll`，
-macOS 走 IOKit + CoreFoundation，PNG 由内置写入器生成。
+macOS 走 IOKit + CoreFoundation，PNG 由内置写入器生成。预编译产物在 `artifacts/host/`。
 
 ```bash
-cmake -S keyboards/ydkb/athena75_rgb_advanced/tools/host -B build   # 生成工程
-cmake --build build --config Release                                # 产物在 tools/host/bin/host_tool
+cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host -B src/host/build
+cmake --build src/host/build --config Release   # 本地 build/Release/host_tool
 ```
 
 | 子命令 | 作用 |

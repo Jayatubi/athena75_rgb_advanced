@@ -24,7 +24,7 @@ description: Build (and prepare to flash) the ydkb/athena75_rgb_advanced firmwar
   `docker run` / `make` / `python3 build.py` by hand, and do not create new
   build scripts. The scripts already exist:
   - `keyboards/ydkb/athena75_rgb_advanced/tools/build_wsl.sh` — firmware
-  - `keyboards/ydkb/athena75_rgb_advanced/tools/host/` — host_tool (CMake)
+  - `keyboards/ydkb/athena75_rgb_advanced/src/host/` — host_tool (CMake)
 
 ## Build the firmware
 
@@ -37,8 +37,8 @@ wsl bash /mnt/f/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/buil
 
 - First time only (or if the mirror is missing/incomplete): add `--sync all`.
 - Clean build: add `-c`. Change keymap with `KEYMAP=via` (default `vial`).
-- Output UF2 lands in `keyboards/ydkb/athena75_rgb_advanced/tools/builds/`
-  as `ydkb_athena75_rgb_advanced_vial.uf2` (+ timestamped history/).
+- Output UF2 lands in `keyboards/ydkb/athena75_rgb_advanced/artifacts/firmware/`
+  as `ydkb_athena75_rgb_advanced_vial.uf2` (+ timestamped history in `history/`).
 
 ### Capturing output
 
@@ -51,11 +51,11 @@ the mirror. Do not wrap the `wsl` call in PowerShell redirection.
 
 `host_tool` is a Windows CMake/MSVC target (it uses USB via SetupAPI + hid.dll),
 but you still drive it from WSL by calling the Windows build tools as normal
-executables — no PowerShell. Reuse the existing `tools/host/CMakeLists.txt` and
-`tools/host/build/` (don't invent a new layout), e.g.:
+executables — no PowerShell. Reuse the existing `src/host/CMakeLists.txt` and
+`src/host/build/` (don't invent a new layout), e.g.:
 
 ```
-wsl cmake.exe --build F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+wsl cmake.exe --build F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
 On **macOS** there is no WSL: build the native binary directly with the same
@@ -63,12 +63,12 @@ CMake project (the `common/hid_mac.c` + `common/sys_mac.c` backend is already in
 the tree, links IOKit/CoreFoundation, no third-party deps):
 
 ```
-cmake -S keyboards/ydkb/athena75_rgb_advanced/tools/host -B keyboards/ydkb/athena75_rgb_advanced/tools/host/build -DCMAKE_BUILD_TYPE=Release
-cmake --build keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb/athena75_rgb_advanced/src/host/build -DCMAKE_BUILD_TYPE=Release
+cmake --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-The binary lands at `.../tools/host/build/Release/host_tool` (`build/` is
-gitignored). See the `host-tool-athena75` skill for the Input Monitoring
+The binary lands at `.../src/host/build/Release/host_tool` (`build/` is
+gitignored). Committed copy: `artifacts/host/macos/host_tool`. See the `host-tool-athena75` skill for the Input Monitoring
 permission note on first USB/HID access.
 
 Only rebuild when host_tool sources actually change and the user wants a new exe.

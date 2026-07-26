@@ -17,7 +17,7 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
   fine (the Windows process has USB; only WSL2's own /dev lacks it):
 
   ```
-  wsl /mnt/f/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/bin/host_tool.exe <cmd> <args>
+  wsl F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe <cmd> <args>
   ```
 
 - **File-path arguments must be Windows paths with FORWARD slashes**, e.g.
@@ -36,13 +36,12 @@ run it directly. The macOS backend (`common/hid_mac.c` IOKit HID +
 `common/sys_mac.c`) is already in the tree, so it just needs building once:
 
 ```
-cmake -S keyboards/ydkb/athena75_rgb_advanced/tools/host -B keyboards/ydkb/athena75_rgb_advanced/tools/host/build -DCMAKE_BUILD_TYPE=Release
-cmake --build keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Release
+cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb/athena75_rgb_advanced/src/host/build -DCMAKE_BUILD_TYPE=Release
+cmake --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-- Binary lands at `.../tools/host/build/Release/host_tool` (Mach-O; `build/` is
-  gitignored — rebuild locally, don't commit it).
-- File-path args are just normal macOS paths (e.g. the UF2 under `tools/builds/`).
+- Binary: `.../src/host/build/Release/host_tool`, or use `artifacts/host/macos/host_tool`.
+- Firmware UF2: `.../artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2`.
 - **First HID access needs permission.** If a command prints
   `error: device 9d5b:2514 not found` even though `ioreg`/System Information shows
   the keyboard (VID `0x9D5B` / PID `0x2514`, raw-HID collection UsagePage `0xFF60`
@@ -53,17 +52,15 @@ cmake --build keyboards/ydkb/athena75_rgb_advanced/tools/host/build --config Rel
 
 ## The executable and firmware paths
 
-- Exe (canonical): `.../tools/host/bin/host_tool.exe`
-  → WSL: `/mnt/f/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/bin/host_tool.exe`
-- Firmware UF2 (Windows/forward-slash form for the arg):
-  `F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/builds/ydkb_athena75_rgb_advanced_vial.uf2`
+- Exe (Windows, committed): `.../artifacts/host/windows/host_tool.exe`
+- Firmware UF2: `F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2`
 
 Always pass the UF2 path explicitly on `upload` so the right image is used.
 
 ## Flashing firmware (upload)
 
 ```
-wsl /mnt/f/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/host/bin/host_tool.exe upload F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/builds/ydkb_athena75_rgb_advanced_vial.uf2
+wsl F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe upload F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2
 ```
 
 - Default behaviour asks the keyboard to confirm **on its LCD**: the user must

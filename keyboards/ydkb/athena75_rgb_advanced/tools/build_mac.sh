@@ -9,7 +9,7 @@
 #   bash build_mac.sh
 #   bash build_mac.sh -c
 #   KEYMAP=via JOBS=8 bash build_mac.sh
-# To flash, build & run `host_tool upload` from tools/host (BOOTSEL + copy a UF2).
+# To flash, build & run `host_tool upload` from src/host (BOOTSEL + copy a UF2).
 #
 set -euo pipefail
 

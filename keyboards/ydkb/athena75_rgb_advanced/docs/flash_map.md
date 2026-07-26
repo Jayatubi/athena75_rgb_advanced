@@ -75,8 +75,8 @@
 |---|---|
 | `PICO_FLASH_SIZE_BYTES` (16 MiB) | `config.h` |
 | EEPROM base `0x001F_0000` / backing 64 KiB / logical 32 KiB | `keymaps/vial/config.h`（`WEAR_LEVELING_RP2040_FLASH_BASE`、`WEAR_LEVELING_BACKING_SIZE`） |
-| 固件区 / boot 区 / app 槽区边界 | `app/c1_gfx.h`（`BOOT_QGF_ADDR`、注释里的分区图；`ANIM_QGF_ADDR` 为 legacy） |
-| App 槽区 begin/end + slot 几何 | `app_upload.h`、`tools/host/common/proto.h`（`*_APP_AREA_*` / `*_APP_SLOT_*`）、`tools/host/common/app_pkg.h`（`APP_LINK_BASE`）、`apps/sdk/app.ld`（`LINK_BASE`/FLASH ORIGIN） |
+| 固件区 / boot 区 / app 槽区边界 | `src/firmware/app/c1_gfx.h`（`BOOT_QGF_ADDR`、注释里的分区图；`ANIM_QGF_ADDR` 为 legacy） |
+| App 槽区 begin/end + slot 几何 | `src/firmware/app_upload.h`、`src/host/common/proto.h`（`*_APP_AREA_*` / `*_APP_SLOT_*`）、`src/host/common/app_pkg.h`（`APP_LINK_BASE`）、`src/app/sdk/app.ld`（`LINK_BASE`/FLASH ORIGIN） |
 | 打包/烧录地址（boot=`0x1040_0000`、boot 区 4 MiB） | `tools/png_to_uf2.py`（`BOOT_ADDR`/`BOOT_END`；`SLOT_*` 为 legacy） |
 | JEDEC / diag 报告 | `probe_flash.c`、`user_rawhid.c`（`ath_handle_diag` / `ath_handle_probe`） |
 

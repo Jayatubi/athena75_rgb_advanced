@@ -15,9 +15,9 @@ Usage (direct, or via a platform wrapper):
   python3 build.py --backend native    # host toolchain (often too strict)
   python3 build.py --check-env
 
-The built firmware is archived to tools/builds/<base>.uf2; upload it with the
-native host tool (tools/host):
-  ./tools/host/bin/host_tool upload     # BOOTSEL + upload that firmware
+The built firmware is archived to artifacts/firmware/<base>.uf2; upload with
+host_tool (src/host):
+  host_tool upload path/to/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2
 
 On Windows without host Docker, this forwards to build_wsl.sh inside WSL so the
 mirror / rsync path stays in the platform wrapper.
@@ -362,8 +362,7 @@ def main(argv=None):
         err(f"expected firmware {built_uf2} not found")
         return 1
 
-    # Unified output: all UF2s (firmware / boot / keyframe) land in tools/builds/
-    # as a stable latest <base>.uf2 plus a timestamped history (see uf2_common).
+    # Unified output: firmware UF2 -> artifacts/firmware/ (see uf2_common).
     latest, stamped, pruned = uf2_common.archive_file(str(built_uf2), base)
     out_uf2 = Path(latest)
     step(f"firmware   : {out_uf2}")
@@ -371,7 +370,7 @@ def main(argv=None):
     for old in pruned:
         step(f"pruned old build: {old}")
 
-    step("to flash:   tools/host/bin/host_tool upload  (build tools/host with CMake first)")
+    step("to flash:   host_tool upload  (build src/host with CMake first)")
     return 0
 
 
