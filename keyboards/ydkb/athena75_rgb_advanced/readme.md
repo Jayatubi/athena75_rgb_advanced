@@ -61,7 +61,7 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 | **SETTINGS** | 系统设置 app：RGB、**SLEEP**（LCD+RGB 空闲时间）、已装 app 列表（详情 / 卸载）、LCD TEST、REBOOT | 安装后相当于「主设置」；与固件根菜单能力重叠但更完整 |
 | **ACE** | 关键帧动画播放器；QGF 数据占 **13 个连续 slot**（1 代码 + 12 数据）；补间特效与旧版固件 ANIMATION 菜单相同 | Enter 打开 **ANIMATION** 菜单树；参数保存在 slot 末 4 KiB save 区 |
 | **MATRIX** | 数字雨 + 可选时钟水印；参数经 save 区持久化 | Enter/Space 打开 **MATRIX** 菜单（SPEED / DENSITY / CLOCK）；`host_tool synctime` 推时钟 |
-| **LIFE** | Conway 生命游戏（**环面**边界），经典图案 | Enter：SPEED / COLOR / PATTERN / 预设；Space 重载图案；←/→ 或 ↑/↓ 切换图案；`-`/`=` 调速 |
+| **LIFE** | Conway + **环面**；屏保向图案与自动扰动 | 默认 **SAVER**（大格：枪+滑翔机群；小格：群）；无聊时自动注入滑翔机；**PATTERN**：SAVER/GUN/SWARM/MIX |
 
 构建并归档到 `artifacts/apps/`：
 

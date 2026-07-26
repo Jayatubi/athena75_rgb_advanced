@@ -35,7 +35,15 @@ static uint32_t count_live(void);
 #define ACT_SAVE_PRESET    65u
 #define ACT_LOAD_PRESET    66u /* value = 66 + menu index (newest first) */
 
-#define PATTERN_COUNT      8u
+#define PATTERN_COUNT      4u
+#define PAT_SAVER          0u
+#define PAT_GUN            1u
+#define PAT_SWARM          2u
+#define PAT_MIX            3u
+
+#define SAVER_POP_HIST     48u
+#define SAVER_BORE_THRESH  2u   /* max-min live count over window */
+#define SAVER_BORE_MIN_GEN 80u  /* wait before judging boredom */
 #define PRESET_MAX         20u
 #define PRESET_STORE_MAGIC 0x50524553u /* "PRES" LE */
 
@@ -85,6 +93,9 @@ static int16_t gw, gh;
 static int16_t pix_w, pix_h;
 static uint8_t cell_px;
 static uint32_t step_t, last_dims_check;
+static uint32_t gen_count;
+static uint16_t pop_hist[SAVER_POP_HIST];
+static uint8_t  pop_hist_i;
 static uint16_t inp_rpt_kc;
 static uint32_t inp_rpt_timer;
 static bool     inp_rpt_armed;
@@ -136,7 +147,7 @@ static void cfg_defaults(void) {
     cfg.version     = 4;
     cfg.speed       = 1;
     cfg.size        = 0;
-    cfg.pattern     = 1; /* PULSAR — fits small grids; GUN needs ~36×9 */
+    cfg.pattern     = PAT_SAVER;
     cfg.cell_color  = 0x07E0u;
     cfg.crc         = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
 }
@@ -353,6 +364,11 @@ static void cell_set(int16_t x, int16_t y, uint8_t v) {
     grid[cur_buf][idx(x, y)] = v;
 }
 
+static void cell_set_torus(int16_t x, int16_t y, uint8_t v) {
+    if (gw <= 0 || gh <= 0) return;
+    grid[cur_buf][idx(wrap_coord(x, gw), wrap_coord(y, gh))] = v;
+}
+
 static uint8_t count_neighbors(int16_t x, int16_t y) {
     uint8_t n = 0;
     for (int8_t dy = -1; dy <= 1; dy++) {
@@ -391,6 +407,34 @@ static void stamp_pattern_rows(const char *const *rows, int16_t ox, int16_t oy) 
     }
 }
 
+static const char *const glider_tpl[4][4] = {
+    { ".O.", "..O", "OOO", 0 },
+    { "..O", "OOO", ".O.", 0 },
+    { "OOO", ".O.", "..O", 0 },
+    { "O..", "OOO", ".O.", 0 },
+};
+
+static void stamp_glider(int16_t ox, int16_t oy, uint8_t rot) {
+    const char *const *rows = glider_tpl[rot & 3u];
+    for (int16_t y = 0; rows[y]; y++) {
+        const char *row = rows[y];
+        for (int16_t x = 0; row[x]; x++) {
+            if (row[x] == 'O') cell_set_torus((int16_t)(ox + x), (int16_t)(oy + y), 1u);
+        }
+    }
+}
+
+static void fill_swarm(uint8_t count) {
+    if (gw < 4 || gh < 4) return;
+    if (count < 4u) count = 4u;
+    if (count > 16u) count = 16u;
+    for (uint8_t i = 0; i < count; i++) {
+        int16_t x = (int16_t)((uint32_t)(i + 1u) * (uint32_t)gw / (uint32_t)(count + 1u));
+        int16_t y = (int16_t)((uint32_t)(i * 5u + 2u) * (uint32_t)gh / (uint32_t)(count + 1u));
+        stamp_glider(x, y, i);
+    }
+}
+
 static void pattern_measure(const life_pattern_def_t *def, int16_t *out_w, int16_t *out_h) {
     int16_t h = 0;
     int16_t w = 0;
@@ -416,101 +460,98 @@ static const char *const pat_gosper[] = {
     0,
 };
 
-static const char *const pat_pulsar[] = {
-    "...OO...OO...",
-    "..O..O.O..O..",
-    ".O....O....O.",
-    "O..OO.OOO.OO..O",
-    "O..O.O...O.O..O",
-    "O....O.O....O.O",
-    "..OO.O...O.OO..",
-    "...O.O...O.O...",
-    "..OO.O...O.OO..",
-    "O....O.O....O.O",
-    "O..O.O...O.O..O",
-    "O..OO.OOO.OO..O",
-    ".O....O....O.",
-    "..O..O.O..O..",
-    "...OO...OO...",
-    0,
-};
-
-static const char *const pat_pento[] = {
-    ".OOO",
-    ".O..",
-    "O...",
-    0,
-};
-
-static const char *const pat_acorn[] = {
-    ".O.....OO",
-    "..O.....",
-    ".O..O...",
-    0,
-};
-
-static const char *const pat_lwss[] = {
-    ".O..O",
-    "O....",
-    "O..O.",
-    "OOOO.",
-    0,
-};
-
-static const char *const pat_beacon[] = {
-    "OO..",
-    "O...",
-    "...O",
-    "..OO",
-    0,
-};
-
-static const char *const pat_toad[] = {
-    ".OOO",
-    "OOO.",
-    0,
-};
-
-/* Four gliders aimed into a torus — steady traffic on large grids. */
-static const char *const pat_gliders[] = {
-    "O..O...............O..O",
-    ".O.O...............O.O.",
-    "..OO................OO.",
-    0,
-};
-
 static const life_pattern_def_t patterns[PATTERN_COUNT] = {
+    { "SAVER", pat_gosper, 4, 4 },
     { "GUN", pat_gosper, 36, 9 },
-    { "PULSAR", pat_pulsar, 13, 13 },
-    { "PENTO", pat_pento, 4, 3 },
-    { "ACORN", pat_acorn, 9, 3 },
-    { "LWSS", pat_lwss, 5, 4 },
-    { "BEACON", pat_beacon, 4, 4 },
-    { "TOAD", pat_toad, 4, 2 },
-    { "GLIDERS", pat_gliders, 23, 3 },
+    { "SWARM", pat_gosper, 4, 4 },
+    { "MIX", pat_gosper, 36, 9 },
 };
+
+static void stamp_gosper_centered(void) {
+    int16_t pw, ph;
+    pattern_measure(&patterns[PAT_GUN], &pw, &ph);
+    int16_t ox = (int16_t)((gw - pw) / 2);
+    int16_t oy = (int16_t)((gh - ph) / 2);
+    stamp_pattern_rows(patterns[PAT_GUN].rows, ox, oy);
+}
+
+static bool grid_fits_gun(void) {
+    return gw >= patterns[PAT_GUN].min_w && gh >= patterns[PAT_GUN].min_h;
+}
+
+static void saver_reset_stats(void) {
+    gen_count  = 0;
+    pop_hist_i = 0;
+    for (uint8_t i = 0; i < SAVER_POP_HIST; i++) pop_hist[i] = 0;
+}
+
+static void saver_note_population(void) {
+    uint32_t c = count_live();
+    if (c > 0xFFFFu) c = 0xFFFFu;
+    pop_hist[pop_hist_i++ % SAVER_POP_HIST] = (uint16_t)c;
+}
+
+static bool saver_population_boring(void) {
+    if (gen_count < SAVER_BORE_MIN_GEN) return false;
+    uint16_t mn = 0xFFFFu;
+    uint16_t mx = 0;
+    for (uint8_t i = 0; i < SAVER_POP_HIST; i++) {
+        uint16_t v = pop_hist[i];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+    }
+    if (mx <= mn) return true;
+    return (uint16_t)(mx - mn) <= SAVER_BORE_THRESH;
+}
+
+static void saver_inject_glider(void) {
+    if (gw < 3 || gh < 3) return;
+    uint32_t s = gen_count * 1664525u + (uint32_t)cfg.pattern * 1013904223u;
+    int16_t  x = (int16_t)((s >> 16) % (uint32_t)gw);
+    int16_t  y = (int16_t)((s >> 8) % (uint32_t)gh);
+    stamp_glider(x, y, (uint8_t)(s & 3u));
+}
 
 static const char *pattern_name(uint8_t id) {
     return patterns[pattern_normalize(id)].name;
 }
 
-static uint8_t pattern_pick_for_grid(uint8_t id) {
-    id = pattern_normalize(id);
-    const life_pattern_def_t *def = &patterns[id];
-    if (gw >= def->min_w && gh >= def->min_h) return id;
-    return 1u; /* PULSAR */
+static uint8_t swarm_count_for_grid(void) {
+    uint32_t cells = (uint32_t)gw * (uint32_t)gh;
+    uint8_t  n     = (uint8_t)(6u + cells / 200u);
+    if (n < 6u) n = 6u;
+    if (n > 14u) n = 14u;
+    return n;
 }
 
 static void fill_pattern(uint8_t pat_id) {
     if (gw <= 0 || gh <= 0) return;
-    pat_id = pattern_pick_for_grid(pat_id);
-    const life_pattern_def_t *def = &patterns[pat_id];
+    pat_id = pattern_normalize(pat_id);
     grid_clear_buf(cur_buf);
-    int16_t pw, ph;
-    pattern_measure(def, &pw, &ph);
-    int16_t ox = (int16_t)((gw - pw) / 2);
-    int16_t oy = (int16_t)((gh - ph) / 2);
-    stamp_pattern_rows(def->rows, ox, oy);
+    uint8_t swarm_n = swarm_count_for_grid();
+
+    switch (pat_id) {
+        case PAT_GUN:
+            if (grid_fits_gun()) stamp_gosper_centered();
+            else fill_swarm(swarm_n);
+            break;
+        case PAT_SWARM:
+            fill_swarm(swarm_n);
+            break;
+        case PAT_MIX:
+            if (grid_fits_gun()) stamp_gosper_centered();
+            fill_swarm(6);
+            break;
+        case PAT_SAVER:
+        default:
+            if (grid_fits_gun()) {
+                stamp_gosper_centered();
+                fill_swarm(4);
+            } else {
+                fill_swarm(swarm_n);
+            }
+            break;
+    }
 }
 
 static void reseed_grid(void) {
@@ -518,6 +559,7 @@ static void reseed_grid(void) {
     grid_clear_buf(0);
     grid_clear_buf(1);
     fill_pattern(cfg.pattern);
+    saver_reset_stats();
     step_t = g_api->now_ms();
 }
 
@@ -651,9 +693,8 @@ static const app_menu_item_t size_items[] = {
     RADIO("2 PX", G_SIZE, 0), RADIO("4 PX", G_SIZE, 1),
 };
 static const app_menu_item_t pattern_items[] = {
-    RADIO("GUN", G_PATTERN, 0), RADIO("PULSAR", G_PATTERN, 1), RADIO("PENTO", G_PATTERN, 2),
-    RADIO("ACORN", G_PATTERN, 3), RADIO("LWSS", G_PATTERN, 4), RADIO("BEACON", G_PATTERN, 5),
-    RADIO("TOAD", G_PATTERN, 6), RADIO("GLIDERS", G_PATTERN, 7),
+    RADIO("SAVER", G_PATTERN, 0), RADIO("GUN", G_PATTERN, 1),
+    RADIO("SWARM", G_PATTERN, 2), RADIO("MIX", G_PATTERN, 3),
 };
 #undef RADIO
 static const app_menu_node_t menu_nodes[] = {
@@ -880,7 +921,15 @@ static void life_tick(uint32_t dt_ms) {
     step_t = now;
 
     life_step();
-    if (count_live() == 0u) reseed_grid();
+    gen_count++;
+    saver_note_population();
+    if (count_live() == 0u) {
+        reseed_grid();
+    } else if (saver_population_boring()) {
+        saver_inject_glider();
+        saver_reset_stats();
+        gen_count = SAVER_BORE_MIN_GEN / 2u;
+    }
     life_draw();
 }
 
