@@ -10,6 +10,7 @@
 
 #ifdef RGB_MATRIX_ENABLE
 #    include "rgb_matrix.h"
+#    include "app_sys.h"
 #endif
 
 #include "apps/sdk/host_api.h"   // app_menu_model_t: an app supplies the menu CONTENT
@@ -139,7 +140,7 @@ static uint8_t group_get(uint8_t g) {
         case VG_TWEEN:     return menu_bind_get_tween_idx();
         case VG_FT:        return menu_bind_get_ft() ? 1u : 0u;
 #ifdef RGB_MATRIX_ENABLE
-        case VG_RGB_ON:    return rgb_matrix_is_enabled() ? 1u : 0u;
+        case VG_RGB_ON:    return app_sys_switch_rgb_get() ? 1u : 0u;
         case VG_RGB_MODE:  return rgb_matrix_get_mode();
         case VG_RGB_VAL:   return lin_to_level(rgb_matrix_get_val(),   RGB_VAL_LEVELS, RGB_MATRIX_MAXIMUM_BRIGHTNESS);
         case VG_RGB_HUE:   return hue_to_level(rgb_matrix_get_hue(),   RGB_HUE_LEVELS);
@@ -167,7 +168,7 @@ static void group_set(uint8_t g, uint8_t v) {
         case VG_TWEEN:     menu_bind_set_tween_idx(v);  break;
         case VG_FT:        menu_bind_set_ft(v != 0);    break;
 #ifdef RGB_MATRIX_ENABLE
-        case VG_RGB_ON:    if (v) rgb_matrix_enable(); else rgb_matrix_disable(); break;
+        case VG_RGB_ON:    app_sys_switch_rgb_set(v != 0); break;
         // Selecting an effect also switches the backlight on, per spec.
         case VG_RGB_MODE:  rgb_matrix_enable(); rgb_matrix_mode(v); break;
         case VG_RGB_VAL:   rgb_matrix_sethsv(rgb_matrix_get_hue(), rgb_matrix_get_sat(), level_to_lin(v, RGB_VAL_LEVELS, RGB_MATRIX_MAXIMUM_BRIGHTNESS)); break;
@@ -570,7 +571,6 @@ void menu_model_init(void) {
     node_add(MN_RGB, MI_RGB_SPD,    "SPEED",  MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_SPD);
     // CapsLock indicator colour + which LEDs light up (persisted in layout options).
     node_add(MN_RGB, MI_RGB_CAPS,   "CAPS",   MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_CAPS);
-    node_add(MN_RGB, MI_RGB_SCOPE,  "RGB FOR",MIK_FOLDER, 0,         VG_NONE,   0, MN_RGB_SCOPE);
 
     // Large / continuous RGB lists are generated on demand (no pool cost).
     rgb_mode_order_init(); // sort the effect list alphabetically for display
@@ -582,12 +582,6 @@ void menu_model_init(void) {
 
     // Small fixed radio lists (static pool, like ghost/zoom/whirl above).
     build_enum_node(MN_RGB_CAPS,  VG_CAPS_COLOR, (uint8_t)CAPS_COLOR_COUNT, caps_color_labels);
-    // RGB scope: keep display order Both/Switch/Glow, but swap the value each label
-    // maps to (SWITCH->2, GLOW->1) so the on-screen label matches the LEDs that
-    // actually light on this board.
-    node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 0), "BOTH",   MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 0, 0);
-    node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 2), "SWITCH", MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 2, 0);
-    node_add(MN_RGB_SCOPE, MI_DYN(VG_RGB_SCOPE, 1), "GLOW",   MIK_VALUE, MI_RADIO, VG_RGB_SCOPE, 1, 0);
 #endif
 
     // APP list is generated from the scan table; count is refreshed below and on

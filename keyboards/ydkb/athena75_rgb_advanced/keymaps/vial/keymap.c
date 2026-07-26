@@ -95,20 +95,23 @@ led_config_t g_led_config = { {
     2, 2
 } };
 
+#include "app_input.h"
+
 extern LED_TYPE indicator_color[];
 extern uint8_t indicator_color_config[];
 __attribute__ ((weak))
 #define CAPS_LOCK_LED_POS    57
 bool rgb_matrix_indicators_user(void) {
-    //如果有禁用部分灯
-    if (indicator_color_config[1] & 0b10) { //Swithes Disable
-        for (uint8_t i=0; i<84; i++) {
-            rgb_matrix_set_color(i, 0, 0, 0); 
+    // SWITCH (per-key): optional off via SETTINGS RGB toggle (layout scope == 2).
+    // GLOW (underglow): lit only in OS input mode; always needs rgb_matrix enabled.
+    if (indicator_color_config[1] & 0b10) {
+        for (uint8_t i = 0; i < 84; i++) {
+            rgb_matrix_set_color(i, 0, 0, 0);
         }
     }
-    if (indicator_color_config[1] & 0b1) { //Underglow Disable
-        for (uint8_t i=84; i<(84+2); i++) {
-            rgb_matrix_set_color(i, 0, 0, 0); 
+    if (app_input_mode() != APP_INPUT_OS) {
+        for (uint8_t i = 84; i < 86; i++) {
+            rgb_matrix_set_color(i, 0, 0, 0);
         }
     }
 

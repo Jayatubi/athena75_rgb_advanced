@@ -30,6 +30,8 @@ uint8_t app_sys_caps_color_get(void);
 void    app_sys_caps_color_set(uint8_t idx);
 uint8_t app_sys_rgb_scope_get(void);
 void    app_sys_rgb_scope_set(uint8_t scope);
+bool    app_sys_switch_rgb_get(void);
+void    app_sys_switch_rgb_set(bool on);
 // Persisted sleep code: 0=5 min (default), 1=1 min, 2=10 min, 3=15 min,
 // 4=never. LCD and RGB share the same inactivity timer.
 uint8_t app_sys_sleep_timeout_get(void);

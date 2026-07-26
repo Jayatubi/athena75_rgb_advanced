@@ -6,8 +6,8 @@
 // scrolling, colours); this app provides the menu CONTENT. It declares the exact
 // original main-menu tree minus the old ANIMATION/MATRIX entries:
 //
-//   RGB (on/off toggle)
-//     EFFECT (compiled effect list) / BRIGHT / HUE / SAT / SPEED / CAPS / RGB FOR
+//   RGB (checkbox toggles SWITCH key LEDs; rgb_matrix master stays independent)
+//     EFFECT / BRIGHT / HUE / SAT / SPEED / CAPS
 //   SLEEP      -> 1 / 5 / 10 / 15 minutes / never (shared LCD + RGB timeout)
 //   APP        -> installed-app list -> details card / guarded uninstall
 //   LCD TEST   -> firmware panel-alignment screen
@@ -24,9 +24,9 @@ static bool             opened;   // have we opened the menu this session?
 
 // ---- app-defined ids --------------------------------------------------------
 // Value groups (arbitrary, app-local; passed to group_get/set).
-enum { G_RGB_ON = 1, G_RGB_MODE, G_RGB_VAL, G_RGB_HUE, G_RGB_SAT, G_RGB_SPD, G_CAPS, G_SCOPE, G_SLEEP };
+enum { G_RGB_ON = 1, G_RGB_MODE, G_RGB_VAL, G_RGB_HUE, G_RGB_SAT, G_RGB_SPD, G_CAPS, G_SLEEP };
 // Node ids (index into nodes[]).
-enum { N_ROOT = 0, N_RGB, N_REBOOT, N_EFFECT, N_VAL, N_HUE, N_SAT, N_SPD, N_CAPS, N_SCOPE, N_SLEEP };
+enum { N_ROOT = 0, N_RGB, N_REBOOT, N_EFFECT, N_VAL, N_HUE, N_SAT, N_SPD, N_CAPS, N_SLEEP };
 // Radio resolutions (match the firmware's original menu so the feel is identical).
 #define LV_VAL 8
 #define LV_HUE 12
@@ -88,7 +88,6 @@ static const app_menu_item_t rgb_items[] = {
     { "SAT",     APP_MI_FOLDER, 0, 0, 0, N_SAT },
     { "SPEED",   APP_MI_FOLDER, 0, 0, 0, N_SPD },
     { "CAPS",    APP_MI_FOLDER, 0, 0, 0, N_CAPS },
-    { "RGB FOR", APP_MI_FOLDER, 0, 0, 0, N_SCOPE },
 };
 static const app_menu_item_t reboot_items[] = {
     { "NORMAL",  APP_MI_ACTION, 0, 0, APP_MENU_ACT_REBOOT,  0 },
@@ -105,12 +104,6 @@ static const app_menu_item_t caps_items[] = {
     { "VIOLET", APP_MI_VALUE, APP_MI_RADIO, G_CAPS, 6, 0 },
     { "OFF",    APP_MI_VALUE, APP_MI_RADIO, G_CAPS, 7, 0 },
 };
-// RGB scope: display order Both/Switch/Glow, values 0/2/1 (as the original menu).
-static const app_menu_item_t scope_items[] = {
-    { "BOTH",   APP_MI_VALUE, APP_MI_RADIO, G_SCOPE, 0, 0 },
-    { "SWITCH", APP_MI_VALUE, APP_MI_RADIO, G_SCOPE, 2, 0 },
-    { "GLOW",   APP_MI_VALUE, APP_MI_RADIO, G_SCOPE, 1, 0 },
-};
 // Code 0 deliberately means 5 minutes so existing/fresh layout options retain
 // the requested default without an EEPROM migration.
 static const app_menu_item_t sleep_items[] = {
@@ -123,7 +116,7 @@ static const app_menu_item_t sleep_items[] = {
 
 static const app_menu_node_t nodes[] = {
     [N_ROOT]   = { "SETTINGS", root_items,   6 },
-    [N_RGB]    = { 0,          rgb_items,    7 },
+    [N_RGB]    = { 0,          rgb_items,    6 },
     [N_REBOOT] = { 0,          reboot_items, 2 },
     [N_EFFECT] = { 0,          0,            0 },      // generated; count via count_fn
     [N_VAL]    = { 0,          0,            LV_VAL }, // generated; fixed count
@@ -131,7 +124,6 @@ static const app_menu_node_t nodes[] = {
     [N_SAT]    = { 0,          0,            LV_SAT },
     [N_SPD]    = { 0,          0,            LV_SPD },
     [N_CAPS]   = { 0,          caps_items,   8 },
-    [N_SCOPE]  = { 0,          scope_items,  3 },
     [N_SLEEP]  = { 0,          sleep_items,  5 },
 };
 
@@ -162,14 +154,13 @@ static void gen(uint8_t node, uint8_t idx, app_menu_item_t *out, char *buf) {
 static uint8_t group_get(uint8_t gid) {
     app_rgb_state_t s;
     switch (gid) {
-        case G_RGB_ON:   g->rgb_get(&s); return s.enabled ? 1u : 0u;
+        case G_RGB_ON:   return g->rgb_scope_get() != 2u ? 1u : 0u;
         case G_RGB_MODE: g->rgb_get(&s); return s.mode;
         case G_RGB_VAL:  g->rgb_get(&s); return lin_to_level(s.val,   LV_VAL, s.val_max);
         case G_RGB_HUE:  g->rgb_get(&s); return hue_to_level(s.hue,   LV_HUE);
         case G_RGB_SAT:  g->rgb_get(&s); return lin_to_level(s.sat,   LV_SAT, 255);
         case G_RGB_SPD:  g->rgb_get(&s); return lin_to_level(s.speed, LV_SPD, 255);
         case G_CAPS:     return g->caps_color_get();
-        case G_SCOPE:    return g->rgb_scope_get();
         case G_SLEEP:    return g->sleep_timeout_get();
         default:         return 0;
     }
@@ -177,14 +168,13 @@ static uint8_t group_get(uint8_t gid) {
 static void group_set(uint8_t gid, uint8_t v) {
     app_rgb_state_t s;
     switch (gid) {
-        case G_RGB_ON:   g->rgb_get(&s); s.enabled = v != 0; g->rgb_set(&s); break;
+        case G_RGB_ON:   g->rgb_scope_set(v ? 0u : 2u); break;
         case G_RGB_MODE: g->rgb_get(&s); s.enabled = true; s.mode = v; g->rgb_set(&s); break;
         case G_RGB_VAL:  g->rgb_get(&s); s.val   = level_to_lin(v, LV_VAL, s.val_max); g->rgb_set(&s); break;
         case G_RGB_HUE:  g->rgb_get(&s); s.hue   = level_to_hue(v, LV_HUE);            g->rgb_set(&s); break;
         case G_RGB_SAT:  g->rgb_get(&s); s.sat   = level_to_lin(v, LV_SAT, 255);       g->rgb_set(&s); break;
         case G_RGB_SPD:  g->rgb_get(&s); s.speed = level_to_lin(v, LV_SPD, 255);       g->rgb_set(&s); break;
         case G_CAPS:     g->caps_color_set(v);  break;
-        case G_SCOPE:    g->rgb_scope_set(v);   break;
         case G_SLEEP:    g->sleep_timeout_set(v); break;
         default: break;
     }

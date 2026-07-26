@@ -79,6 +79,12 @@ void app_sys_rgb_scope_set(uint8_t scope) {
     __sync_synchronize();
     s_scope_req = true;
 }
+
+bool app_sys_switch_rgb_get(void) { return s_scope_pub != 2u; }
+void app_sys_switch_rgb_set(bool on) {
+    app_sys_rgb_scope_set(on ? 0u : 2u);
+}
+
 void app_sys_sleep_timeout_set(uint8_t code) {
     if (code > 4u) return;
     s_sleep_want = code;

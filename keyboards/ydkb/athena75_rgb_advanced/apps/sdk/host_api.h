@@ -201,7 +201,8 @@ typedef struct host_api_t {
     // *out_mode, the true rgb_matrix mode id to pass back in rgb_set.mode.
     uint8_t     (*rgb_mode_count)(void);
     const char *(*rgb_mode_info)(uint8_t disp_idx, uint8_t *out_mode);
-    // CapsLock indicator colour (0..7) and RGB scope (0=both/1=switch/2=glow);
+    // CapsLock indicator colour (0..7). Layout scope field (bits[3:5]): 0 = SWITCH
+    // LEDs on, 2 = SWITCH off (SETTINGS RGB checkbox). GLOW follows OS input mode.
     // get is a core-safe snapshot read, set is marshalled + persisted on core0.
     uint8_t  (*caps_color_get)(void);
     void     (*caps_color_set)(uint8_t idx);
