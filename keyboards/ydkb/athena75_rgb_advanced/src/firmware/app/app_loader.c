@@ -24,6 +24,7 @@
 #include "app_sys.h"            // reboot / rgb / registry / save marshalling
 #include "menu.h"               // menu_request_open / menu_is_active (menu_run API)
 #include "menu_model.h"         // menu_model_rgb_mode_count / _info (RGB mode picker)
+#include "app_scan.h"
 #include "app_upload.h"         // APP_SLOT_SIZE / APP_SLOT_SAVE_SIZE
 #include "sdk/host_api.h"  // host_api_t, app_desc_t, app_header_t, magic/abi
 
@@ -58,6 +59,22 @@ static void loader_menu_run(const app_menu_model_t *model) {
 static bool loader_menu_active(void) {
     return menu_is_active() || menu_open_pending();
 }
+static void loader_app_area_rescan(void) { app_scan(); }
+static void loader_slot_states(uint8_t *out) {
+    if (out) app_slots_fill_states(out);
+}
+static bool loader_slot_query(uint8_t slot, app_slot_info_t *out) {
+    return app_slot_query(slot, out);
+}
+static bool loader_app_icon_read(uint32_t base, void *dst) {
+    if (!base || !dst) return false;
+    memcpy(dst, (const void *)(uintptr_t)(base + APP_SLOT_ICON_OFFSET), APP_SLOT_ICON_SIZE);
+    return true;
+}
+static bool loader_app_area_erase(uint32_t base, uint8_t slot_count) {
+    return app_sys_app_delete(base, slot_count);
+}
+static bool loader_app_area_erase_busy(void) { return app_sys_app_delete_busy(); }
 static uint32_t loader_app_base(void) { return g_loaded_base; }
 
 // The firmware services handed to every app. All are core1-safe. Static const:
@@ -121,6 +138,13 @@ static const host_api_t g_api = {
     // Shared LCD/RGB inactivity sleep policy (persisted in layout options).
     .sleep_timeout_get = app_sys_sleep_timeout_get,
     .sleep_timeout_set = app_sys_sleep_timeout_set,
+    .app_area_rescan   = loader_app_area_rescan,
+    .slot_states       = loader_slot_states,
+    .slot_query        = loader_slot_query,
+    .app_icon_read     = loader_app_icon_read,
+    .app_area_erase    = loader_app_area_erase,
+    .app_area_erase_busy = loader_app_area_erase_busy,
+    .menu_close        = menu_exit,
 };
 
 static const app_desc_t *g_desc        = NULL; // loaded app's descriptor (NULL = none/failed)

@@ -83,3 +83,109 @@ const app_scan_entry_t *app_scan_get(uint8_t i) {
     if (i >= s_count) return NULL;
     return &s_apps[i];
 }
+
+static void slot_occupancy(bool used[APP_SCAN_MAX]) {
+    memset(used, 0, APP_SCAN_MAX * sizeof(bool));
+    for (uint8_t i = 0; i < APP_SCAN_MAX; i++) {
+        const app_header_t *h =
+            (const app_header_t *)(uintptr_t)(APP_AREA_BEGIN + (uint32_t)i * APP_SLOT_SIZE);
+        if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0) continue;
+        uint8_t n = (h->hdr_size >= sizeof(app_header_t)) ? h->slot_count : 1u;
+        if (n == 0 || n > APP_SCAN_MAX - i) n = 1;
+        for (uint8_t j = 0; j < n; j++) used[i + j] = true;
+    }
+}
+
+void app_slots_fill_states(uint8_t out[APP_SLOT_TOTAL]) {
+    bool used[APP_SCAN_MAX];
+    slot_occupancy(used);
+
+    uint8_t verified[APP_SCAN_MAX];
+    memset(verified, 0, sizeof(verified));
+    for (uint8_t a = 0; a < s_count; a++) {
+        const app_scan_entry_t *e = &s_apps[a];
+        for (uint8_t j = 0; j < e->slot_count && e->slot + j < APP_SCAN_MAX; j++)
+            verified[e->slot + j] = 1u;
+    }
+
+    for (uint8_t i = 0; i < APP_SLOT_TOTAL; i++) {
+        if (!used[i]) {
+            out[i] = ATHENA_APP_SLOT_FREE;
+        } else if (verified[i]) {
+            bool header = false;
+            for (uint8_t a = 0; a < s_count; a++) {
+                if (s_apps[a].slot == i) {
+                    header = true;
+                    break;
+                }
+            }
+            out[i] = header ? ATHENA_APP_SLOT_OK : ATHENA_APP_SLOT_OK_EXT;
+        } else {
+            out[i] = ATHENA_APP_SLOT_RESERVED;
+        }
+    }
+}
+
+static const app_scan_entry_t *scan_owning_slot(uint8_t slot) {
+    for (uint8_t a = 0; a < s_count; a++) {
+        const app_scan_entry_t *e = &s_apps[a];
+        if (slot >= e->slot && slot < e->slot + e->slot_count) return e;
+    }
+    return NULL;
+}
+
+bool app_slot_query(uint8_t slot, app_slot_info_t *out) {
+    if (!out || slot >= APP_SLOT_TOTAL) return false;
+    memset(out, 0, sizeof(*out));
+    out->slot     = slot;
+    out->scan_idx = ATHENA_APP_SCAN_IDX_NONE;
+    out->span     = 1;
+    out->header_base = APP_AREA_BEGIN + (uint32_t)slot * APP_SLOT_SIZE;
+
+    uint8_t st[APP_SLOT_TOTAL];
+    app_slots_fill_states(st);
+    out->state = st[slot];
+
+    if (out->state == ATHENA_APP_SLOT_FREE) {
+        out->name[0] = 0;
+        return true;
+    }
+
+    const app_scan_entry_t *own = scan_owning_slot(slot);
+    if (own) {
+        for (uint8_t a = 0; a < s_count; a++) {
+            if (&s_apps[a] == own) {
+                out->scan_idx = a;
+                break;
+            }
+        }
+        out->span        = own->slot_count;
+        out->header_base = own->base;
+        out->image_size  = own->image_size;
+        memcpy(out->name, own->name, sizeof out->name);
+        return true;
+    }
+
+    if (out->state == ATHENA_APP_SLOT_RESERVED) {
+        for (uint8_t i = 0; i <= slot; i++) {
+            const app_header_t *h = (const app_header_t *)(uintptr_t)(
+                APP_AREA_BEGIN + (uint32_t)i * APP_SLOT_SIZE);
+            if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0) continue;
+            uint8_t n = (h->hdr_size >= sizeof(app_header_t)) ? h->slot_count : 1u;
+            if (n == 0 || n > APP_SLOT_TOTAL - i) n = 1;
+            if (slot < i + n) {
+                out->header_base = APP_AREA_BEGIN + (uint32_t)i * APP_SLOT_SIZE;
+                out->span        = n;
+                memcpy(out->name, h->name, 16);
+                out->name[16] = 0;
+                if (!out->name[0]) {
+                    out->name[0] = '?';
+                    out->name[1] = 0;
+                }
+                if (h->image_size >= sizeof(app_header_t)) out->image_size = h->image_size;
+                break;
+            }
+        }
+    }
+    return true;
+}

@@ -99,6 +99,29 @@ enum { APP_MI_FOLDER = 0, APP_MI_VALUE = 1, APP_MI_ACTION = 2 };
 #define APP_MENU_CHILD_APP     0xFDu
 #define APP_MENU_CHILD_LCDTEST 0xFEu
 
+// App flash slot area (32 × 256 KiB). Values for slot_states[] (see host_api_t).
+#define ATHENA_APP_SLOT_COUNT 32u
+enum {
+    ATHENA_APP_SLOT_FREE = 0,
+    ATHENA_APP_SLOT_OK,
+    ATHENA_APP_SLOT_OK_EXT,
+    ATHENA_APP_SLOT_RESERVED,
+};
+#define ATHENA_APP_SCAN_IDX_NONE 0xFFu
+#define ATHENA_APP_ICON_BYTES    0x0800u // 32×32 RGB565
+
+// Per-slot summary (query one grid cell). `header_base` is the install's first
+// slot XIP (for icon_read); `slot` is the cell being viewed.
+typedef struct app_slot_info_t {
+    uint8_t  state;        // ATHENA_APP_SLOT_*
+    uint8_t  slot;
+    uint8_t  scan_idx;     // app registry index, or ATHENA_APP_SCAN_IDX_NONE
+    uint8_t  span;         // contiguous slots reserved (install span)
+    uint32_t header_base;  // XIP base of the install (header slot)
+    uint32_t image_size;   // verified image bytes (0 if unknown)
+    char     name[17];
+} app_slot_info_t;
+
 // Action ids for an APP_MI_ACTION item's `value`. 0..63 are reserved firmware
 // behaviours; >= APP_MENU_ACT_USER are delivered to the model's action() callback.
 enum {
@@ -267,6 +290,20 @@ typedef struct host_api_t {
     // Appended to ABI v3 so existing v3 apps retain all earlier field offsets.
     uint8_t  (*sleep_timeout_get)(void);
     void     (*sleep_timeout_set)(uint8_t code);
+
+    // ---- app-area slot usage (flash read only; for SETTINGS etc.) -----------
+    // Rescan is cheap (XIP reads). Call before slot_states when the UI opens.
+    void     (*app_area_rescan)(void);
+    void     (*slot_states)(uint8_t out[ATHENA_APP_SLOT_COUNT]);
+    bool     (*slot_query)(uint8_t slot, app_slot_info_t *out);
+    bool     (*app_icon_read)(uint32_t header_base, void *dst2048);
+
+    // Full uninstall: slot_count = reserved span (256 KiB each). PARTIAL reclaim:
+    // slot_count == 0 erases only the 4 KiB header sector at `base` (magic gone).
+    bool     (*app_area_erase)(uint32_t base, uint8_t slot_count);
+    bool     (*app_area_erase_busy)(void);
+
+    void     (*menu_close)(void);
 } host_api_t;
 
 // ---- What an app exposes back to the firmware -------------------------------

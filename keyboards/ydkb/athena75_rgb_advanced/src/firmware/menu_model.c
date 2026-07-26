@@ -446,7 +446,7 @@ static const char *const caps_color_labels[] = {
 // open). Under SETTINGS, each app is a folder leading to INFO and UNINSTALL.
 // The legacy built-in menu retains its direct-launch action.
 static void gen_app(uint8_t idx, menu_item_t *out, char *label) {
-    (void)label; // app names live in the scan table (persistent), not the slot buf
+    (void)label;
     memset(out, 0, sizeof(*out));
     const app_scan_entry_t *a = app_scan_get(idx);
     if (!a) {

@@ -125,18 +125,30 @@ void app_sys_app_set_enabled(uint8_t slot, bool enabled) {
     else         s_disabled |=  (1u << slot);
 }
 
-// ---- app uninstall (async) -------------------------------------------------
-// Wait until app_slot has actually been left: SETTINGS may request deletion of
-// itself, and its XIP code/menu model must remain valid through the exit fade.
+// ---- app uninstall / partial reclaim (async) -------------------------------
 // Erase one sector per service pass so USB/housekeeping remains responsive.
+// While a slot app is running, skip only when its XIP base lies inside the range
+// being erased (SETTINGS may reclaim another slot's header without exiting).
 static volatile bool     s_delete_busy;
 static volatile uint32_t s_delete_next;
 static volatile uint32_t s_delete_end;
 
+static bool app_delete_may_run(void) {
+    if (app_current() != &app_slot) return true;
+    uint32_t run = app_slot_req_base();
+    if (!run) return true;
+    return run < s_delete_next || run >= s_delete_end;
+}
+
 bool app_sys_app_delete(uint32_t base, uint8_t slot_count) {
-    uint32_t bytes = (uint32_t)slot_count * APP_SLOT_SIZE;
-    if (s_delete_busy || slot_count == 0u ||
-        base < APP_AREA_BEGIN || base >= APP_AREA_END ||
+    uint32_t bytes;
+    if (slot_count == 0u) {
+        // Reclaim PARTIAL/HOLD: clear the header sector (magic); span slots free up.
+        bytes = FLASH_SECTOR_SIZE;
+    } else {
+        bytes = (uint32_t)slot_count * APP_SLOT_SIZE;
+    }
+    if (s_delete_busy || base < APP_AREA_BEGIN || base >= APP_AREA_END ||
         (base & (APP_SLOT_SIZE - 1u)) || bytes > APP_AREA_END - base)
         return false;
     s_delete_next = base;
@@ -252,7 +264,7 @@ void app_sys_service(void) {
         s_save_busy = false;
     }
 
-    if (s_delete_busy && app_current() != &app_slot) {
+    if (s_delete_busy && app_delete_may_run()) {
         uint32_t addr = s_delete_next;
         if (addr < s_delete_end) {
             if (!app_flash_erase_sector(addr)) {

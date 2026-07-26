@@ -12,6 +12,7 @@
 #include "ui_color_picker.h"
 #include "ui_slider.h"
 #include "ui_text_input.h"
+#include "ui_arrow_confirm.h"
 #include "config.h"
 #include "quantum.h"
 #include "timer.h"
@@ -82,28 +83,24 @@ static uint32_t menu_last_input = 0;
 // returns false), so QMK never registers the modifier and get_mods() stays 0.
 static bool menu_shift = false;
 
-// Random four-arrow uninstall challenge. It is generated on every entry to the
-// confirmation screen; one wrong arrow immediately cancels back to the app card.
-static uint16_t delete_seq[4];
-static uint8_t  delete_pos;
-static bool     delete_error;
-static bool     delete_verified;
-static uint32_t delete_error_at;
-static uint16_t delete_wrong_key;
+// Uninstall arrow challenge (shared ui_arrow_confirm).
+static ui_arrow_confirm_t g_uninstall_confirm;
 
-static void delete_challenge_new(void) {
-    static const uint16_t arrows[4] = { KC_UP, KC_DOWN, KC_LEFT, KC_RIGHT };
-    memcpy(delete_seq, arrows, sizeof(delete_seq));
+static uint32_t menu_arc_now(void) { return timer_read32(); }
+
+static const ui_arrow_confirm_ops_t menu_arc_ops = {
+    .fill_rect   = ui_fill_rect,
+    .wire_rect   = ui_wire_rect,
+    .text        = ui_text,
+    .clip_set    = ui_clip_set,
+    .clip_reset  = ui_clip_reset,
+    .text_width  = ui_text_width,
+    .now_ms      = menu_arc_now,
+};
+
+static void uninstall_confirm_begin(void) {
     uint32_t r = timer_read32() ^ ((uint32_t)menu_model_selected_app() << 24);
-    for (uint8_t i = 3; i > 0; i--) {
-        r ^= r << 13; r ^= r >> 17; r ^= r << 5;
-        uint8_t j = (uint8_t)(r % (uint32_t)(i + 1u));
-        uint16_t t = delete_seq[i]; delete_seq[i] = delete_seq[j]; delete_seq[j] = t;
-    }
-    delete_pos = 0;
-    delete_error = false;
-    delete_verified = false;
-    delete_wrong_key = KC_NO;
+    ui_arrow_confirm_begin(&g_uninstall_confirm, r, &menu_arc_ops);
 }
 
 // LCD TEST calibration: nudge the visible window by dragging one edge live.
@@ -159,7 +156,7 @@ static void menu_push(menu_node_id_t child) {
     menu_wr.path[menu_wr.depth++] = (uint8_t)child;
     menu_wr.focus  = 0;
     menu_wr.scroll = 0;
-    if (node_is_app_delete(child)) delete_challenge_new();
+    if (node_is_app_delete(child)) uninstall_confirm_begin();
     clamp_focus_scroll();
     menu_publish();
 }
@@ -197,7 +194,8 @@ static void overlay_open(const menu_item_t *it, uint8_t child) {
 
 static bool menu_open_folder_item(const menu_item_t *it, menu_node_id_t node) {
     if (!menu_item_is_folder(it)) return false;
-    if (node_is_app(node)) menu_model_select_app(menu_wr.focus);
+    if (node_is_app(node) && (uint8_t)it->child == APP_MENU_CHILD_APP_ITEM)
+        menu_model_select_app(menu_wr.focus);
     if (picker_child(it->child)) {
         overlay_open(it, it->child);
         return true;
@@ -366,18 +364,20 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
     // A wrong arrow cancels immediately; Esc is explicit cancel (Left may be
     // part of the generated sequence, so it cannot also mean Back here).
     if (node_is_app_delete(node)) {
-        if (delete_error) return true; // hold the red error frame for one second
+        if (ui_arrow_confirm_error_expired(&g_uninstall_confirm)) {
+            menu_pop();
+            return true;
+        }
+        if (g_uninstall_confirm.error) return true;
         if (keycode == KC_ESC) {
             menu_pop();
             return true;
         }
-        if (delete_verified) {
+        if (g_uninstall_confirm.verified) {
             if (keycode == KC_ENTER) {
                 const app_scan_entry_t *a =
                     app_scan_get(menu_model_selected_app());
                 if (a && app_sys_app_delete(a->base, a->slot_count)) {
-                    // Always unload SETTINGS before erasing. app_sys waits until
-                    // the slot adapter has actually exited, so self-delete is safe.
                     app_return_to_launcher();
                     menu_exit();
                 } else {
@@ -386,18 +386,9 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             }
             return true;
         }
-        if (keycode != KC_UP && keycode != KC_DOWN &&
-            keycode != KC_LEFT && keycode != KC_RIGHT)
-            return true;
-        if (keycode != delete_seq[delete_pos]) {
-            delete_error    = true;
-            delete_error_at = timer_read32();
-            delete_wrong_key = keycode;
+        if (ui_arrow_confirm_key(&g_uninstall_confirm, keycode, true) == UI_ARC_WRONG)
             menu_publish();
-            return true;
-        }
-        if (++delete_pos == 4u) delete_verified = true;
-        menu_publish();
+        else if (g_uninstall_confirm.verified) menu_publish();
         return true;
     }
 
@@ -559,8 +550,9 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
 void menu_housekeeping_task(void) {
     if (!menu_is_active()) return;
 
-    if (node_is_app_delete(current_node()) && delete_error) {
-        if (timer_elapsed32(delete_error_at) >= 1000u) menu_pop();
+    if (node_is_app_delete(current_node()) &&
+        ui_arrow_confirm_error_expired(&g_uninstall_confirm)) {
+        menu_pop();
         return;
     }
 
@@ -1125,50 +1117,15 @@ static void render_app_info(void) {
     ui_present(fb);
 }
 
-static const char *delete_arrow_label(uint16_t kc) {
-    switch (kc) {
-        case KC_UP:    return "↑";
-        case KC_DOWN:  return "↓";
-        case KC_LEFT:  return "←";
-        default:       return "→";
-    }
-}
-
 static void render_app_delete(void) {
     const app_scan_entry_t *a = app_scan_get(menu_model_selected_app());
-    uint8_t *fb = fbShow;
-    ui_clear(fb, 0x0000);
-    ui_fill_rect(fb, 1, 1, UI_W - 2, 15, 0xF800);
-    ui_text(fb, 4, 2, "UNINSTALL APP", 0xFFFF, 0xF800);
-    ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0xF800);
-
-    if (a) {
-        ui_clip_set(5, 20, UI_W - 10, 14);
-        ui_text(fb, 5, 20, a->name, 0xFFFF, 0x0000);
-        ui_clip_reset();
-    }
-    ui_text(fb, 5, 38, "PRESS IN ORDER", 0xBDF7, 0x0000);
-
-    const int16_t box_w = 24, gap = 5;
-    int16_t x = (int16_t)((UI_W - (4 * box_w + 3 * gap)) / 2);
-    for (uint8_t i = 0; i < 4; i++, x += box_w + gap) {
-        uint16_t color = (delete_error && i == delete_pos) ? 0xF800 :
-                         i < delete_pos ? 0x07E0 :
-                         i == delete_pos ? 0xFFFF : 0x4208;
-        ui_wire_rect(fb, x, 57, box_w, 25, color);
-        const char *s = delete_arrow_label(
-            (delete_error && i == delete_pos) ? delete_wrong_key : delete_seq[i]);
-        ui_text(fb, (int16_t)(x + (box_w - ui_text_width(s)) / 2), 63,
-                s, color, 0x0000);
-    }
-    if (delete_verified) {
-        ui_text(fb, 5, 91, "SEQUENCE OK", 0x07E0, 0x0000);
-        ui_text(fb, 5, UI_H - 17, "ENTER OK   ESC CANCEL", 0xFFFF, 0x0000);
-    } else {
-        ui_text(fb, 5, 91, "WRONG KEY = CANCEL", 0xFBE0, 0x0000);
-        ui_text(fb, 5, UI_H - 17, "ESC  CANCEL", 0x7BEF, 0x0000);
-    }
-    ui_present(fb);
+    ui_arrow_confirm_view_t view = {
+        .banner    = "UNINSTALL APP",
+        .banner_bg = 0xF800,
+        .subject   = a ? a->name : NULL,
+    };
+    ui_arrow_confirm_render(&g_uninstall_confirm, fbShow, UI_W, UI_H, &view);
+    ui_present(fbShow);
 }
 
 void menu_render_task(void) {

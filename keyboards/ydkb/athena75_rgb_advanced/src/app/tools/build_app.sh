@@ -24,6 +24,9 @@ EXTRA_SRC=""
 if [[ "${APP}" == "ace" ]]; then
     EXTRA_SRC="/kbd/src/firmware/lib/fixed_math/fixed_math.c"
 fi
+if [[ "${APP}" == "settings" ]]; then
+    EXTRA_SRC="${EXTRA_SRC} /kbd/src/firmware/ui_arrow_confirm.c"
+fi
 
 if [[ ! -f "${SRC}" ]]; then
     echo "error: app source not found: ${SRC}" >&2

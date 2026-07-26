@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "sdk/host_api.h"
 
 // One installed slot app the scanner found.
 typedef struct app_scan_entry {
@@ -32,3 +33,8 @@ uint8_t app_scan_count(void);
 // The i-th installed app (NULL if out of range). Pointer stays valid until the
 // next app_scan().
 const app_scan_entry_t *app_scan_get(uint8_t i);
+
+#define APP_SLOT_TOTAL ATHENA_APP_SLOT_COUNT
+
+void app_slots_fill_states(uint8_t out[APP_SLOT_TOTAL]);
+bool app_slot_query(uint8_t slot, app_slot_info_t *out);
