@@ -15,6 +15,7 @@ typedef struct {
     uint8_t  path[MENU_PATH_MAX];
     uint8_t  focus;
     uint8_t  scroll;
+    uint8_t  overlay; // 0=none; else APP_MENU_CHILD_COLOR/SLIDER/TEXT (modal editor)
     uint8_t  seq;     // bump on publish (odd = stable)
 } menu_view_t;
 

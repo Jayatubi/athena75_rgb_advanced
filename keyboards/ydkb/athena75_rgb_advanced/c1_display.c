@@ -845,6 +845,7 @@ static void app_upload_render(void) {
     const int16_t B  = LCD_MENU_BORDER;
     const int16_t TB = 15;
     const bool    done = (app_upload_state() == APPUP_DONE);
+    const bool    prep = (app_upload_state() == APPUP_EXITING);
 
     ui_clear(fb, 0x0000);
     ui_wire_rect(fb, 0, 0, W, H, 0x4208);
@@ -857,7 +858,7 @@ static void app_upload_render(void) {
 
     uint32_t total = app_upload_total();
     uint32_t wr    = app_upload_written();
-    uint16_t pct   = done ? 100u : (total ? (uint16_t)((uint64_t)wr * 100u / total) : 0u);
+    uint16_t pct   = done ? 100u : prep ? 0u : (total ? (uint16_t)((uint64_t)wr * 100u / total) : 0u);
     if (pct > 100) pct = 100;
 
     // Progress bar: outer wire + green fill proportional to pct.
@@ -884,7 +885,7 @@ bool app_upload_render_tick(void) {
     static bool on = false, resume_idle = false;
     app_upload_release_linger_if_due_from_core1();
     uint8_t st = app_upload_state();
-    bool show = (st == APPUP_AUTH || st == APPUP_ACTIVE || st == APPUP_DONE);
+    bool show = (st == APPUP_EXITING || st == APPUP_AUTH || st == APPUP_ACTIVE || st == APPUP_DONE);
     if (show) {
         if (!on) {
             on = true;
@@ -923,9 +924,10 @@ void display_task_user(void)
     // and the idle-sleep logic below.
     if (dialog_render_tick()) return;
 
-    // Slot-app upload progress: also force-woken and interrupts every app, right
-    // after the dialog (the dialog raises the accept prompt; once accepted the
-    // dialog closes and this takes over to show the bar).
+    // Tear down the slot app under the upload overlay (never show launcher in between).
+    if (app_upload_state() == APPUP_EXITING) app_run();
+
+    // Upload progress (includes EXITING at 0% — same chrome as LOADING APP).
     if (app_upload_render_tick()) return;
 
     if (!app_boot_active() && user_eeconfig.lcd_off) return;
@@ -954,9 +956,7 @@ void display_task_user(void)
 
     if (lcd_gfx_compositor_frozen()) return;
 
-    // Hand the frame to the active app (boot / anim / matrix / menu). The runtime
-    // reconciles which one is active, computes the frame delta-time, and ticks it.
-    app_run();
+    if (app_upload_state() != APPUP_EXITING) app_run();
 }
 
 void suspend_power_down_user_display(void)

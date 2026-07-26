@@ -9,6 +9,9 @@
 #include "app_upload.h"
 #include "ui.h"
 #include "ui_scene.h"
+#include "ui_color_picker.h"
+#include "ui_slider.h"
+#include "ui_text_input.h"
 #include "config.h"
 #include "quantum.h"
 #include "timer.h"
@@ -32,6 +35,35 @@ static inline bool node_is_app_info(menu_node_id_t n) {
 }
 static inline bool node_is_app_delete(menu_node_id_t n) {
     return (uint8_t)n == APP_MENU_CHILD_APP_DELETE;
+}
+static inline bool node_is_color(menu_node_id_t n) {
+    return (uint8_t)n == APP_MENU_CHILD_COLOR;
+}
+static inline bool node_is_slider(menu_node_id_t n) {
+    return (uint8_t)n == APP_MENU_CHILD_SLIDER;
+}
+static inline bool node_is_text(menu_node_id_t n) {
+    return (uint8_t)n == APP_MENU_CHILD_TEXT;
+}
+
+static void color_picker_enter(const menu_item_t *it) {
+    menu_model_color_picker_bind(it->group);
+    ui_color_picker_begin(menu_model_color_get(it->group), it ? it->label : NULL);
+}
+
+static void slider_enter(const menu_item_t *it) {
+    uint32_t min = 0, max = 100, step = 1;
+    menu_model_uint_picker_bind(it->group, MENU_UINT_SLIDER);
+    menu_model_uint_spec(it->group, &min, &max, &step);
+    ui_slider_begin(menu_model_uint_get(it->group), min, max, step, it ? it->label : NULL);
+}
+
+static void text_enter(const menu_item_t *it) {
+    char buf[16];
+    menu_model_text_picker_bind(it->group);
+    menu_model_text_get(it->group, buf, sizeof buf);
+    ui_text_input_begin(buf, it ? it->label : NULL, menu_model_text_flags(it->group),
+                        menu_model_text_max_len(it->group));
 }
 
 volatile menu_view_t menu_view;
@@ -132,7 +164,55 @@ static void menu_push(menu_node_id_t child) {
     menu_publish();
 }
 
+static inline bool picker_child(uint8_t child) {
+    return node_is_color((menu_node_id_t)child) || node_is_slider((menu_node_id_t)child) ||
+           node_is_text((menu_node_id_t)child);
+}
+
+static void overlay_close(bool commit) {
+    switch (menu_wr.overlay) {
+        case APP_MENU_CHILD_COLOR:
+            if (ui_color_picker_active()) ui_color_picker_end(commit);
+            break;
+        case APP_MENU_CHILD_SLIDER:
+            if (ui_slider_active()) ui_slider_end(commit);
+            break;
+        case APP_MENU_CHILD_TEXT:
+            if (ui_text_input_active()) ui_text_input_end(commit);
+            break;
+        default:
+            break;
+    }
+    menu_wr.overlay = 0;
+    menu_publish();
+}
+
+static void overlay_open(const menu_item_t *it, uint8_t child) {
+    if (child == APP_MENU_CHILD_COLOR) color_picker_enter(it);
+    else if (child == APP_MENU_CHILD_SLIDER) slider_enter(it);
+    else if (child == APP_MENU_CHILD_TEXT) text_enter(it);
+    menu_wr.overlay = child;
+    menu_publish();
+}
+
+static bool menu_open_folder_item(const menu_item_t *it, menu_node_id_t node) {
+    if (!menu_item_is_folder(it)) return false;
+    if (node_is_app(node)) menu_model_select_app(menu_wr.focus);
+    if (picker_child(it->child)) {
+        overlay_open(it, it->child);
+        return true;
+    }
+    if (node_is_lcdtest((menu_node_id_t)it->child)) ui_vscr_edit_begin();
+    if (node_is_app((menu_node_id_t)it->child)) menu_model_refresh_apps();
+    menu_push((menu_node_id_t)it->child);
+    return true;
+}
+
 static void menu_pop(void) {
+    if (menu_wr.overlay) {
+        overlay_close(false);
+        return;
+    }
     if (menu_wr.depth == 0) return;
     menu_wr.depth--;
     menu_wr.focus  = saved_focus[menu_wr.depth];
@@ -184,10 +264,12 @@ void menu_enter(void) {
     menu_wr.depth  = 0;
     menu_wr.focus  = 0;
     menu_wr.scroll = 0;
+    menu_wr.overlay = 0;
     menu_publish();
 }
 
 void menu_exit(void) {
+    if (menu_wr.overlay) overlay_close(false);
     menu_wr.phase  = 2;
     menu_wr.active = false;
     menu_shift     = false;
@@ -319,6 +401,51 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
         return true;
     }
 
+    // Modal color / slider / text editors: overlay on the current menu screen.
+    // Enter commits; Esc cancels (stay on the same menu row). Arrows adjust the
+    // control — Left must not dismiss the overlay (slider / text cursor / picker).
+    if (menu_wr.overlay) {
+        switch (keycode) {
+            case KC_ENTER:
+                menu_repeat_reset();
+                overlay_close(true);
+                return true;
+            case KC_ESC:
+                menu_repeat_reset();
+                overlay_close(false);
+                return true;
+            default:
+                break;
+        }
+        switch (menu_wr.overlay) {
+            case APP_MENU_CHILD_COLOR:
+                if (ui_color_picker_key(keycode, menu_shift)) {
+                    menu_rpt_kc    = keycode;
+                    menu_rpt_timer = timer_read32();
+                    menu_rpt_armed = false;
+                }
+                return true;
+            case APP_MENU_CHILD_SLIDER:
+                if (ui_slider_key(keycode, menu_shift)) {
+                    menu_rpt_kc    = keycode;
+                    menu_rpt_timer = timer_read32();
+                    menu_rpt_armed = false;
+                }
+                return true;
+            case APP_MENU_CHILD_TEXT:
+                if (ui_text_input_key(keycode, menu_shift)) {
+                    menu_rpt_kc    = keycode;
+                    menu_rpt_timer = timer_read32();
+                    menu_rpt_armed = false;
+                }
+                return true;
+            default:
+                menu_wr.overlay = 0;
+                menu_publish();
+                return true;
+        }
+    }
+
     // LCD TEST screen: live panel-window calibration. Arrows nudge the window
     // (shift resizes); Enter saves + returns, Esc discards + returns.
     if (node_is_lcdtest(node)) {
@@ -380,24 +507,15 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             if (cnt == 0 || menu_wr.focus >= cnt) return true;
             const menu_item_t *it = menu_item_at(node, menu_wr.focus);
             if (!menu_item_is_folder(it)) return true;
-            if (node_is_app(node)) menu_model_select_app(menu_wr.focus);
-            if (node_is_lcdtest((menu_node_id_t)it->child)) ui_vscr_edit_begin();
-            if (node_is_app((menu_node_id_t)it->child)) menu_model_refresh_apps();
-            menu_push((menu_node_id_t)it->child);
+            menu_open_folder_item(it, node);
             return true;
         }
         // Enter descends into a folder or confirms/fires a terminal action.
         case KC_ENTER: {
             if (cnt == 0 || menu_wr.focus >= cnt) return true;
             const menu_item_t *it = menu_item_at(node, menu_wr.focus);
-            if (menu_item_is_folder(it)) {
-                if (node_is_app(node)) menu_model_select_app(menu_wr.focus);
-                // Snapshot the window before entering LCD TEST so Esc can undo.
-                if (node_is_lcdtest((menu_node_id_t)it->child)) ui_vscr_edit_begin();
-                // Opening APP re-scans the flash app area (manual re-scan) so the
-                // list reflects anything uploaded since the last scan.
-                if (node_is_app((menu_node_id_t)it->child)) menu_model_refresh_apps();
-                menu_push((menu_node_id_t)it->child);
+            if (menu_open_folder_item(it, node)) {
+                /* folder opened (submenu or overlay) */
             } else {
                 uint8_t act = menu_item_action(it);
                 switch (act) {
@@ -455,6 +573,7 @@ void menu_housekeeping_task(void) {
     if (menu_rpt_kc == KC_NO) return;
 
     bool lcd_test = node_is_lcdtest(current_node());
+    uint8_t ov    = menu_wr.overlay;
 
     const uint16_t delay = LCD_GIF_REPEAT_DELAY;
     const uint16_t rate  = LCD_GIF_REPEAT_RATE;
@@ -474,6 +593,12 @@ void menu_housekeeping_task(void) {
     menu_mark_input();
     if (lcd_test) {
         lcd_test_apply(menu_rpt_kc, menu_shift);
+    } else if (ov == APP_MENU_CHILD_COLOR) {
+        ui_color_picker_key(menu_rpt_kc, menu_shift);
+    } else if (ov == APP_MENU_CHILD_SLIDER) {
+        ui_slider_key(menu_rpt_kc, menu_shift);
+    } else if (ov == APP_MENU_CHILD_TEXT) {
+        ui_text_input_key(menu_rpt_kc, menu_shift);
     } else {
         menu_move_focus(menu_rpt_kc == KC_UP ? -1 : +1, false);
     }
@@ -1072,6 +1197,24 @@ void menu_render_task(void) {
         }
         ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0xF800); // 1px red = visible-window edge
         ui_present(fb);
+        return;
+    }
+    if (v.overlay == APP_MENU_CHILD_COLOR) {
+        menu_scene_drop();
+        ui_color_picker_render(fbShow, UI_W, UI_H);
+        ui_present(fbShow);
+        return;
+    }
+    if (v.overlay == APP_MENU_CHILD_SLIDER) {
+        menu_scene_drop();
+        ui_slider_render(fbShow, UI_W, UI_H);
+        ui_present(fbShow);
+        return;
+    }
+    if (v.overlay == APP_MENU_CHILD_TEXT) {
+        menu_scene_drop();
+        ui_text_input_render(fbShow, UI_W, UI_H);
+        ui_present(fbShow);
         return;
     }
     if (v.phase != 2 && node_is_app_info(node)) {

@@ -261,7 +261,7 @@ static menu_node_t node_tbl[MN_COUNT];
 // (RP2040 SIO CPUID at 0xD0000000 reads the current core number.)
 typedef struct {
     menu_item_t it;
-    char        label[10];
+    char        label[24];
 } gen_slot_t;
 static gen_slot_t gen_slot[2];
 
@@ -613,7 +613,10 @@ static uint8_t app_node_count(uint8_t node) {
     if (node == APP_MENU_CHILD_APP_ITEM) return 2;
     if (node == APP_MENU_CHILD_APP_INFO ||
         node == APP_MENU_CHILD_APP_DELETE) return 0;
-    if (node == APP_MENU_CHILD_LCDTEST) return 0;
+    if (node == APP_MENU_CHILD_LCDTEST ||
+        node == APP_MENU_CHILD_COLOR ||
+        node == APP_MENU_CHILD_SLIDER ||
+        node == APP_MENU_CHILD_TEXT) return 0;
     if (!g_app_model || node >= g_app_model->node_count) return 0;
     const app_menu_node_t *n = &g_app_model->nodes[node];
     if (!n->items) { // generated node
@@ -654,7 +657,10 @@ static const menu_item_t *app_item_at(uint8_t id, uint8_t idx) {
     }
     if (id == APP_MENU_CHILD_APP_INFO ||
         id == APP_MENU_CHILD_APP_DELETE ||
-        id == APP_MENU_CHILD_LCDTEST) return NULL;
+        id == APP_MENU_CHILD_LCDTEST ||
+        id == APP_MENU_CHILD_COLOR ||
+        id == APP_MENU_CHILD_SLIDER ||
+        id == APP_MENU_CHILD_TEXT) return NULL;
     if (!g_app_model || id >= g_app_model->node_count) return NULL;
     if (idx >= app_node_count(id)) return NULL;
     const app_menu_node_t *n = &g_app_model->nodes[id];
@@ -701,6 +707,11 @@ const menu_item_t *menu_item_at(menu_node_id_t id, uint8_t idx) {
 // Root title of the active app model (NULL => menu.c falls back to the firmware
 // default). Deeper nodes derive their title from the parent folder item's label.
 const char *menu_model_app_root_title(void) {
+    static char dyn[32];
+    if (g_app_model && g_app_model->root_title_fill) {
+        g_app_model->root_title_fill(dyn, (unsigned)sizeof(dyn));
+        return dyn;
+    }
     if (g_app_model && g_app_model->nodes && g_app_model->node_count) {
         return g_app_model->nodes[0].title;
     }
@@ -708,6 +719,77 @@ const char *menu_model_app_root_title(void) {
 }
 
 // Deliver a user action (value >= APP_MENU_ACT_USER) to the app model's callback.
+static uint8_t s_picker_group;
+static uint8_t s_uint_group;
+static uint8_t s_uint_kind;
+static uint8_t s_text_group;
+
+uint16_t menu_model_color_get(uint8_t group) {
+    if (g_app_model && g_app_model->color_get) return g_app_model->color_get(group);
+    return 0xFFFF;
+}
+
+void menu_model_color_picker_bind(uint8_t group) { s_picker_group = group; }
+
+void menu_model_color_picker_commit(bool commit, uint16_t initial, uint16_t edited) {
+    (void)initial;
+    if (!commit || !g_app_model || !g_app_model->color_set) return;
+    g_app_model->color_set(s_picker_group, edited);
+}
+
+uint32_t menu_model_uint_get(uint8_t group) {
+    if (g_app_model && g_app_model->uint_get) return g_app_model->uint_get(group);
+    return 0;
+}
+
+void menu_model_uint_spec(uint8_t group, uint32_t *min, uint32_t *max, uint32_t *step) {
+    if (g_app_model && g_app_model->uint_spec) {
+        g_app_model->uint_spec(group, min, max, step);
+        return;
+    }
+    if (min) *min = 0;
+    if (max) *max = 100;
+    if (step) *step = 1;
+}
+
+void menu_model_uint_picker_bind(uint8_t group, uint8_t kind) {
+    s_uint_group = group;
+    s_uint_kind  = kind;
+}
+
+void menu_model_uint_picker_commit(bool commit, uint32_t initial, uint32_t edited, uint8_t kind) {
+    (void)initial;
+    (void)kind;
+    if (!commit || !g_app_model || !g_app_model->uint_set) return;
+    g_app_model->uint_set(s_uint_group, edited);
+}
+
+void menu_model_text_picker_bind(uint8_t group) { s_text_group = group; }
+
+void menu_model_text_get(uint8_t group, char *buf, unsigned bufsz) {
+    if (buf && bufsz) buf[0] = 0;
+    if (g_app_model && g_app_model->text_get && buf && bufsz)
+        g_app_model->text_get(group, buf, bufsz);
+}
+
+uint8_t menu_model_text_flags(uint8_t group) {
+    if (g_app_model && g_app_model->text_flags) return g_app_model->text_flags(group);
+    (void)group;
+    return 0;
+}
+
+unsigned menu_model_text_max_len(uint8_t group) {
+    if (g_app_model && g_app_model->text_max_len) return g_app_model->text_max_len(group);
+    (void)group;
+    return 15u;
+}
+
+void menu_model_text_picker_commit(bool commit, const char *initial, const char *edited) {
+    (void)initial;
+    if (!commit || !g_app_model || !g_app_model->text_set || !edited) return;
+    g_app_model->text_set(s_text_group, edited);
+}
+
 void menu_model_user_action(uint8_t action) {
     if (g_app_model && g_app_model->action && action >= APP_MENU_ACT_USER) {
         g_app_model->action(action);

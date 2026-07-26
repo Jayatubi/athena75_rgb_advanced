@@ -35,7 +35,7 @@ QUANTUM_PAINTER_DRIVERS  = gc9107_spi surface
 
 # Display data (boot splash is loaded from the flash boot slot, not compiled in)
 SRC +=  gfx/menu_font.c \
-        menu.c menu_model.c ui_scene.c dialog.c
+        menu.c menu_model.c ui_scene.c ui_color_picker.c ui_slider.c ui_text_input.c dialog.c
 
 # Core1 OS runtime. The former built-in ANIMATION/MATRIX renderers are slot apps
 # now; removing their ~100 KiB BSS makes the fixed 96 KiB app arena possible.

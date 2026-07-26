@@ -69,8 +69,8 @@ void flash_prompt_request(void) {
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    // gif key (0x7e04): the dedicated OS-input-mode toggle. Always intercepted, in
-    // either mode; never sent to the host and never enqueued as an app event.
+    // gif key (0x7e04): toggle whether keys go to the USB host or the OS event queue.
+    // Does not change menu/apps/display state; never sent to host or enqueued as app input.
     if (keycode == 0x7e04) {
         if (record->event.pressed) app_input_toggle();
         return false;
@@ -96,11 +96,15 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         return false;
     }
 
-    // Legacy on-screen menu (core0-driven; still consumed until SETTINGS replaces
-    // it via the OS menu service). Swallows keys while up.
+    // Menu is visible while an app holds menu_run() open. Keys go to the menu only
+    // in OS input mode (gif); in keyboard mode the menu stays on screen but keys
+    // reach the USB host so gif can toggle out of OS mode without closing the menu.
     if (menu_is_active()) {
-        menu_process_key(keycode, record->event.pressed);
-        return false;
+        if (app_input_mode() == APP_INPUT_OS) {
+            menu_process_key(keycode, record->event.pressed);
+            return false;
+        }
+        return true;
     }
 
     // OS input mode: keys drive the core1 OS (launcher/apps), NOT the host. Swallow

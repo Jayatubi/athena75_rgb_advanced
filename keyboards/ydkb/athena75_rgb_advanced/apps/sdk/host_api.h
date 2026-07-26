@@ -35,6 +35,7 @@ enum {
     APP_KEY_RIGHT = 0x4F, APP_KEY_LEFT = 0x50, APP_KEY_DOWN = 0x51, APP_KEY_UP = 0x52,
     APP_KEY_ENTER = 0x28, APP_KEY_ESC = 0x29, APP_KEY_SPACE = 0x2C,
     APP_KEY_MINUS = 0x2D, APP_KEY_EQUAL = 0x2E,
+    APP_KEY_LSHIFT = 0xE1, APP_KEY_RSHIFT = 0xE5,
 };
 
 // ---- RGB ----------------------------------------------------------------
@@ -84,8 +85,14 @@ enum { APP_MI_FOLDER = 0, APP_MI_VALUE = 1, APP_MI_ACTION = 2 };
 // Its rows descend through the remaining firmware-owned APP screens: an
 // app-specific submenu, a one-screen information card, and uninstall confirm.
 //   APP_MENU_CHILD_LCDTEST -- the panel-alignment calibration screen
+//   APP_MENU_CHILD_COLOR   -- full-screen HSV color picker (group = color id)
+//   APP_MENU_CHILD_SLIDER  -- horizontal slider (group = uint id; see uint_spec)
+//   APP_MENU_CHILD_TEXT    -- text input (group id; text_get/set; text_flags for numeric)
 // (These never collide with app node ids, which start at 0 and are small.)
 #define APP_MENU_CHILD_NONE    0u
+#define APP_MENU_CHILD_TEXT    0xF7u
+#define APP_MENU_CHILD_SLIDER  0xF8u
+#define APP_MENU_CHILD_COLOR   0xF9u
 #define APP_MENU_CHILD_APP_DELETE 0xFAu
 #define APP_MENU_CHILD_APP_INFO   0xFBu
 #define APP_MENU_CHILD_APP_ITEM   0xFCu
@@ -115,7 +122,7 @@ typedef struct app_menu_item_t {
 } app_menu_item_t;
 
 // Generated-node filler: for a node whose `items` is NULL, the engine calls this
-// per visible row. Fill *out; for a synthesised label write into `buf` (>=10 bytes)
+// per visible row. Fill *out; for a synthesised label write into `buf` (>=24 bytes)
 // and leave out->label NULL (the engine then uses buf); for a static string set
 // out->label and ignore buf. `node` is the app node id, `idx` in [0, count).
 typedef void (*app_menu_gen_fn)(uint8_t node, uint8_t idx, app_menu_item_t *out, char *buf);
@@ -138,7 +145,20 @@ typedef struct app_menu_model_t {
     uint8_t              (*group_get)(uint8_t group);     // current value of a group
     void                 (*group_set)(uint8_t group, uint8_t value); // Space activates
     void                 (*action)(uint8_t action);       // fires for value>=USER
+    uint16_t             (*color_get)(uint8_t group);     // RGB565 for APP_MENU_CHILD_COLOR
+    void                 (*color_set)(uint8_t group, uint16_t rgb565);
+    uint32_t             (*uint_get)(uint8_t group);      // APP_MENU_CHILD_SLIDER / NUMBER
+    void                 (*uint_set)(uint8_t group, uint32_t value);
+    // Optional bounds for slider/number pickers (defaults 0..100 step 1 if NULL).
+    void                 (*uint_spec)(uint8_t group, uint32_t *min, uint32_t *max, uint32_t *step);
+    void                 (*text_get)(uint8_t group, char *buf, unsigned bufsz);
+    void                 (*text_set)(uint8_t group, const char *text);
+    uint8_t              (*text_flags)(uint8_t group);
+    unsigned             (*text_max_len)(uint8_t group);
+    void                 (*root_title_fill)(char *buf, unsigned bufsz);
 } app_menu_model_t;
+
+#define APP_TEXT_NUMERIC 0x01u
 
 // ---- Services the firmware exposes to an app (all callable on core1) --------
 // Deliberately minimal: enough to reproduce the built-in anim/matrix apps. The

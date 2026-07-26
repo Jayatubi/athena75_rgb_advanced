@@ -85,6 +85,7 @@
 #define ATHENA_APPUP_DENIED  3  // user cancelled / timed out
 #define ATHENA_APPUP_ACTIVE  4  // erasing/programming in progress
 #define ATHENA_APPUP_DONE    5  // finished; slot holds the app
+#define ATHENA_APPUP_EXITING 6  // user accepted; returning to launcher before flash
 
 // Slot-app flash area: the last 8 MB (never firmware/EEPROM/boot). Matches app.ld.
 // Layout: firmware 0x10000000..0x10400000 (4MB), boot region 0x10400000..0x10800000

@@ -12,9 +12,10 @@
 #include "probe_flash.h"
 #include "config.h"
 #include "apps/sdk/host_api.h" // ATHENA_APP_MAGIC / app_header_t
-#include "app/app.h"           // app_slot_invalidate
+#include "app/app.h"           // app_slot_invalidate, app_return_to_launcher
 #include "app_scan.h"
 #include "app_input.h"
+#include "menu.h"
 #include "hardware/flash.h"   // FLASH_SECTOR_SIZE, FLASH_PAGE_SIZE
 
 #include <string.h>
@@ -28,6 +29,8 @@ static volatile uint32_t s_written = 0;
 static uint32_t          s_code_size = 0;
 static uint32_t          s_data_size = 0;
 static uint32_t          s_done_t  = 0;
+static volatile bool   s_launcher_ready;
+static uint32_t          s_exit_t  = 0;
 
 // One-page accumulation buffer (a write report carries <=23 bytes; a flash page
 // is 256B, so the host streams a page across several reports before we program).
@@ -92,11 +95,26 @@ static bool in_upload_region(uint32_t addr, uint32_t len, uint32_t grain) {
 // ---- dialog actions (INSTALL / CANCEL) --------------------------------------
 static void app_upload_accept(void) {
     app_input_release_all();
-    // Leave any running slot app before flash erase/program (same XIP window).
+    if (menu_is_active()) menu_exit();
     app_return_to_launcher();
-    s_state = APPUP_AUTH;
+    s_launcher_ready = false;
+    s_exit_t         = timer_read32();
+    s_state          = APPUP_EXITING;
 }
-static void app_upload_decline(void) { s_state = APPUP_IDLE; } // drop the screen entirely
+static void app_upload_decline(void) {
+    s_state = APPUP_IDLE;
+    s_launcher_ready = false;
+}
+
+void app_upload_launcher_ready(void) {
+    if (s_state == APPUP_EXITING) s_launcher_ready = true;
+}
+
+static void app_upload_promote_exiting(void) {
+    if (s_state != APPUP_EXITING) return;
+    s_launcher_ready = false;
+    s_state          = APPUP_AUTH;
+}
 
 // Dialog message, built per request (dialog copies the desc but keeps the message
 // pointer, so this must stay resident — only one upload is ever in flight).
@@ -229,6 +247,7 @@ void app_upload_finish(bool ok) {
         s_written = s_total;
         s_state   = APPUP_DONE;
         s_done_t  = timer_read32();
+        app_return_to_launcher();
         app_scan();
         if (s_slot) app_slot_invalidate(s_slot);
     } else {
@@ -243,6 +262,9 @@ static void app_upload_release_linger_if_due(void) {
 }
 
 void app_upload_task(void) {
+    if (s_state == APPUP_EXITING) {
+        if (s_launcher_ready || timer_elapsed32(s_exit_t) > 800u) app_upload_promote_exiting();
+    }
     app_upload_release_linger_if_due();
 }
 

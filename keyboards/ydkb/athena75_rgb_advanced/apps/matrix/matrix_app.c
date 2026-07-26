@@ -81,7 +81,6 @@ static void cfg_flush(void) {
 static void cfg_save(void) {
     cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
     save_pending = true;
-    cfg_flush();
 }
 
 // Shim the firmware names matrix.c uses onto the host_api table so the rain
@@ -275,8 +274,9 @@ static void matrix_input(void) {
 static void matrix_tick(uint32_t dt_ms) {
     (void)dt_ms;
 
-    cfg_flush();
-    if (leave_pending && !save_pending && !g_api->save_busy()) {
+    if (leave_pending) {
+        if (save_pending) cfg_flush();
+        if (save_pending || g_api->save_busy()) return;
         g_api->exit_to_launcher();
         return;
     }

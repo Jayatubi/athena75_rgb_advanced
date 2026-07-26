@@ -22,6 +22,7 @@ enum {
     APPUP_DENIED  = 3,  // cancelled / timed out
     APPUP_ACTIVE  = 4,  // erasing/programming
     APPUP_DONE    = 5,  // finished; slot holds the app
+    APPUP_EXITING = 6,  // accepted; slot app tearing down before flash
 };
 
 // Allowed flash window for slot apps: the last 8 MB (never firmware/EEPROM/boot).
@@ -56,6 +57,8 @@ int      app_upload_do_write(uint32_t page_addr, uint8_t poff, uint8_t len, cons
 void     app_upload_finish(bool ok);   // END (ok) / ABORT (!ok)
 void     app_upload_task(void);         // housekeeping: DONE -> IDLE after a moment
 void     app_upload_release_linger_if_due_from_core1(void); // same, safe from core1 render
+// core1: call when the launcher owns the screen (install waits for this).
+void     app_upload_launcher_ready(void);
 
 // ---- core1 (render, read-only) ----------------------------------------------
 // Draws the progress bar while an upload is authorized/active/just-finished.

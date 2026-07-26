@@ -23,7 +23,7 @@ uint8_t app_input_mode(void);
 // Set the mode. MUST run on core0 (calls clear_keyboard() + drops queued events on
 // a transition so no key is left half-pressed / stale across the switch).
 void    app_input_set_mode(uint8_t mode);
-// Toggle OS/keyboard (the gif key). core0 only.
+// Toggle OS/keyboard (the gif key). core0 only. Does not alter menu/apps/LCD state.
 void    app_input_toggle(void);
 // Reset the OS inactivity timer. Core0 only; call for input consumed by modal
 // menus/dialogs too, since those events do not pass through app_input_push().

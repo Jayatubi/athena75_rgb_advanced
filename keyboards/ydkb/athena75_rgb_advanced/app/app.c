@@ -13,6 +13,7 @@
 #include "c1_gfx.h"
 #include "c1.h"
 #include "menu.h"
+#include "app_upload.h"
 
 #define APP_DT_MAX_MS 200 // clamp the frame delta after a stall / wake
 
@@ -116,6 +117,8 @@ void app_run(void) {
     if (dt > APP_DT_MAX_MS) dt = APP_DT_MAX_MS;
 
     if (cur && cur->tick) cur->tick(dt);
+
+    if (cur == &app_launcher) app_upload_launcher_ready();
 }
 
 const app_t *app_current(void)     { return cur; }

@@ -112,6 +112,23 @@ void        menu_model_user_action(uint8_t action); // action >= APP_MENU_ACT_US
 void        menu_model_select_app(uint8_t index);   // selected firmware APP-list row
 uint8_t     menu_model_selected_app(void);
 
+// Color picker (APP_MENU_CHILD_COLOR): `group` comes from the folder item's group field.
+uint16_t    menu_model_color_get(uint8_t group);
+void        menu_model_color_picker_bind(uint8_t group);
+void        menu_model_color_picker_commit(bool commit, uint16_t initial, uint16_t edited);
+
+enum { MENU_UINT_SLIDER = 0, MENU_UINT_NUMBER = 1 };
+void        menu_model_uint_picker_bind(uint8_t group, uint8_t kind);
+void        menu_model_uint_picker_commit(bool commit, uint32_t initial, uint32_t edited, uint8_t kind);
+uint32_t    menu_model_uint_get(uint8_t group);
+void        menu_model_uint_spec(uint8_t group, uint32_t *min, uint32_t *max, uint32_t *step);
+
+void        menu_model_text_picker_bind(uint8_t group);
+void        menu_model_text_picker_commit(bool commit, const char *initial, const char *edited);
+void        menu_model_text_get(uint8_t group, char *buf, unsigned bufsz);
+uint8_t     menu_model_text_flags(uint8_t group);
+unsigned    menu_model_text_max_len(uint8_t group);
+
 // RGB effect list (alphabetical), so an app can reproduce the RGB mode picker.
 uint8_t     menu_model_rgb_mode_count(void);
 const char *menu_model_rgb_mode_info(uint8_t disp_idx, uint8_t *out_mode);
