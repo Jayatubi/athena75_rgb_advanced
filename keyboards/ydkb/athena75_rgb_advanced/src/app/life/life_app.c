@@ -115,8 +115,13 @@ static uint32_t crc32(const void *data, uint32_t len) {
 
 #define LIFE_SIZE_LEVELS 2u
 
-// Stored size index: 0 = 2px, 1 = 4px (1px removed — too heavy on MCU).
-static uint8_t size_idx_normalize(uint8_t raw) {
+// Runtime size index: 0 = 2px, 1 = 4px.
+static uint8_t size_clamp(uint8_t idx) {
+    return idx >= LIFE_SIZE_LEVELS ? (LIFE_SIZE_LEVELS - 1u) : idx;
+}
+
+// v2/v3 save used 0=1px, 1=2px, 2=4px before 1px was removed.
+static uint8_t migrate_legacy_size(uint8_t raw) {
     if (raw >= 2u) return 1u;
     return 0u;
 }
@@ -178,7 +183,7 @@ static void cfg_load(void) {
     if (saved.version == 4 && saved.speed < 4u && saved.size < 3u &&
         saved.crc == crc32(&saved, (uint32_t)__builtin_offsetof(life_save_t, crc))) {
         cfg = saved;
-        cfg.size    = size_idx_normalize(cfg.size);
+        cfg.size    = size_clamp(cfg.size);
         cfg.pattern = pattern_normalize(cfg.pattern);
         return;
     }
@@ -188,7 +193,7 @@ static void cfg_load(void) {
         v3.crc == crc32(&v3, (uint32_t)__builtin_offsetof(life_save_v3_t, crc))) {
         cfg_defaults();
         cfg.speed      = v3.speed;
-        cfg.size       = size_idx_normalize(v3.size);
+        cfg.size       = migrate_legacy_size(v3.size);
         cfg.cell_color = v3.cell_color;
         cfg.pattern    = pattern_normalize((uint8_t)(v3.seed % PATTERN_COUNT));
         return;
@@ -199,7 +204,7 @@ static void cfg_load(void) {
         v2.crc == crc32(&v2, (uint32_t)__builtin_offsetof(life_save_v2_t, crc))) {
         cfg_defaults();
         cfg.speed      = v2.speed;
-        cfg.size       = size_idx_normalize(v2.size);
+        cfg.size       = migrate_legacy_size(v2.size);
         cfg.cell_color = v2.cell_color;
         return;
     }
@@ -293,7 +298,7 @@ static void preset_apply(const life_preset_t *p) {
 
 static void preset_apply_now(const life_preset_t *p) {
     if (!p) return;
-    cfg.size    = size_idx_normalize(p->size);
+    cfg.size    = size_clamp(p->size);
     cfg.pattern = pattern_normalize(p->pattern);
     cfg_save();
     gw = 0;
@@ -303,7 +308,7 @@ static void preset_apply_now(const life_preset_t *p) {
 }
 
 static uint8_t preset_size_px(uint8_t size_idx) {
-    return cell_px_from_idx(size_idx_normalize(size_idx));
+    return cell_px_from_idx(size_clamp(size_idx));
 }
 
 static void preset_format_label(const life_preset_t *p, char *buf, unsigned bufsz) {
@@ -321,7 +326,7 @@ static void preset_format_label(const life_preset_t *p, char *buf, unsigned bufs
 }
 
 static uint8_t cell_px_from_cfg(void) {
-    return cell_px_from_idx(size_idx_normalize(cfg.size));
+    return cell_px_from_idx(size_clamp(cfg.size));
 }
 
 static inline uint32_t idx(int16_t x, int16_t y) {
@@ -693,7 +698,7 @@ static void root_title_fill(char *buf, unsigned bufsz) {
 
 static uint8_t menu_get(uint8_t group) {
     if (group == G_SPEED) return cfg.speed;
-    if (group == G_SIZE) return size_idx_normalize(cfg.size);
+    if (group == G_SIZE) return size_clamp(cfg.size);
     if (group == G_PATTERN) return pattern_normalize(cfg.pattern);
     return 0;
 }
@@ -703,7 +708,7 @@ static void menu_set(uint8_t group, uint8_t value) {
         cfg.speed = value;
         cfg_save();
     } else if (group == G_SIZE && value < LIFE_SIZE_LEVELS) {
-        cfg.size = value;
+        cfg.size = size_clamp(value);
         cfg_save();
         gw = 0;
         sync_dims();
