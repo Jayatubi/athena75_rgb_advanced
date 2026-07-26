@@ -45,6 +45,8 @@ void ui_clip_reset(void);
 int16_t ui_vw(void);
 int16_t ui_vh(void);
 
+// Modal window chrome (title bar + matching outer frame): see ui_window.h.
+
 // Live calibration, driven by the LCD TEST screen (core0 input side). Begin
 // snapshots the current values so cancel can restore them; the four edge nudges
 // move one edge (opposite edge fixed), rendered in real time; commit persists to

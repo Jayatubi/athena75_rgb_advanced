@@ -3,13 +3,13 @@
 
 #include "ui_text_input.h"
 #include "ui.h"
+#include "ui_window.h"
 #include "menu_model.h"
 #include "quantum.h"
 
 #include <string.h>
 
 #define TEXT_BUF_MAX 16
-#define OVERLAY_TITLE_H 14
 #define OVERLAY_FOOT_Y(vh) ((int16_t)(vh) - 12)
 
 static bool     ti_active;
@@ -20,17 +20,6 @@ static uint8_t  ti_flags;
 static unsigned ti_max;
 static unsigned ti_cursor;
 static unsigned ti_len;
-
-static void overlay_chrome(uint8_t *fb, int16_t vw, int16_t vh, const char *title) {
-    ui_clear(fb, 0x0000);
-    ui_fill_rect(fb, 0, 0, vw, OVERLAY_TITLE_H, 0xFFFF);
-    if (title && title[0]) {
-        ui_clip_set(2, 1, (int16_t)(vw - 4), OVERLAY_TITLE_H - 2);
-        ui_text(fb, 4, 2, title, 0x0000, 0xFFFF);
-        ui_clip_reset();
-    }
-    ui_wire_rect(fb, 0, 0, vw, vh, 0x4208);
-}
 
 static void overlay_footer(uint8_t *fb, int16_t vw, int16_t vh, const char *hint) {
     (void)vw;
@@ -130,7 +119,9 @@ void ui_text_input_end(bool commit) {
 void ui_text_input_render(uint8_t *fb, int16_t vw, int16_t vh) {
     if (!ti_active) return;
 
-    overlay_chrome(fb, vw, vh, ti_title);
+    ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+    win.title             = ti_title;
+    ui_window_draw_size(fb, vw, vh, &win);
 
     const int16_t box_x = 4;
     const int16_t box_w = (int16_t)(vw - 8);

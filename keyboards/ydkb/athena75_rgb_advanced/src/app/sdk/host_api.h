@@ -304,6 +304,11 @@ typedef struct host_api_t {
     bool     (*app_area_erase_busy)(void);
 
     void     (*menu_close)(void);
+    // Suspend/resume: hide the menu for a full-screen sub-flow without clearing
+    // navigation depth (return lands on the same folder/item). close() still
+    // tears down the whole session.
+    void     (*menu_suspend)(void);
+    void     (*menu_resume)(void);
 } host_api_t;
 
 // ---- What an app exposes back to the firmware -------------------------------

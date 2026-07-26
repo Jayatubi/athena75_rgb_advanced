@@ -25,7 +25,7 @@ if [[ "${APP}" == "ace" ]]; then
     EXTRA_SRC="/kbd/src/firmware/lib/fixed_math/fixed_math.c"
 fi
 if [[ "${APP}" == "settings" ]]; then
-    EXTRA_SRC="${EXTRA_SRC} /kbd/src/firmware/ui_arrow_confirm.c"
+    EXTRA_SRC="${EXTRA_SRC} /kbd/src/firmware/ui_arrow_confirm.c /kbd/src/firmware/ui_window.c"
 fi
 
 if [[ ! -f "${SRC}" ]]; then

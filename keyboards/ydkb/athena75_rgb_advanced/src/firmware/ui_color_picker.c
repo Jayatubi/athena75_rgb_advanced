@@ -3,14 +3,15 @@
 
 #include "ui_color_picker.h"
 #include "ui.h"
+#include "ui_window.h"
 #include "menu_model.h"
 #include "color.h"
 #include "gfx/menu_font.h"
 #include "quantum.h"
 
+#include <stdio.h>
 #include <string.h>
 
-#define CP_TITLE_H  MF_LINE_HEIGHT
 #define CP_FOOT_H   MF_LINE_HEIGHT
 #define CP_SWATCH   10
 
@@ -131,23 +132,23 @@ void ui_color_picker_end(bool commit) {
 void ui_color_picker_render(uint8_t *fb, int16_t vw, int16_t vh) {
     if (!cp_active) return;
 
+    ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+    win.title             = cp_title;
+    ui_window_draw_size(fb, vw, vh, &win);
+
+    ui_window_layout_t lay;
+    ui_window_layout_fill(vw, vh, &lay);
+
     const int16_t pad   = 2;
     const int16_t hue_w = 12;
+    const int16_t foot_y = (int16_t)(vh - lay.border - CP_FOOT_H);
     const int16_t sv_x  = pad;
-    const int16_t sv_y  = (int16_t)(CP_TITLE_H + pad);
+    const int16_t sv_y  = (int16_t)(lay.content_y + pad);
     const int16_t sv_w  = (int16_t)(vw - hue_w - 3 * pad);
-    const int16_t sv_h  = (int16_t)(vh - CP_TITLE_H - CP_FOOT_H - 2 * pad);
+    const int16_t sv_h  = (int16_t)(foot_y - sv_y - pad);
     const int16_t hue_x = (int16_t)(sv_x + sv_w + pad);
     const int16_t hue_y = sv_y;
     const int16_t hue_h = sv_h;
-
-    ui_clear(fb, 0x0000);
-    ui_fill_rect(fb, 0, 0, vw, CP_TITLE_H, 0xFFFF);
-    if (cp_title[0]) {
-        ui_clip_set(2, 1, (int16_t)(vw - 4), CP_TITLE_H - 2);
-        ui_text(fb, 4, 2, cp_title, 0x0000, 0xFFFF);
-        ui_clip_reset();
-    }
 
     for (int16_t yy = 0; yy < sv_h; yy++) {
         uint8_t v = (uint8_t)(((int32_t)(sv_h - 1 - yy) * 255) / (sv_h > 1 ? sv_h - 1 : 1));
@@ -173,13 +174,25 @@ void ui_color_picker_render(uint8_t *fb, int16_t vw, int16_t vh) {
     ui_hline(fb, hue_x, hy, hue_w, 0xFFFF);
     ui_hline(fb, hue_x, (int16_t)(hy + 1), hue_w, 0x0000);
 
-    const int16_t foot_y   = (int16_t)(vh - CP_FOOT_H);
     const int16_t swatch_y = (int16_t)(foot_y + (CP_FOOT_H - CP_SWATCH) / 2);
     const int16_t text_y   = (int16_t)(foot_y + (CP_FOOT_H - MF_LINE_HEIGHT) / 2);
-    const int16_t text_x   = (int16_t)(pad + CP_SWATCH + 4);
+    const int16_t text_x   = (int16_t)(lay.content_x + CP_SWATCH + 4);
 
-    ui_fill_rect(fb, pad, swatch_y, CP_SWATCH, CP_SWATCH, hsv_to565(cp_h, cp_s, cp_v));
-    ui_wire_rect(fb, pad, swatch_y, CP_SWATCH, CP_SWATCH, 0xFFFF);
-    ui_text(fb, text_x, text_y, "ARROWS SV  -/+ H  ENT OK  ESC", 0x7BEF, 0x0000);
-    ui_wire_rect(fb, 0, 0, vw, vh, 0x4208);
+    ui_fill_rect(fb, lay.content_x, swatch_y, CP_SWATCH, CP_SWATCH, hsv_to565(cp_h, cp_s, cp_v));
+    ui_wire_rect(fb, lay.content_x, swatch_y, CP_SWATCH, CP_SWATCH, 0xFFFF);
+
+    rgb_t rgb = hsv_to_rgb((hsv_t){ cp_h, cp_s, cp_v });
+    char  line[24];
+    char  hue_line[8];
+    snprintf(hue_line, sizeof hue_line, "H%u", (unsigned)cp_h);
+    int16_t hue_tw = ui_text_width(hue_line);
+    int16_t hue_tx = (int16_t)(hue_x + hue_w - hue_tw);
+    if (hue_tx < text_x) hue_tx = text_x;
+
+    snprintf(line, sizeof line, "R%u G%u B%u", (unsigned)rgb.r, (unsigned)rgb.g, (unsigned)rgb.b);
+    ui_clip_set(text_x, foot_y, (int16_t)(hue_tx - text_x - 2), CP_FOOT_H);
+    ui_text(fb, text_x, text_y, line, 0xFFFF, 0x0000);
+    ui_clip_reset();
+
+    ui_text(fb, hue_tx, text_y, hue_line, 0x7BEF, 0x0000);
 }

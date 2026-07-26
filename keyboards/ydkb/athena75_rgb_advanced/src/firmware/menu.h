@@ -24,6 +24,11 @@ extern volatile menu_view_t menu_view;
 // core0
 void menu_enter(void);
 void menu_exit(void);
+// Hide menu chrome/input without resetting depth/path or dropping the app model
+// (for full-screen flows inside a settings-style app). Pair with menu_resume.
+void menu_suspend(void);
+void menu_resume_enter(void); // core0: re-show menu at preserved stack
+void menu_request_resume(void); // core1: ask core0 to resume
 bool menu_is_active(void);
 bool menu_process_key(uint16_t keycode, bool pressed);
 void menu_housekeeping_task(void);

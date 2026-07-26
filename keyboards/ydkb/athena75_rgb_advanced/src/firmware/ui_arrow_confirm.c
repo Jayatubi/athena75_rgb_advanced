@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "ui_arrow_confirm.h"
+#include "ui_window.h"
 
 static void byte_copy(void *dst, const void *src, unsigned n) {
     uint8_t       *d = (uint8_t *)dst;
@@ -79,10 +80,22 @@ void ui_arrow_confirm_render(const ui_arrow_confirm_t *c, uint8_t *fb, int16_t w
     if (!c || !fb || !view) return;
     const ui_arrow_confirm_ops_t *o = &c->ops;
 
-    o->fill_rect(fb, 0, 0, w, h, 0x0000);
-    o->wire_rect(fb, 0, 0, w, h, view->banner_bg ? view->banner_bg : 0xF800);
-    o->fill_rect(fb, 1, 1, (int16_t)(w - 2), 15, view->banner_bg ? view->banner_bg : 0xF800);
-    if (view->banner) o->text(fb, 4, 2, view->banner, 0xFFFF, view->banner_bg);
+    ui_window_ops_t wops = {
+        .clear      = NULL,
+        .fill_rect  = o->fill_rect,
+        .wire_rect  = o->wire_rect,
+        .text       = o->text,
+        .clip_set   = o->clip_set,
+        .clip_reset = o->clip_reset,
+        .text_width = o->text_width,
+    };
+    ui_window_style_t st = UI_WINDOW_STYLE_ALERT;
+    st.title             = view->banner;
+    if (view->banner_bg) {
+        st.title_bg = view->banner_bg;
+        st.title_fg = 0xFFFF;
+    }
+    ui_window_draw_ops(&wops, fb, w, h, &st);
 
     if (view->subject && view->subject[0]) {
         o->clip_set(5, 20, (int16_t)(w - 10), 14);

@@ -3,29 +3,18 @@
 
 #include "ui_slider.h"
 #include "ui.h"
+#include "ui_window.h"
 #include "menu_model.h"
 #include "quantum.h"
 
 #include <string.h>
 
-#define OVERLAY_TITLE_H 14
 #define OVERLAY_FOOT_Y(vh) ((int16_t)(vh) - 12)
 #define SL_TRACK_H        14
 
 static bool     sl_active;
 static uint32_t sl_val, sl_initial, sl_min, sl_max, sl_step;
 static char     sl_title[20];
-
-static void overlay_chrome(uint8_t *fb, int16_t vw, int16_t vh, const char *title) {
-    ui_clear(fb, 0x0000);
-    ui_fill_rect(fb, 0, 0, vw, OVERLAY_TITLE_H, 0xFFFF);
-    if (title && title[0]) {
-        ui_clip_set(2, 1, (int16_t)(vw - 4), OVERLAY_TITLE_H - 2);
-        ui_text(fb, 4, 2, title, 0x0000, 0xFFFF);
-        ui_clip_reset();
-    }
-    ui_wire_rect(fb, 0, 0, vw, vh, 0x4208);
-}
 
 static void u32_dec(char *buf, uint32_t n) {
     char t[11];
@@ -116,7 +105,9 @@ void ui_slider_end(bool commit) {
 void ui_slider_render(uint8_t *fb, int16_t vw, int16_t vh) {
     if (!sl_active) return;
 
-    overlay_chrome(fb, vw, vh, sl_title);
+    ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+    win.title             = sl_title;
+    ui_window_draw_size(fb, vw, vh, &win);
 
     const int16_t pad     = 6;
     const int16_t track_y = (int16_t)(vh / 2 - 6);

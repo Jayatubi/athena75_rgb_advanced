@@ -19,6 +19,7 @@
 
 #include "host_api.h"
 #include "ui_arrow_confirm.h"
+#include "ui_window.h"
 
 static const host_api_t *g;
 static bool             menu_opened;
@@ -105,6 +106,27 @@ static const char *slot_state_label(uint8_t state) {
 
 // ---- slot storage UI --------------------------------------------------------
 static void settings_erase_confirm_begin(void);
+
+static void host_window_ops(ui_window_ops_t *ops) {
+    ops->clear      = g->clear;
+    ops->fill_rect  = g->fill_rect;
+    ops->wire_rect  = g->wire_rect;
+    ops->text       = g->text;
+    ops->clip_set   = g->clip_set;
+    ops->clip_reset = g->clip_reset;
+    ops->text_width = g->text_width;
+}
+
+static int16_t vwin_w(void) { return (int16_t)g->vw(); }
+static int16_t vwin_h(void) { return (int16_t)g->vh(); }
+
+static void draw_host_window(const ui_window_style_t *base, const char *title) {
+    ui_window_style_t st = *base;
+    st.title             = title;
+    ui_window_ops_t ops;
+    host_window_ops(&ops);
+    ui_window_draw_ops(&ops, g->fb, vwin_w(), vwin_h(), &st);
+}
 static void text_in_box(int16_t x, int16_t y, int16_t bw, int16_t bh,
                         const char *s, uint16_t fg, uint16_t bg) {
     int16_t tw = g->text_width(s);
@@ -119,9 +141,9 @@ typedef struct {
     int16_t gx, gy, cw, ch, cg;
 } grid_geom_t;
 
-static void storage_grid_geom(int16_t w, int16_t margin, int16_t lh, grid_geom_t *geo) {
-    const int16_t head_h = (int16_t)(lh + 2);
-    int16_t y            = (int16_t)(1 + head_h + 2 + lh + lh + 1 + 6 + 3);
+static void storage_grid_geom(int16_t w, int16_t margin, int16_t lh, int16_t content_y,
+                              grid_geom_t *geo) {
+    int16_t y        = (int16_t)(content_y + lh + lh + 1 + 6 + 3);
     const int16_t bw     = (int16_t)(w - 2 * margin);
     geo->cg              = 2;
     geo->gx              = margin;
@@ -144,26 +166,22 @@ static void storage_render(void) {
     }
 
     uint8_t *fb = g->fb;
-    const int16_t w = (int16_t)g->fb_w;
-    const int16_t h = (int16_t)g->fb_h;
+    const int16_t w = vwin_w();
+    const int16_t h = vwin_h();
     const int16_t lh = g->line_height();
-    const int16_t margin = 4;
 
     enum {
-        COL_BG = 0x0000, COL_FRAME = 0x4208, COL_HEAD = 0x07FF, COL_HEADFG = 0x0000,
-        COL_DIM = 0xBDF7, COL_FREE = 0x1084, COL_FREEB = 0x2945,
+        COL_BG = 0x0000, COL_DIM = 0xBDF7, COL_FREE = 0x1084, COL_FREEB = 0x2945,
         COL_OK = 0x07E0, COL_OKD = 0x0320, COL_OKB = 0x0400,
         COL_RES = 0xFD20, COL_RESB = 0xA800, COL_BARBG = 0x2104, COL_BARFG = 0x05FF,
     };
 
-    g->clear(fb, COL_BG);
-    g->wire_rect(fb, 0, 0, w, h, COL_FRAME);
+    draw_host_window(&UI_WINDOW_STYLE_SETTINGS, "SLOT STORAGE");
 
-    const int16_t head_h = (int16_t)(lh + 2);
-    g->fill_rect(fb, 1, 1, (int16_t)(w - 2), head_h, COL_HEAD);
-    text_in_box(margin, 1, (int16_t)(w - 2 * margin), head_h, "SLOT STORAGE", COL_HEADFG, COL_HEAD);
-
-    int16_t y = (int16_t)(1 + head_h + 2);
+    ui_window_layout_t lay;
+    ui_window_layout_fill(w, h, &lay);
+    const int16_t margin = (int16_t)(lay.content_x + 2);
+    int16_t y            = lay.content_y;
 
     char line[32];
     line[0] = 0;
@@ -194,8 +212,8 @@ static void storage_render(void) {
     g->text(fb, margin, y, line, COL_DIM, COL_BG);
     y = (int16_t)(y + lh + 1);
 
-    const int16_t bx = margin;
-    const int16_t bw = (int16_t)(w - 2 * margin);
+    const int16_t bx = (int16_t)(lay.content_x + 2);
+    const int16_t bw = (int16_t)(lay.content_w - 4);
     const int16_t bh = 6;
     g->fill_rect(fb, bx, y, bw, bh, COL_BARBG);
     if (used_n) {
@@ -205,11 +223,11 @@ static void storage_render(void) {
         if (fill > bw) fill = bw;
         g->fill_rect(fb, bx, y, fill, bh, COL_BARFG);
     }
-    g->wire_rect(fb, bx, y, bw, bh, COL_FRAME);
+    g->wire_rect(fb, bx, y, bw, bh, COL_BARBG);
     y = (int16_t)(y + bh + 3);
 
     grid_geom_t geo;
-    storage_grid_geom(w, margin, lh, &geo);
+    storage_grid_geom(w, margin, lh, lay.content_y, &geo);
     const int16_t gx = geo.gx;
     const int16_t gy = geo.gy;
     const int16_t cw = geo.cw;
@@ -267,7 +285,7 @@ static void storage_render(void) {
     y = (int16_t)(y + lh);
     if ((int16_t)(y + lh) <= h) {
         const char *hint = "ENTER INFO";
-        g->text(fb, margin, y, hint, COL_FRAME, COL_BG);
+        g->text(fb, margin, y, hint, COL_DIM, COL_BG);
     }
 
     g->present(fb);
@@ -294,8 +312,8 @@ static void storage_input(void) {
                 phase = PH_SLOT_DETAIL;
                 break;
             case APP_KEY_ESC:
-                phase       = PH_MENU;
-                menu_opened = false;
+                phase = PH_MENU;
+                g->menu_resume();
                 break;
             default:
                 break;
@@ -308,22 +326,17 @@ static void slot_detail_render(void) {
     g->slot_query(storage_sel, &info);
 
     uint8_t *fb    = g->fb;
-    const int16_t w  = (int16_t)g->fb_w;
+    const int16_t w  = vwin_w();
     const int16_t lh = g->line_height();
     const int16_t margin = 4;
 
-    enum {
-        COL_BG = 0x0000, COL_FRAME = 0x4208, COL_HEAD = 0x07FF, COL_HEADFG = 0x0000,
-        COL_DIM = 0xBDF7, COL_ACC = 0xFFFF,
-    };
+    enum { COL_BG = 0x0000, COL_DIM = 0xBDF7, COL_ACC = 0xFFFF };
 
-    g->clear(fb, COL_BG);
-    g->wire_rect(fb, 0, 0, w, (int16_t)g->fb_h, COL_FRAME);
-    const int16_t head_h = (int16_t)(lh + 2);
-    g->fill_rect(fb, 1, 1, (int16_t)(w - 2), head_h, COL_HEAD);
-    text_in_box(margin, 1, (int16_t)(w - 2 * margin), head_h, "SLOT", COL_HEADFG, COL_HEAD);
+    draw_host_window(&UI_WINDOW_STYLE_SETTINGS, "SLOT");
 
-    int16_t y = (int16_t)(1 + head_h + 4);
+    ui_window_layout_t lay;
+    ui_window_layout_fill(w, vwin_h(), &lay);
+    int16_t y = (int16_t)(lay.content_y + 2);
     char line[32];
 
     line[0] = 0;
@@ -365,11 +378,11 @@ static void slot_detail_render(void) {
     }
 
     if (info.scan_idx != ATHENA_APP_SCAN_IDX_NONE) {
-        g->text(fb, margin, (int16_t)(g->fb_h - lh - lh - 2), "ENTER APP INFO", COL_ACC, COL_BG);
+        g->text(fb, margin, (int16_t)(vwin_h() - lh - lh - 2), "ENTER APP INFO", COL_ACC, COL_BG);
     } else if (info.state == ATHENA_APP_SLOT_RESERVED) {
-        g->text(fb, margin, (int16_t)(g->fb_h - lh - lh - 2), "ENTER ERASE", 0xF800, COL_BG);
+        g->text(fb, margin, (int16_t)(vwin_h() - lh - lh - 2), "ENTER ERASE", 0xF800, COL_BG);
     }
-    g->text(fb, margin, (int16_t)(g->fb_h - lh - 2), "ESC BACK", COL_FRAME, COL_BG);
+    g->text(fb, margin, (int16_t)(vwin_h() - lh - 2), "ESC BACK", COL_DIM, COL_BG);
     g->present(fb);
 }
 
@@ -422,7 +435,7 @@ static void erase_confirm_render(void) {
         .banner_bg = 0xF800,
         .subject   = erase_info.name[0] ? erase_info.name : "UNKNOWN",
     };
-    ui_arrow_confirm_render(&erase_confirm, g->fb, (int16_t)g->fb_w, (int16_t)g->fb_h, &view);
+    ui_arrow_confirm_render(&erase_confirm, g->fb, vwin_w(), vwin_h(), &view);
     g->present(g->fb);
 }
 
@@ -456,10 +469,12 @@ static void erase_confirm_input(void) {
 }
 
 static void erasing_render(void) {
-    uint8_t *fb = g->fb;
-    g->clear(fb, 0x0000);
-    text_in_box(0, 0, (int16_t)g->fb_w, (int16_t)g->fb_h, "ERASING...", 0xFFFF, 0x0000);
-    g->present(fb);
+    draw_host_window(&UI_WINDOW_STYLE_MENU, "ERASING");
+    ui_window_layout_t lay;
+    ui_window_layout_fill(vwin_w(), vwin_h(), &lay);
+    text_in_box(lay.content_x, lay.content_y, lay.content_w, lay.content_h, "PLEASE WAIT", 0xFFFF,
+                0x0000);
+    g->present(g->fb);
 }
 
 static void erasing_tick(void) {
@@ -484,24 +499,25 @@ static void app_detail_render(void) {
     }
 
     uint8_t *fb = g->fb;
-    const int16_t w = (int16_t)g->fb_w;
-    const int16_t h = (int16_t)g->fb_h;
+    const int16_t w = vwin_w();
+    const int16_t h = vwin_h();
     const int16_t lh = g->line_height();
 
-    enum { COL_BG = 0x0000, COL_FRAME = 0x4208, COL_DIM = 0xBDF7 };
+    enum { COL_BG = 0x0000, COL_DIM = 0xBDF7 };
 
-    g->clear(fb, COL_BG);
-    g->wire_rect(fb, 0, 0, w, h, COL_FRAME);
-    g->fill_rect(fb, 1, 1, (int16_t)(w - 2), 15, 0xFFFF);
-    g->text(fb, 4, 2, "APP DETAILS", 0x0000, 0xFFFF);
+    draw_host_window(&UI_WINDOW_STYLE_MENU, "APP DETAILS");
+
+    ui_window_layout_t lay;
+    ui_window_layout_fill(w, h, &lay);
+    const int16_t body_y = (int16_t)(lay.content_y + 2);
 
     if (g->app_icon_read(reg.base, icon_buf)) {
-        g->wire_rect(fb, 4, 20, 36, 36, 0x7BEF);
-        g->blit565(fb, 6, 22, 32, 32, icon_buf);
+        g->wire_rect(fb, 4, body_y, 36, 36, 0x7BEF);
+        g->blit565(fb, 6, (int16_t)(body_y + 2), 32, 32, icon_buf);
     }
 
-    g->clip_set(44, 20, (int16_t)(w - 48), lh);
-    g->text(fb, 44, 20, reg.name, 0xFFFF, COL_BG);
+    g->clip_set(44, body_y, (int16_t)(w - 48), lh);
+    g->text(fb, 44, body_y, reg.name, 0xFFFF, COL_BG);
     g->clip_reset();
 
     char line[32];
@@ -513,7 +529,7 @@ static void app_detail_render(void) {
         str_cat(line, n);
     }
     str_cat(line, " KB");
-    g->text(fb, 44, 36, line, COL_DIM, COL_BG);
+    g->text(fb, 44, (int16_t)(body_y + 16), line, COL_DIM, COL_BG);
 
     line[0] = 0;
     str_cat(line, "USED ");
@@ -523,8 +539,9 @@ static void app_detail_render(void) {
         str_cat(line, n);
     }
     str_cat(line, " KB");
-    g->text(fb, 44, 49, line, COL_DIM, COL_BG);
+    g->text(fb, 44, (int16_t)(body_y + 29), line, COL_DIM, COL_BG);
 
+    int16_t y = (int16_t)(body_y + 47);
     if (info.span == 1u) {
         line[0] = 0;
         str_cat(line, "SLOT #");
@@ -541,10 +558,12 @@ static void app_detail_render(void) {
         u16_str((uint16_t)(reg.slot + info.span - 1u), n);
         str_cat(line, n);
     }
-    g->text(fb, 6, 67, line, 0xFFFF, COL_BG);
+    g->text(fb, 6, y, line, 0xFFFF, COL_BG);
+    y = (int16_t)(y + lh);
 
     u32_hex(reg.base, line);
-    g->text(fb, 6, 82, line, COL_DIM, COL_BG);
+    g->text(fb, 6, y, line, COL_DIM, COL_BG);
+    y = (int16_t)(y + lh);
 
     line[0] = 0;
     str_cat(line, "VIEW SLOT #");
@@ -553,7 +572,7 @@ static void app_detail_render(void) {
         u16_str(storage_sel, n);
         str_cat(line, n);
     }
-    g->text(fb, 6, 97, line, COL_DIM, COL_BG);
+    g->text(fb, 6, y, line, COL_DIM, COL_BG);
 
     g->text(fb, 6, (int16_t)(h - lh - 2), "ESC BACK", 0x7BEF, COL_BG);
     g->present(fb);
@@ -683,7 +702,7 @@ static void menu_action(uint8_t act) {
     g->app_area_rescan();
     g->set_input_mode(APP_INPUT_OS);
     storage_after_menu = true;
-    g->menu_close();
+    g->menu_suspend();
 }
 
 static const app_menu_model_t model = {
@@ -717,6 +736,7 @@ static void settings_tick(uint32_t dt_ms) {
             phase              = PH_STORAGE;
             return;
         }
+        if (g->menu_active()) return;
         phase = PH_LEAVE;
         return;
     }
@@ -760,8 +780,8 @@ static const app_desc_t settings_desc = {
 const app_desc_t *app_init(const host_api_t *api) {
     if (!api || api->abi_version != ATHENA_APP_ABI_VERSION) return 0;
     if (!api->slot_states || !api->app_area_rescan || !api->menu_close ||
-        !api->slot_query || !api->app_icon_read || !api->app_area_erase ||
-        !api->app_area_erase_busy)
+        !api->menu_suspend || !api->menu_resume || !api->slot_query ||
+        !api->app_icon_read || !api->app_area_erase || !api->app_area_erase_busy)
         return 0;
     g = api;
     return &settings_desc;

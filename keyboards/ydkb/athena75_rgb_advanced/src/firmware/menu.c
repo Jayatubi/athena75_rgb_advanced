@@ -13,6 +13,7 @@
 #include "ui_slider.h"
 #include "ui_text_input.h"
 #include "ui_arrow_confirm.h"
+#include "ui_window.h"
 #include "config.h"
 #include "quantum.h"
 #include "timer.h"
@@ -250,7 +251,10 @@ static void menu_move_focus(int8_t dir, bool wrap) {
     menu_publish();
 }
 
+static bool s_suspend_stack; // true while hidden for an in-app overlay (STORAGE etc.)
+
 void menu_enter(void) {
+    s_suspend_stack = false;
     memset(&menu_wr, 0, sizeof(menu_wr));
     memset(saved_focus, 0, sizeof(saved_focus));
     memset(saved_scroll, 0, sizeof(saved_scroll));
@@ -266,7 +270,7 @@ void menu_enter(void) {
     menu_publish();
 }
 
-void menu_exit(void) {
+static void menu_visual_exit(void) {
     if (menu_wr.overlay) overlay_close(false);
     menu_wr.phase  = 2;
     menu_wr.active = false;
@@ -276,12 +280,30 @@ void menu_exit(void) {
     menu_publish();
 }
 
+void menu_exit(void) {
+    s_suspend_stack = false;
+    menu_visual_exit();
+}
+
 // After the exit fade finishes on core1, sync the core0 writer mirror and drop the
 // app content binding so a later built-in open cannot briefly serve a stale tree.
 static void menu_exit_finished(void) {
     menu_wr.phase  = 0;
     menu_wr.active = false;
     menu_model_set_app(NULL);
+}
+
+void menu_suspend(void) {
+    s_suspend_stack = true;
+    menu_visual_exit();
+}
+
+void menu_resume_enter(void) {
+    s_suspend_stack = false;
+    menu_mark_input();
+    menu_wr.active = true;
+    menu_wr.phase  = 1;
+    menu_publish();
 }
 
 bool menu_is_active(void) {
@@ -297,6 +319,7 @@ bool menu_is_active(void) {
 // app in that one-frame gap (which would make a trivial "open then exit" app see
 // a false "menu already closed").
 static volatile bool s_open_req;      // core1 -> core0: enter the menu
+static volatile bool s_resume_req;    // core1 -> core0: resume after suspend
 static volatile bool s_open_pending;  // core1-local: requested, not yet open
 static const app_menu_model_t *volatile s_open_model; // content for this open (NULL=built-in)
 
@@ -306,15 +329,25 @@ void menu_request_open(const app_menu_model_t *model) {
     __sync_synchronize();
     s_open_req = true;
 }
+void menu_request_resume(void) {
+    s_open_pending = true;
+    __sync_synchronize();
+    s_resume_req = true;
+}
+
 void menu_service(void) {              // core0
     if (s_open_req) {
         s_open_req = false;
         menu_model_set_app(s_open_model); // NULL => the built-in tree
         menu_enter();
     }
+    if (s_resume_req) {
+        s_resume_req = false;
+        menu_resume_enter();
+    }
     // Once core1 has finished the exit fade (menu_view inactive), sync the writer
     // mirror and drop any app content binding left over from this session.
-    if (!menu_is_active()) menu_exit_finished();
+    if (!menu_is_active() && !s_suspend_stack) menu_exit_finished();
 }
 bool menu_open_pending(void) { return s_open_pending; }
 void menu_clear_pending(void) { s_open_pending = false; }
@@ -607,13 +640,11 @@ extern uint8_t fbShow[];
 #define UI_H ui_vh()
 
 // Layout in window space (origin/size come from the virtual screen). Everything
-// is inset by LCD_MENU_BORDER (1px outer frame + 1px padding) so no content ever
-// touches the frame. A white title bar sits at the top, then a separator rule,
-// then the scrolling row viewport.
-#define TITLE_BAR_H 15                                         // white bar height (13px text, 1px top/bottom)
-#define TITLE_TOP   (LCD_MENU_BORDER + 1)                      // black title text top (centred in bar)
-#define SEP_Y       (LCD_MENU_BORDER + TITLE_BAR_H)            // separator rule, just below the bar
-#define CONTENT_TOP (SEP_Y + 3)                                // first row top y (>=2px below the rule)
+// inset by LCD_MENU_BORDER so content does not touch the frame. Title bar at top
+// (no separator under the title); outer frame matches the bar color.
+#define TITLE_BAR_H UI_WINDOW_TITLE_H
+#define TITLE_TOP   (LCD_MENU_BORDER + UI_WINDOW_PAD_Y)
+#define CONTENT_TOP (LCD_MENU_BORDER + TITLE_BAR_H)
 #define CONTENT_H   (LCD_MENU_VISIBLE * LCD_MENU_ITEM_H)       // viewport height
 #define CONTENT_BOT (CONTENT_TOP + CONTENT_H)                  // just below last row
 
@@ -625,7 +656,7 @@ extern uint8_t fbShow[];
 
 // Element identities (keys) present in a menu screen.
 #define K_LIST      5  // scroll container (transform node; carries scroll on its y)
-#define K_TITLE     6  // title bar + separator rule (static)     — screen-fixed
+#define K_TITLE     6  // title bar (static)                         — screen-fixed
 #define K_TITLETEXT 7  // title text (animated on node change)     — screen-fixed
 #define K_FILL      1  // focus highlight fill   (below rows)   — child of K_LIST
 #define K_MASK      2  // top/bottom viewport clip (above rows) — screen-fixed
@@ -757,16 +788,13 @@ static void draw_mask(const ui_elem_t *e, uint8_t *fb) {
 }
 static void draw_frame(const ui_elem_t *e, uint8_t *fb) {
     (void)e;
-    ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0x4208);
+    ui_wire_rect(fb, 0, 0, UI_W, UI_H, UI_WINDOW_STYLE_MENU.title_bg);
 }
-// Title band (static): white bar + separator rule. Drawn above the mask so it
-// sits on the blacked-out top strip; rows scrolling up are already clipped there,
-// so they never bleed onto the bar. Inset by BORDER for a 1px gap from the frame.
+// Title band (static): filled bar only (no separator under the title).
 static void draw_title(const ui_elem_t *e, uint8_t *fb) {
     (void)e;
-    int16_t w = (int16_t)(UI_W - 2 * LCD_MENU_BORDER);
-    ui_fill_rect(fb, LCD_MENU_BORDER, LCD_MENU_BORDER, w, TITLE_BAR_H, 0xFFFF); // white bar
-    ui_hline(fb, LCD_MENU_BORDER, SEP_Y, w, 0x4208);                            // separator
+    const int16_t band_h = (int16_t)(LCD_MENU_BORDER + TITLE_BAR_H);
+    ui_fill_rect(fb, 0, 0, UI_W, band_h, UI_WINDOW_STYLE_MENU.title_bg);
 }
 // Title text (animated): black title over the white bar. Its own element so it
 // can play an entrance (fade + slide) on a node change while the bar stays put.
@@ -1075,10 +1103,9 @@ static void menu_scene_drop(void) {
 static void render_app_info(void) {
     const app_scan_entry_t *a = app_scan_get(menu_model_selected_app());
     uint8_t *fb = fbShow;
-    ui_clear(fb, 0x0000);
-    ui_fill_rect(fb, 1, 1, UI_W - 2, 15, 0xFFFF);
-    ui_text(fb, 4, 2, "APP DETAILS", 0x0000, 0xFFFF);
-    ui_wire_rect(fb, 0, 0, UI_W, UI_H, 0x4208);
+    ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+    win.title             = "APP DETAILS";
+    ui_window_draw(fb, &win);
     if (!a) {
         ui_text(fb, 8, 56, "APP NOT FOUND", 0xF800, 0x0000);
         ui_present(fb);

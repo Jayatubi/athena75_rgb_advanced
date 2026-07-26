@@ -145,6 +145,8 @@ static const host_api_t g_api = {
     .app_area_erase    = loader_app_area_erase,
     .app_area_erase_busy = loader_app_area_erase_busy,
     .menu_close        = menu_exit,
+    .menu_suspend      = menu_suspend,
+    .menu_resume       = menu_request_resume,
 };
 
 static const app_desc_t *g_desc        = NULL; // loaded app's descriptor (NULL = none/failed)

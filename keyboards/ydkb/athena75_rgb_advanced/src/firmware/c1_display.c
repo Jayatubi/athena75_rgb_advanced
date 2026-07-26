@@ -8,6 +8,7 @@
 
 #include "gfx/menu_font.h"
 #include "ui.h"
+#include "ui_window.h"
 #include "menu.h"
 #include "menu_model.h"
 #include "dialog.h"
@@ -735,19 +736,14 @@ static void dialog_render(uint8_t text_a) {
     uint8_t      *fb = fbShow;
     const int16_t W  = ui_vw();
     const int16_t H  = ui_vh();
-    const int16_t B  = LCD_MENU_BORDER;
-    const int16_t TB = 15;                          // title-bar height (matches the menu)
+    ui_window_layout_t lay;
+    ui_window_layout_fill(W, H, &lay);
 
-    ui_clear(fb, 0x0000);
-    ui_wire_rect(fb, 0, 0, W, H, 0x4208);           // outer frame
-    ui_fill_rect(fb, B, B, (int16_t)(W - 2 * B), TB, 0xFFFF);          // white title bar
-    ui_hline(fb, B, (int16_t)(B + TB), (int16_t)(W - 2 * B), 0x4208);  // separator
+    ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+    win.title             = d->title;
+    ui_window_draw(fb, &win);
 
-    if (d->title)
-        ui_text_alpha(fb, (int16_t)((W - ui_text_width(d->title)) / 2), (int16_t)(B + 1),
-                      d->title, 0x0000, 0xFFFF, 255);   // centred black title on the bar
-
-    int16_t y = (int16_t)(B + TB + 6);
+    int16_t y = (int16_t)(lay.content_y + 4);
     if (d->message) {
         // Multi-line: each '\n'-separated segment is centred on its own row, so a
         // prompt can show several fields (e.g. app name / size / slot).
@@ -777,24 +773,21 @@ static void dialog_render(uint8_t text_a) {
     for (uint8_t i = 0; i < d->n_buttons; i++) {
         const char *lbl    = d->buttons[i].label ? d->buttons[i].label : "";
         int16_t     ry     = (int16_t)(y - 2);
-        int16_t     rw     = (int16_t)(W - 2 * B - 2);
+        int16_t     rw     = lay.content_w;
         bool        is_neg = (d->timeout_ms && i == d->negative);
         if (is_neg) {
-            // Drain bar: width tracks remaining/timeout (full on open -> 0 at
-            // fire), and it shrinks symmetrically toward the row centre — the two
-            // ends close in on the middle as the auto-cancel approaches.
             int16_t bw = (int16_t)((int32_t)rw * (int32_t)rem / (int32_t)d->timeout_ms);
             if (bw < 0) bw = 0;
             if (bw > rw) bw = rw;
             if (bw > 0) {
-                int16_t bx = (int16_t)(B + 1 + (rw - bw) / 2); // centre the remaining bar
-                ui_fill_rect(fb, bx, ry, bw, LCD_MENU_ITEM_H, 0x5800);
+                int16_t bar_x = (int16_t)(lay.content_x + (rw - bw) / 2);
+                ui_fill_rect(fb, bar_x, ry, bw, LCD_MENU_ITEM_H, 0x5800);
             }
         } else if (i == focus) {
-            ui_fill_rect(fb, (int16_t)(B + 1), ry, rw, LCD_MENU_ITEM_H, 0x1082);
+            ui_fill_rect(fb, lay.content_x, ry, rw, LCD_MENU_ITEM_H, 0x1082);
         }
         if (i == focus)
-            ui_wire_rect(fb, B, ry, (int16_t)(W - 2 * B), LCD_MENU_ITEM_H, 0xFFFF);
+            ui_wire_rect(fb, lay.content_x, ry, rw, LCD_MENU_ITEM_H, 0xFFFF);
         uint16_t fg = (i == d->negative) ? 0xF9A0 : 0xFFFF;
         ui_text_alpha(fb, (int16_t)((W - ui_text_width(lbl)) / 2), y, lbl, fg, 0x0000, text_a);
         y += LCD_MENU_ITEM_H;
@@ -842,19 +835,13 @@ static void app_upload_render(void) {
     uint8_t      *fb = fbShow;
     const int16_t W  = ui_vw();
     const int16_t H  = ui_vh();
-    const int16_t B  = LCD_MENU_BORDER;
-    const int16_t TB = 15;
     const bool    done = (app_upload_state() == APPUP_DONE);
     const bool    prep = (app_upload_state() == APPUP_EXITING);
 
-    ui_clear(fb, 0x0000);
-    ui_wire_rect(fb, 0, 0, W, H, 0x4208);
-    ui_fill_rect(fb, B, B, (int16_t)(W - 2 * B), TB, 0xFFFF);
-    ui_hline(fb, B, (int16_t)(B + TB), (int16_t)(W - 2 * B), 0x4208);
-
     const char *title = done ? "APP LOADED" : "LOADING APP";
-    ui_text_alpha(fb, (int16_t)((W - ui_text_width(title)) / 2), (int16_t)(B + 1),
-                  title, 0x0000, 0xFFFF, 255);
+    ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+    win.title             = title;
+    ui_window_draw(fb, &win);
 
     uint32_t total = app_upload_total();
     uint32_t wr    = app_upload_written();
@@ -862,8 +849,10 @@ static void app_upload_render(void) {
     if (pct > 100) pct = 100;
 
     // Progress bar: outer wire + green fill proportional to pct.
-    const int16_t bx = (int16_t)(B + 6);
-    const int16_t bw = (int16_t)(W - 2 * B - 12);
+    ui_window_layout_t lay;
+    ui_window_layout_fill(W, H, &lay);
+    const int16_t bx = (int16_t)(lay.content_x + 4);
+    const int16_t bw = (int16_t)(lay.content_w - 8);
     const int16_t by = (int16_t)(H / 2 - 6);
     const int16_t bh = 12;
     ui_wire_rect(fb, bx, by, bw, bh, 0xFFFF);
