@@ -8,6 +8,18 @@ void c1_before_flash_operation(void);
 void c1_after_flash_operation(void);
 bool lcd_is_on(void);
 
+// True while the panel is in transient idle hard-sleep (GP17 off). Used by core0
+// to keep RGB suspend aligned with the LCD without racing the idle timer tick.
+bool lcd_idle_panel_asleep(void);
+
+// Call when idle auto-sleep wakes the panel (core1): resets the shared idle
+// counter and starts a grace window so we do not re-sleep on the next 0.5s tick.
+void lcd_idle_on_wake(void);
+
+// True while the panel is in idle hard-sleep: no app/menu compositor may touch
+// fbShow or blit until wake finishes lcd_present_black().
+bool lcd_gfx_compositor_frozen(void);
+
 // Load the persisted virtual-screen (visible-window) calibration from the kb
 // eeconfig word. Call once early on core0 (matrix_init), before rendering.
 void lcd_vscr_init(void);

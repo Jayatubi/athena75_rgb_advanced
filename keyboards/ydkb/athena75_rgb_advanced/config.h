@@ -72,6 +72,15 @@
 // Unit: kb_idle_timer ticks (0.5s each). Key press wakes both LCD and RGB.
 #define LCD_IDLE_TIMEOUT 600
 
+// Hard sleep (GP17 off): ms to wait after filling GRAM black / DISPLAY OFF so the
+// GC9107 finishes SPI writes and the panel stops scanning before rail loss.
+#ifndef LCD_SLEEP_AFTER_GRAM_MS
+#    define LCD_SLEEP_AFTER_GRAM_MS 40u
+#endif
+#ifndef LCD_SLEEP_AFTER_DISPLAY_OFF_MS
+#    define LCD_SLEEP_AFTER_DISPLAY_OFF_MS 50u
+#endif
+
 // ---- MCU real-time tweening (keyframe-only QGF in flash) ----
 // The animation slot stores only keyframes (one per emoji); core1 generates
 // the in-between frames on the fly, selectable effect (cycle via KC_G / gif key).

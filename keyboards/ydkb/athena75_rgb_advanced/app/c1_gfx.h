@@ -43,9 +43,8 @@ uint32_t rng_next(void);
 // Apply the persisted LCD on/off state (clear GRAM first, gate the panel). Called
 // by the boot app once the splash finishes, before handing over to the renderer.
 void     c1_lcd_apply_persisted(void);
-// Monotonic counter bumped on every panel power-on (cold init / wake). The app
-// runtime re-enters the current app when this changes so it re-inits its frame
-// after the GC9107 was fully re-initialised (GRAM contents were lost).
+// Monotonic counter bumped on cold display_init (boot). The app runtime re-enters
+// when this changes. Panel wake via lcd_switch restores fbShow to GRAM instead.
 uint32_t c1_wake_seq(void);
 
 // ---- QGF frame access (boot splash + keyframe renderer) ---------------------

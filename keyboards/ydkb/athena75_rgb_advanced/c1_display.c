@@ -33,6 +33,7 @@ bool is_st7735 = false;
 painter_device_t display;
 static bool now_lcd_off = 0;
 static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
+static uint32_t lcd_idle_wake_grace_until = 0; // block re-sleep briefly after wake
 static volatile uint8_t lcd_sleep_code = 0; // 0=5m default, 1=1m, 2=10m, 3=15m, 4=never
 
 void lcd_sleep_timeout_set(uint8_t code) {
@@ -49,8 +50,7 @@ uint16_t lcd_sleep_timeout_ticks(void) {
     }
 }
 
-// Bumped on every panel power-on (cold init / wake). The app runtime re-enters
-// the active app when this changes so it re-inits its frame (GRAM was lost).
+// Bumped on cold display_init only (boot re-enter). Idle wake uses lcd_present_black.
 static uint32_t wake_seq = 0;
 uint32_t c1_wake_seq(void) { return wake_seq; }
 
@@ -114,16 +114,8 @@ bool qp_gc9107_init(painter_device_t device, painter_rotation_t rotation) {
     return true;
 }
 
-// Single source of truth for physically switching the LCD panel on/off, shared
-// by ALL three triggers: the manual LCD ON/OFF key (display_power_toggle), the
-// idle auto-sleep, and USB suspend/resume. GP17 gates the panel's power rail, so
-// cutting it fully resets the GC9107 (display_init uses the same line to reset
-// the panel). Turning back on must therefore re-run the controller init
-// sequence, not just re-power, otherwise pixels pushed via qp_pixdata are never
-// shown. GP7 drives the LED backlight rail separately from GP17, so idle sleep
-// must drop BL here or the panel looks "off" but still glows. Callers own the
-// state flags (now_lcd_off = manual/USB persistent, lcd_idle_off = transient
-// idle sleep) since those encode the wake trigger.
+// Hard panel power (GP17): idle / manual / USB sleep. On power-off and power-on we
+// zero fbShow and blit black while the rail is up so wake never presents stale RAM.
 #ifndef LCD_BLK_ON_LEVEL
 #    define LCD_BLK_ON_LEVEL 1
 #endif
@@ -137,6 +129,46 @@ static void lcd_backlight_set(bool on) {
     }
 }
 
+static void lcd_switch(bool on);
+static void lcd_present_black(void);
+static void lcd_panel_powerdown(void);
+
+// After hard power-on: BL stays off until the black wake blit (lcd_bl_holdoff).
+static bool lcd_bl_holdoff = false;
+// Set on idle sleep entry; cleared after wake black is on panel. Blocks fb/blit.
+static bool lcd_gfx_frozen = false;
+
+bool lcd_gfx_compositor_frozen(void) {
+    return lcd_gfx_frozen;
+}
+
+bool lcd_idle_panel_asleep(void) {
+    return lcd_idle_off;
+}
+
+void lcd_idle_on_wake(void) {
+    kb_idle_timer           = 0;
+    lcd_idle_wake_grace_until = timer_read32() + 2500u;
+}
+
+// Dialog / app-upload overlay interrupted sleep — restore the same off state after.
+static void lcd_panel_wake_for_overlay(bool *resume_idle) {
+    *resume_idle = false;
+    if (!now_lcd_off && !lcd_idle_off) return;
+    *resume_idle = lcd_idle_off && !now_lcd_off;
+    lcd_idle_off = 0;
+    lcd_switch(true);
+}
+
+static void lcd_panel_restore_after_overlay(bool resume_idle) {
+    if (now_lcd_off) {
+        lcd_switch(false);
+    } else if (resume_idle) {
+        lcd_idle_off = 1;
+        lcd_switch(false);
+    }
+}
+
 static void lcd_switch(bool on) {
     if (on) {
         palClearLine(17U);                                   // panel power on
@@ -144,12 +176,15 @@ static void lcd_switch(bool on) {
         qp_init(display, LCD_ROTATION);                      // re-send GC9107 init sequence
         qp_set_viewport_offsets(display, LCD_OFFSET_X, LCD_OFFSET_Y);
         qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1); // black before display-on (no white flash)
-        qp_power(display, 1);                                // display-on (GRAM already black)
-        lcd_backlight_set(true);
-        wake_seq++;                                          // GRAM lost: re-init the active app
+        qp_power(display, 1);
+        lcd_bl_holdoff = true;
+        lcd_present_black();                                 // black GRAM + BL; then allow compositor
+        lcd_gfx_frozen = false;
     } else {
+        lcd_gfx_frozen = true;
+        lcd_bl_holdoff = false;
         lcd_backlight_set(false);
-        palSetLine(17U);                                     // panel power off
+        lcd_panel_powerdown();
     }
 }
 
@@ -218,7 +253,9 @@ void display_init(void)
     // power-up garbage (a full-white frame), then turn the display on.
     qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);   // default black
     qp_power(display, 1);
-    lcd_backlight_set(true);
+    lcd_bl_holdoff = true;
+    memset(fbShow, 0, ANIM_BYTES);
+    blit_full(fbShow);
     wake_seq++;
 
     // font / UI text blitter
@@ -395,6 +432,7 @@ static void vscr_mask_border(uint8_t *fb) {
 // panel, everything outside it is blacked first; the mask goes into fbShow so a
 // caller's own buffer (e.g. anim's ghost accumulation) is never disturbed.
 void blit_full(const uint8_t *fb) {
+    if (lcd_gfx_frozen) return;
     if (!vscr_is_full()) {
         if (fb != fbShow) {
             memcpy(fbShow, fb, ANIM_BYTES);
@@ -404,6 +442,36 @@ void blit_full(const uint8_t *fb) {
     }
     qp_viewport(display, 0, 0, ANIM_SIZE - 1, ANIM_SIZE - 1);
     qp_pixdata(display, fb, ANIM_PX);
+    if (lcd_bl_holdoff) {
+        lcd_backlight_set(true);
+        lcd_bl_holdoff = false;
+    }
+}
+
+// Zero fbShow and push black to GRAM (panel powered). Bypasses compositor freeze.
+static void lcd_present_black(void) {
+    memset(fbShow, 0, ANIM_BYTES);
+    if (!vscr_is_full()) {
+        vscr_mask_border(fbShow);
+    }
+    qp_viewport(display, 0, 0, ANIM_SIZE - 1, ANIM_SIZE - 1);
+    qp_pixdata(display, fbShow, ANIM_PX);
+    if (lcd_bl_holdoff) {
+        lcd_backlight_set(true);
+        lcd_bl_holdoff = false;
+    }
+}
+
+// Ordered shutdown while GP17 is still on: fill GRAM black, wait, DISPLAY OFF,
+// wait, then cut the rail (avoids truncating SPI / leaving the panel scanning).
+static void lcd_panel_powerdown(void) {
+    qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);
+    wait_ms(LCD_SLEEP_AFTER_GRAM_MS);
+    lcd_present_black();
+    wait_ms(LCD_SLEEP_AFTER_GRAM_MS);
+    qp_power(display, 0);
+    wait_ms(LCD_SLEEP_AFTER_DISPLAY_OFF_MS);
+    palSetLine(17U);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -525,6 +593,7 @@ int16_t ui_text_width(const char *str) {
 }
 
 void ui_clear(uint8_t *fb, uint16_t color) {
+    if (lcd_gfx_frozen) return;
     (void)fb;
     (void)color;
     qp_rect(ui_surface, 0, 0, ANIM_SIZE - 1, ANIM_SIZE - 1, 0, 0, 0, true);
@@ -622,6 +691,7 @@ void ui_text_alpha(uint8_t *fb, int16_t x, int16_t y, const char *str, uint16_t 
 }
 
 void ui_present(const uint8_t *fb) {
+    if (lcd_gfx_frozen) return;
     blit_full(fb);
 }
 
@@ -738,16 +808,15 @@ static void dialog_render(uint8_t text_a) {
 // The dialog's own logic (focus/timeout/actions) runs on core0 (dialog.c).
 // Returns true while it owns the frame (including the single teardown tick).
 static bool dialog_render_tick(void) {
-    static bool     on    = false;
-    static bool     woke  = false;
-    static uint32_t tshow = 0;
+    static bool     on           = false;
+    static bool     resume_idle  = false;
+    static uint32_t tshow        = 0;
 
     if (dialog_is_active()) {
         if (!on) {                                  // entrance
             on    = true;
             tshow = timer_read32();
-            woke  = false;
-            if (now_lcd_off || lcd_idle_off) { lcd_switch(true); woke = true; }
+            if (now_lcd_off || lcd_idle_off) lcd_panel_wake_for_overlay(&resume_idle);
         }
         uint32_t el = timer_elapsed32(tshow);
         uint8_t  ta = (el >= LCD_MENU_FADE_MS) ? 255 : (uint8_t)(el * 255u / LCD_MENU_FADE_MS);
@@ -756,7 +825,8 @@ static bool dialog_render_tick(void) {
     }
     if (on) {                                       // teardown after a button fired
         on = false;
-        if (woke) lcd_switch(false);                // restore the off state we broke into
+        lcd_panel_restore_after_overlay(resume_idle);
+        resume_idle = false;
         app_request_reinit();                       // re-init the active app's frame
         return true;
     }
@@ -811,21 +881,22 @@ static void app_upload_render(void) {
 }
 
 bool app_upload_render_tick(void) {
-    static bool on = false, woke = false;
+    static bool on = false, resume_idle = false;
     app_upload_release_linger_if_due_from_core1();
     uint8_t st = app_upload_state();
     bool show = (st == APPUP_AUTH || st == APPUP_ACTIVE || st == APPUP_DONE);
     if (show) {
         if (!on) {
-            on = true; woke = false;
-            if (now_lcd_off || lcd_idle_off) { lcd_switch(true); woke = true; }
+            on = true;
+            if (now_lcd_off || lcd_idle_off) lcd_panel_wake_for_overlay(&resume_idle);
         }
         app_upload_render();
         return true;
     }
     if (on) {
         on = false;
-        if (woke) lcd_switch(false);
+        lcd_panel_restore_after_overlay(resume_idle);
+        resume_idle = false;
         app_request_reinit();
         return true;
     }
@@ -864,19 +935,24 @@ void display_task_user(void)
     if (!app_boot_active() && !menu_is_active()) {
         uint16_t idle_limit = lcd_sleep_timeout_ticks();
         if (lcd_idle_off) {
+            lcd_gfx_frozen = true;
             if (!idle_limit || kb_idle_timer < idle_limit) {
                 lcd_idle_off = 0;
-                lcd_switch(true);  // wake: identical switch to the LCD ON/OFF key
+                lcd_idle_on_wake();
+                lcd_switch(true);
             } else {
-                return;            // already powered off by lcd_switch(false) on the sleep transition
+                return;
             }
-        } else if (idle_limit && kb_idle_timer >= idle_limit) {
+        } else if (idle_limit && timer_read32() >= lcd_idle_wake_grace_until &&
+                   kb_idle_timer >= idle_limit) {
             lcd_idle_off = 1;
-            lcd_switch(false);     // idle sleep: identical switch to the LCD ON/OFF key
+            lcd_switch(false);
             return;
         }
     }
 #endif
+
+    if (lcd_gfx_compositor_frozen()) return;
 
     // Hand the frame to the active app (boot / anim / matrix / menu). The runtime
     // reconciles which one is active, computes the frame delta-time, and ticks it.

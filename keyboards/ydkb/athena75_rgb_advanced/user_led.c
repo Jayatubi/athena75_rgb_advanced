@@ -88,6 +88,7 @@ void hook_keyboard_loop(void)
     // USB suspend 状态相互覆盖。
     extern uint16_t kb_idle_timer;
     uint16_t idle_limit = lcd_sleep_timeout_ticks();
-    rgb_matrix_set_suspend_state(idle_limit && kb_idle_timer >= idle_limit);
+    rgb_matrix_set_suspend_state(lcd_idle_panel_asleep() ||
+                                 (idle_limit && kb_idle_timer >= idle_limit));
 #endif
 }

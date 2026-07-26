@@ -104,8 +104,7 @@ uint8_t matrix_scan(void)
 #ifdef PREVENT_KEYIO_GND
     uint8_t matrix_keys_idle = 0;
 #endif
-
-    matrix_scan_kb(); // use this to run hook_keyboard_loop()
+    bool kb_idle_reset_this_scan = false;
 
     select_key(0);
     for (uint8_t row=0; row<SHIFTER_MATRIX_ROWS; row++) {
@@ -123,6 +122,7 @@ uint8_t matrix_scan(void)
                 if        (*debounce > now_debounce_dn_mask) {  //debounce KEY DOWN 
                     *p_row |=  col_mask;
                     kb_idle_timer = 0;
+                    kb_idle_reset_this_scan = true;
                 } else if (*debounce < now_debounce_up_mask) { //debounce KEY UP
                     *p_row &= ~col_mask;
                   #ifdef PREVENT_KEYIO_GND
@@ -164,6 +164,7 @@ uint8_t matrix_scan(void)
         if        (*debounce > now_debounce_dn_mask) {  //debounce KEY DOWN 
             *p_row |=  col_mask;
             kb_idle_timer = 0;
+            kb_idle_reset_this_scan = true;
         } else if (*debounce < now_debounce_up_mask) { //debounce KEY UP
             *p_row &= ~col_mask;
         }
@@ -179,13 +180,13 @@ uint8_t matrix_scan(void)
     static uint16_t half_second_timer = 0;
     if (half_second_timer != timer_read() && timer_elapsed(half_second_timer) >= 500) {
         half_second_timer = timer_read();
-        if (kb_idle_timer != UINT16_MAX) kb_idle_timer++;
+        if (!kb_idle_reset_this_scan && kb_idle_timer != UINT16_MAX) kb_idle_timer++;
 
         dprintf("\nScan: %d/s, idle: %d", scan_speed*2, kb_idle_timer);
         scan_speed = 0;
     }
 
-
+    matrix_scan_kb(); // after idle timer + key activity (RGB/LCD policy sees wake reset)
 
     return 1;
 }

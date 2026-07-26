@@ -11,6 +11,7 @@
 
 #include "app.h"
 #include "c1_gfx.h"
+#include "c1.h"
 #include "menu.h"
 
 #define APP_DT_MAX_MS 200 // clamp the frame delta after a stall / wake
@@ -72,6 +73,8 @@ void app_init(void) {
 }
 
 void app_run(void) {
+    if (lcd_gfx_compositor_frozen()) return;
+
     // Modal menu overlay: while the OS menu is open (or an app just requested it
     // via host_api menu_run), suspend the current app -- keep it loaded, don't
     // tick it and don't switch apps -- and render the menu instead. The suspended
