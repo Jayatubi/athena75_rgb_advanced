@@ -39,7 +39,7 @@
 #define LCD_RST_PIN GP16
 #define LCD_DC_PIN GP12
 #define LCD_CS_PIN GP13
-#define LCD_BLK_PIN GP7 // Unused in this configuration
+#define LCD_BLK_PIN GP7 // Panel LED backlight (active high); toggled with lcd_switch()
 #define LCD_SPI_DIVISOR 4
 #define LCD_ROTATION QP_ROTATION_0
 //#define LCD_ROTATION QP_ROTATION_180

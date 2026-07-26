@@ -120,8 +120,23 @@ bool qp_gc9107_init(painter_device_t device, painter_rotation_t rotation) {
 // cutting it fully resets the GC9107 (display_init uses the same line to reset
 // the panel). Turning back on must therefore re-run the controller init
 // sequence, not just re-power, otherwise pixels pushed via qp_pixdata are never
-// shown. Callers own the state flags (now_lcd_off = manual/USB persistent,
-// lcd_idle_off = transient idle sleep) since those encode the wake trigger.
+// shown. GP7 drives the LED backlight rail separately from GP17, so idle sleep
+// must drop BL here or the panel looks "off" but still glows. Callers own the
+// state flags (now_lcd_off = manual/USB persistent, lcd_idle_off = transient
+// idle sleep) since those encode the wake trigger.
+#ifndef LCD_BLK_ON_LEVEL
+#    define LCD_BLK_ON_LEVEL 1
+#endif
+
+static void lcd_backlight_set(bool on) {
+    const bool level = on ? (LCD_BLK_ON_LEVEL != 0) : (LCD_BLK_ON_LEVEL == 0);
+    if (level) {
+        palSetLine(LCD_BLK_PIN);
+    } else {
+        palClearLine(LCD_BLK_PIN);
+    }
+}
+
 static void lcd_switch(bool on) {
     if (on) {
         palClearLine(17U);                                   // panel power on
@@ -130,8 +145,10 @@ static void lcd_switch(bool on) {
         qp_set_viewport_offsets(display, LCD_OFFSET_X, LCD_OFFSET_Y);
         qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1); // black before display-on (no white flash)
         qp_power(display, 1);                                // display-on (GRAM already black)
+        lcd_backlight_set(true);
         wake_seq++;                                          // GRAM lost: re-init the active app
     } else {
+        lcd_backlight_set(false);
         palSetLine(17U);                                     // panel power off
     }
 }
@@ -181,8 +198,10 @@ void qgf_rle_decode(const uint8_t *src, uint32_t src_len, uint8_t *dst, uint32_t
 
 void display_init(void)
 {
-    // LCD Power
+    // LCD Power + backlight
     palSetLineMode(17U, PAL_MODE_OUTPUT_PUSHPULL | PAL_RP_PAD_DRIVE12);
+    palSetLineMode(LCD_BLK_PIN, PAL_MODE_OUTPUT_PUSHPULL | PAL_RP_PAD_DRIVE12);
+    lcd_backlight_set(false);
     palSetLine(17U); //power off to reset the lcd
     wait_ms(1000);
     palClearLine(17U); //power on and wait
@@ -199,6 +218,7 @@ void display_init(void)
     // power-up garbage (a full-white frame), then turn the display on.
     qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);   // default black
     qp_power(display, 1);
+    lcd_backlight_set(true);
     wake_seq++;
 
     // font / UI text blitter
