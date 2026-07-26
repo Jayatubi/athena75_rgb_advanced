@@ -76,6 +76,12 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         return false;
     }
 
+    // Vial custom key "LCD On/Off" (0x7e05): persisted panel power, both input modes.
+    if (keycode == 0x7e05) {
+        if (record->event.pressed) display_power_toggle();
+        return false;
+    }
+
     // via/vial reset to bootloader stays available in both modes.
     if (keycode == 0x5c00) {
         if (record->event.pressed) reboot(1);
