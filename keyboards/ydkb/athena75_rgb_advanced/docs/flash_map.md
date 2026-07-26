@@ -92,7 +92,7 @@ app slots: 5 x 1 MiB from 0x10A0_0000 (reserve last 1 MiB from 0x10F0_0000)
 ```
 
 该模型与当前的"10 MiB keyframe 槽（`0x1060_0000..0x1100_0000`）"**物理重叠**，属于历史遗留，
-当前源码不再使用。相关调查见 `tools/HANDOVER_flash_put_investigation.md`。
+当前源码不再使用。
 
 ---
 
@@ -112,8 +112,7 @@ app slots: 5 x 1 MiB from 0x10A0_0000 (reserve last 1 MiB from 0x10F0_0000)
 
 > **`0x00` vs `0xFF` 现象**：keyframe 槽尾部大片读到 `0x00`（既非文件、也非擦除态 `0xFF`）。
 > 用 cached(`0x10A0…`) 与 no-cache(`0x13A0…`) 两窗口读结果一致 → 是芯片物理上的 `0x00`，
-> 不是 XIP 缓存脏。这正是"数据写不进去"调查的现象，定性详见
-> `tools/HANDOVER_flash_put_investigation.md`（写侧测试受 flash 写预算规则约束）。
+> 不是 XIP 缓存脏（写侧探测须遵守 flash 写预算规则，见 `.cursor/rules/flash-write-budget.mdc`）。
 
 ---
 
