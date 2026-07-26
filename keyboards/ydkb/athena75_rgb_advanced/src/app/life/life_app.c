@@ -23,27 +23,27 @@ void *memcpy(void *d, const void *s, unsigned long n) {
 
 static const host_api_t *g_api;
 
-static void u32_dec(char *buf, uint32_t n);
 static void sync_dims(void);
-static void hud_show_seed(void);
+static void hud_show_pattern(void);
+static const char *pattern_name(uint8_t id);
 static uint32_t count_live(void);
 
 #define PANEL   128
 #define GW_MAX  PANEL
 #define GH_MAX  PANEL
 
-#define ACT_RESEED_RANDOM  64u
 #define ACT_SAVE_PRESET    65u
 #define ACT_LOAD_PRESET    66u /* value = 66 + menu index (newest first) */
 
+#define PATTERN_COUNT      8u
 #define PRESET_MAX         20u
 #define PRESET_STORE_MAGIC 0x50524553u /* "PRES" LE */
 
 typedef struct {
     uint8_t  size;
-    uint8_t  density;
+    uint8_t  pattern;
     uint8_t  pad[2];
-    uint32_t seed;
+    uint32_t reserved;
 } life_preset_t;
 
 typedef struct {
@@ -63,9 +63,8 @@ typedef struct {
     uint8_t  version;
     uint8_t  speed;
     uint8_t  size;
-    uint8_t  density; /* initial fill % (1..100) */
+    uint8_t  pattern;
     uint16_t cell_color;
-    uint32_t seed;
     uint32_t crc;
 } life_save_t;
 
@@ -85,9 +84,7 @@ static uint8_t cur_buf;
 static int16_t gw, gh;
 static int16_t pix_w, pix_h;
 static uint8_t cell_px;
-static uint32_t rng_state;
 static uint32_t step_t, last_dims_check;
-static uint16_t steps_since_reseed;
 static uint16_t inp_rpt_kc;
 static uint32_t inp_rpt_timer;
 static bool     inp_rpt_armed;
@@ -95,7 +92,6 @@ static bool     inp_rpt_armed;
 #define LIFE_INP_RPT_DELAY 400u
 #define LIFE_INP_RPT_RATE  80u
 static volatile bool pending_reseed;
-static volatile bool pending_random_reseed;
 static volatile bool pending_preset_apply;
 static life_preset_t pending_preset_body;
 
@@ -132,12 +128,11 @@ static uint8_t cell_px_from_idx(uint8_t idx) {
 
 static void cfg_defaults(void) {
     cfg.magic       = LIFE_SAVE_MAGIC;
-    cfg.version     = 3;
+    cfg.version     = 4;
     cfg.speed       = 1;
     cfg.size        = 0;
-    cfg.density     = 28;
+    cfg.pattern     = 1; /* PULSAR — fits small grids; GUN needs ~36×9 */
     cfg.cell_color  = 0x07E0u;
-    cfg.seed        = 0x01FE0001u;
     cfg.crc         = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
 }
 
@@ -159,17 +154,43 @@ typedef struct {
     uint32_t crc;
 } life_save_v2_t;
 
+typedef struct {
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  speed;
+    uint8_t  size;
+    uint8_t  density;
+    uint16_t cell_color;
+    uint32_t seed;
+    uint32_t crc;
+} life_save_v3_t;
+
+static uint8_t pattern_normalize(uint8_t raw) {
+    return raw % PATTERN_COUNT;
+}
+
 static void cfg_load(void) {
     life_save_t saved;
     if (!g_api->save_read(0, &saved, sizeof saved) || saved.magic != LIFE_SAVE_MAGIC) {
         cfg_defaults();
         return;
     }
-    if (saved.version == 3 && saved.speed < 4u && saved.size < 3u &&
-        saved.density >= 1u && saved.density <= 100u && saved.seed != 0u &&
+    if (saved.version == 4 && saved.speed < 4u && saved.size < 3u &&
         saved.crc == crc32(&saved, (uint32_t)__builtin_offsetof(life_save_t, crc))) {
         cfg = saved;
-        cfg.size = size_idx_normalize(cfg.size);
+        cfg.size    = size_idx_normalize(cfg.size);
+        cfg.pattern = pattern_normalize(cfg.pattern);
+        return;
+    }
+    life_save_v3_t v3;
+    if (g_api->save_read(0, &v3, sizeof v3) && v3.magic == LIFE_SAVE_MAGIC && v3.version == 3 &&
+        v3.speed < 4u && v3.size < 3u && v3.density >= 1u && v3.density <= 100u && v3.seed != 0u &&
+        v3.crc == crc32(&v3, (uint32_t)__builtin_offsetof(life_save_v3_t, crc))) {
+        cfg_defaults();
+        cfg.speed      = v3.speed;
+        cfg.size       = size_idx_normalize(v3.size);
+        cfg.cell_color = v3.cell_color;
+        cfg.pattern    = pattern_normalize((uint8_t)(v3.seed % PATTERN_COUNT));
         return;
     }
     life_save_v2_t v2;
@@ -193,7 +214,8 @@ static void cfg_load(void) {
 }
 
 static void cfg_save(void) {
-    cfg.version = 3;
+    cfg.version = 4;
+    cfg.pattern = pattern_normalize(cfg.pattern);
     cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
     save_pending = true;
 }
@@ -217,7 +239,7 @@ static bool persist_write(void) {
     if (g_api->save_busy()) return false;
     life_persist_t blob;
     blob.cfg         = cfg;
-    blob.cfg.version = 3;
+    blob.cfg.version = 4;
     blob.cfg.crc     = crc32(&blob.cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
     blob.presets     = presets;
     presets_store_crc(&blob.presets);
@@ -245,8 +267,7 @@ static void presets_load(void) {
 static void preset_save_current(void) {
     life_preset_t p = {
         .size    = cfg.size,
-        .density = cfg.density,
-        .seed    = cfg.seed,
+        .pattern = cfg.pattern,
     };
     uint8_t idx = presets.head;
     presets.slot[idx] = p;
@@ -273,13 +294,12 @@ static void preset_apply(const life_preset_t *p) {
 static void preset_apply_now(const life_preset_t *p) {
     if (!p) return;
     cfg.size    = size_idx_normalize(p->size);
-    cfg.density = p->density >= 1u && p->density <= 100u ? p->density : cfg.density;
-    if (p->seed) cfg.seed = p->seed;
+    cfg.pattern = pattern_normalize(p->pattern);
     cfg_save();
     gw = 0;
     sync_dims();
     pending_reseed = true;
-    hud_show_seed();
+    hud_show_pattern();
 }
 
 static uint8_t preset_size_px(uint8_t size_idx) {
@@ -292,16 +312,11 @@ static void preset_format_label(const life_preset_t *p, char *buf, unsigned bufs
         return;
     }
     char sz[2] = { (char)('0' + preset_size_px(p->size)), 0 };
-    char fill[4];
-    char seed[12];
-    u32_dec(fill, p->density);
-    u32_dec(seed, p->seed);
+    const char *pn = pattern_name(pattern_normalize(p->pattern));
     unsigned k = 0;
     buf[k++] = sz[0];
     if (k + 1u < bufsz) buf[k++] = '-';
-    for (unsigned i = 0; fill[i] && k + 1u < bufsz; i++) buf[k++] = fill[i];
-    if (k + 1u < bufsz) buf[k++] = '-';
-    for (unsigned i = 0; seed[i] && k + 1u < bufsz; i++) buf[k++] = seed[i];
+    for (unsigned i = 0; pn[i] && k + 1u < bufsz; i++) buf[k++] = pn[i];
     buf[k] = 0;
 }
 
@@ -309,24 +324,28 @@ static uint8_t cell_px_from_cfg(void) {
     return cell_px_from_idx(size_idx_normalize(cfg.size));
 }
 
-static void rng_seed(uint32_t s) {
-    if (!s) s = 1u;
-    rng_state = s;
-    cfg.seed  = s;
-}
-
-static uint32_t rng_next_local(void) {
-    rng_state = rng_state * 1664525u + 1013904223u;
-    return rng_state;
-}
-
 static inline uint32_t idx(int16_t x, int16_t y) {
     return (uint32_t)y * (uint32_t)gw + (uint32_t)x;
 }
 
+static int16_t wrap_coord(int16_t v, int16_t dim) {
+    if (dim <= 0) return 0;
+    v %= dim;
+    if (v < 0) v += dim;
+    return v;
+}
+
 static inline bool cell_get(int16_t x, int16_t y) {
-    if (x < 0 || y < 0 || x >= gw || y >= gh) return false;
+    if (gw <= 0 || gh <= 0) return false;
+    x = wrap_coord(x, gw);
+    y = wrap_coord(y, gh);
     return grid[cur_buf][idx(x, y)] != 0;
+}
+
+static void cell_set(int16_t x, int16_t y, uint8_t v) {
+    if (gw <= 0 || gh <= 0) return;
+    if (x < 0 || y < 0 || x >= gw || y >= gh) return;
+    grid[cur_buf][idx(x, y)] = v;
 }
 
 static uint8_t count_neighbors(int16_t x, int16_t y) {
@@ -345,52 +364,176 @@ static void grid_clear_buf(uint8_t buf) {
     memset(grid[buf], 0, (unsigned long)gw * (unsigned long)gh);
 }
 
-static void fill_random(void) {
-    if (gw <= 0 || gh <= 0) return;
-    uint32_t total = (uint32_t)gw * (uint32_t)gh;
-    uint32_t want =
-        (uint32_t)(((uint64_t)total * (uint32_t)cfg.density + 50u) / 100u);
-    if (want > total) want = total;
+typedef struct {
+    const char *name;
+    const char *const *rows;
+    int16_t min_w;
+    int16_t min_h;
+} life_pattern_def_t;
 
-    grid_clear_buf(cur_buf);
+static unsigned pat_row_len(const char *row) {
+    unsigned n = 0;
+    while (row[n]) n++;
+    return n;
+}
 
-    uint32_t placed = 0;
-    uint32_t i      = 0;
-    for (int16_t y = 0; y < gh; y++) {
-        for (int16_t x = 0; x < gw; x++, i++) {
-            uint32_t rem  = total - i;
-            uint32_t need = want - placed;
-            if (!need) break;
-            if (need >= rem) {
-                grid[cur_buf][idx(x, y)] = 1;
-                placed++;
-                continue;
-            }
-            if ((rng_next_local() % rem) < need) {
-                grid[cur_buf][idx(x, y)] = 1;
-                placed++;
-            }
+static void stamp_pattern_rows(const char *const *rows, int16_t ox, int16_t oy) {
+    for (int16_t y = 0; rows[y]; y++) {
+        const char *row = rows[y];
+        for (int16_t x = 0; row[x]; x++) {
+            if (row[x] == 'O') cell_set((int16_t)(ox + x), (int16_t)(oy + y), 1u);
         }
-        if (placed >= want) break;
     }
+}
+
+static void pattern_measure(const life_pattern_def_t *def, int16_t *out_w, int16_t *out_h) {
+    int16_t h = 0;
+    int16_t w = 0;
+    while (def->rows[h]) {
+        int16_t lw = (int16_t)pat_row_len(def->rows[h]);
+        if (lw > w) w = lw;
+        h++;
+    }
+    *out_w = w;
+    *out_h = h;
+}
+
+static const char *const pat_gosper[] = {
+    "........................O...........",
+    "........................O.O.........",
+    ".............OO......OO........OO...",
+    "............O...O....OO........OO...",
+    ".OOO.......O.....O...OO.............",
+    "OO..OO....O...O.OO....O.............",
+    "OO...OO....O...O......O.O...........",
+    "....OO......O.........O.............",
+    ".....................OOO............",
+    0,
+};
+
+static const char *const pat_pulsar[] = {
+    "...OO...OO...",
+    "..O..O.O..O..",
+    ".O....O....O.",
+    "O..OO.OOO.OO..O",
+    "O..O.O...O.O..O",
+    "O....O.O....O.O",
+    "..OO.O...O.OO..",
+    "...O.O...O.O...",
+    "..OO.O...O.OO..",
+    "O....O.O....O.O",
+    "O..O.O...O.O..O",
+    "O..OO.OOO.OO..O",
+    ".O....O....O.",
+    "..O..O.O..O..",
+    "...OO...OO...",
+    0,
+};
+
+static const char *const pat_pento[] = {
+    ".OOO",
+    ".O..",
+    "O...",
+    0,
+};
+
+static const char *const pat_acorn[] = {
+    ".O.....OO",
+    "..O.....",
+    ".O..O...",
+    0,
+};
+
+static const char *const pat_lwss[] = {
+    ".O..O",
+    "O....",
+    "O..O.",
+    "OOOO.",
+    0,
+};
+
+static const char *const pat_beacon[] = {
+    "OO..",
+    "O...",
+    "...O",
+    "..OO",
+    0,
+};
+
+static const char *const pat_toad[] = {
+    ".OOO",
+    "OOO.",
+    0,
+};
+
+/* Four gliders aimed into a torus — steady traffic on large grids. */
+static const char *const pat_gliders[] = {
+    "O..O...............O..O",
+    ".O.O...............O.O.",
+    "..OO................OO.",
+    0,
+};
+
+static const life_pattern_def_t patterns[PATTERN_COUNT] = {
+    { "GUN", pat_gosper, 36, 9 },
+    { "PULSAR", pat_pulsar, 13, 13 },
+    { "PENTO", pat_pento, 4, 3 },
+    { "ACORN", pat_acorn, 9, 3 },
+    { "LWSS", pat_lwss, 5, 4 },
+    { "BEACON", pat_beacon, 4, 4 },
+    { "TOAD", pat_toad, 4, 2 },
+    { "GLIDERS", pat_gliders, 23, 3 },
+};
+
+static const char *pattern_name(uint8_t id) {
+    return patterns[pattern_normalize(id)].name;
+}
+
+static uint8_t pattern_pick_for_grid(uint8_t id) {
+    id = pattern_normalize(id);
+    const life_pattern_def_t *def = &patterns[id];
+    if (gw >= def->min_w && gh >= def->min_h) return id;
+    return 1u; /* PULSAR */
+}
+
+static void fill_pattern(uint8_t pat_id) {
+    if (gw <= 0 || gh <= 0) return;
+    pat_id = pattern_pick_for_grid(pat_id);
+    const life_pattern_def_t *def = &patterns[pat_id];
+    grid_clear_buf(cur_buf);
+    int16_t pw, ph;
+    pattern_measure(def, &pw, &ph);
+    int16_t ox = (int16_t)((gw - pw) / 2);
+    int16_t oy = (int16_t)((gh - ph) / 2);
+    stamp_pattern_rows(def->rows, ox, oy);
 }
 
 static void reseed_grid(void) {
     cur_buf = 0;
     grid_clear_buf(0);
     grid_clear_buf(1);
-    rng_seed(cfg.seed);
-    fill_random();
-    steps_since_reseed = 0;
-    step_t             = g_api->now_ms();
+    fill_pattern(cfg.pattern);
+    step_t = g_api->now_ms();
 }
 
-static void reseed_random(void) {
-    uint32_t s = g_api->rng() ^ g_api->now_ms();
-    if (!s) s = g_api->rng() | 1u;
-    rng_seed(s);
+static void pattern_nudge(int8_t delta) {
+    int v = (int)cfg.pattern + (int)delta;
+    if (v < 0) v = (int)PATTERN_COUNT - 1;
+    else if (v >= (int)PATTERN_COUNT) v = 0;
+    if ((uint8_t)v == cfg.pattern) return;
+    cfg.pattern = (uint8_t)v;
     cfg_save();
-    reseed_grid();
+    pending_reseed = true;
+    hud_show_pattern();
+}
+
+static void hud_show_pattern(void) {
+    const char *name = pattern_name(cfg.pattern);
+    unsigned k = 0;
+    for (unsigned i = 0; name[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = name[i];
+    hud_text[k] = 0;
+    hud_active = true;
+    hud_until  = g_api->now_ms() + LIFE_HUD_MS;
 }
 
 static void sync_dims(void) {
@@ -440,58 +583,12 @@ static uint32_t count_live(void) {
     return n;
 }
 
-static void u32_dec(char *buf, uint32_t n) {
-    char t[11];
-    int  i = 0;
-    if (!n) {
-        buf[0] = '0';
-        buf[1] = 0;
-        return;
-    }
-    while (n) {
-        t[i++] = (char)('0' + n % 10u);
-        n /= 10u;
-    }
-    int k = 0;
-    while (i) buf[k++] = t[--i];
-    buf[k] = 0;
-}
-
 static void hud_text_outlined(uint8_t *fb, int16_t x, int16_t y, const char *str) {
     g_api->text_alpha(fb, (int16_t)(x - 1), y, str, 0x0000, 0x0000, 255);
     g_api->text_alpha(fb, (int16_t)(x + 1), y, str, 0x0000, 0x0000, 255);
     g_api->text_alpha(fb, x, (int16_t)(y - 1), str, 0x0000, 0x0000, 255);
     g_api->text_alpha(fb, x, (int16_t)(y + 1), str, 0x0000, 0x0000, 255);
     g_api->text_alpha(fb, x, y, str, 0xFFFF, 0x0000, 255);
-}
-
-static void hud_show_seed(void) {
-    u32_dec(hud_text, cfg.seed);
-    hud_active = true;
-    hud_until  = g_api->now_ms() + LIFE_HUD_MS;
-}
-
-static void hud_show_fill(void) {
-    unsigned k = 0;
-    const char pfx[] = "FILL ";
-    for (unsigned i = 0; pfx[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = pfx[i];
-    char num[4];
-    u32_dec(num, cfg.density);
-    for (unsigned i = 0; num[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = num[i];
-    hud_text[k] = 0;
-    hud_active = true;
-    hud_until  = g_api->now_ms() + LIFE_HUD_MS;
-}
-
-static void fill_nudge(int8_t delta) {
-    int v = (int)cfg.density + (int)delta;
-    if (v < 1) v = 100;
-    else if (v > 100) v = 1;
-    if ((uint8_t)v == cfg.density) return;
-    cfg.density = (uint8_t)v;
-    cfg_save();
-    pending_reseed = true;
-    hud_show_fill();
 }
 
 static void life_draw(void) {
@@ -520,13 +617,12 @@ enum {
     G_SPEED = 1,
     G_SIZE,
     G_COLOR,
-    G_DENSITY,
-    G_SEED,
+    G_PATTERN,
     N_ROOT = 0,
     N_SPEED,
     N_PRESET,
     N_SIZE,
-    N_SEED,
+    N_PATTERN,
     N_LOAD,
 };
 static const app_menu_item_t root_items[] = {
@@ -537,9 +633,8 @@ static const app_menu_item_t root_items[] = {
     { "LOAD",   APP_MI_FOLDER, 0, 0, 0, N_LOAD },
 };
 static const app_menu_item_t preset_items[] = {
-    { "SIZE",   APP_MI_FOLDER, 0, 0, 0, N_SIZE },
-    { "FILL %", APP_MI_FOLDER, 0, G_DENSITY, 0, APP_MENU_CHILD_SLIDER },
-    { "SEED",   APP_MI_FOLDER, 0, 0, 0, N_SEED },
+    { "SIZE",    APP_MI_FOLDER, 0, 0, 0, N_SIZE },
+    { "PATTERN", APP_MI_FOLDER, 0, 0, 0, N_PATTERN },
 };
 #define RADIO(label_, group_, value_) \
     { (label_), APP_MI_VALUE, APP_MI_RADIO, (group_), (value_), 0 }
@@ -550,18 +645,19 @@ static const app_menu_item_t speed_items[] = {
 static const app_menu_item_t size_items[] = {
     RADIO("2 PX", G_SIZE, 0), RADIO("4 PX", G_SIZE, 1),
 };
-static const app_menu_item_t seed_items[] = {
-    { "RANDOM",   APP_MI_ACTION, 0, 0, ACT_RESEED_RANDOM, 0 },
-    { "SET SEED", APP_MI_FOLDER, 0, G_SEED, 0, APP_MENU_CHILD_TEXT },
+static const app_menu_item_t pattern_items[] = {
+    RADIO("GUN", G_PATTERN, 0), RADIO("PULSAR", G_PATTERN, 1), RADIO("PENTO", G_PATTERN, 2),
+    RADIO("ACORN", G_PATTERN, 3), RADIO("LWSS", G_PATTERN, 4), RADIO("BEACON", G_PATTERN, 5),
+    RADIO("TOAD", G_PATTERN, 6), RADIO("GLIDERS", G_PATTERN, 7),
 };
 #undef RADIO
 static const app_menu_node_t menu_nodes[] = {
-    [N_ROOT]   = { "LIFE", root_items, 5 },
-    [N_SPEED]  = { 0, speed_items, 4 },
-    [N_PRESET] = { 0, preset_items, 3 },
-    [N_SIZE]   = { 0, size_items, 2 },
-    [N_SEED]   = { 0, seed_items, 2 },
-    [N_LOAD]   = { 0, 0, 0 },
+    [N_ROOT]     = { "LIFE", root_items, 5 },
+    [N_SPEED]    = { 0, speed_items, 4 },
+    [N_PRESET]   = { 0, preset_items, 2 },
+    [N_SIZE]     = { 0, size_items, 2 },
+    [N_PATTERN]  = { 0, pattern_items, PATTERN_COUNT },
+    [N_LOAD]     = { 0, 0, 0 },
 };
 
 static uint8_t menu_count_fn(uint8_t node) {
@@ -587,18 +683,18 @@ static void menu_gen(uint8_t node, uint8_t idx, app_menu_item_t *out, char *buf)
 
 static void root_title_fill(char *buf, unsigned bufsz) {
     if (!buf || bufsz < 8u) return;
-    char seed[12];
-    u32_dec(seed, cfg.seed);
     unsigned k = 0;
     const char pfx[] = "LIFE ";
     for (unsigned i = 0; pfx[i] && k + 1u < bufsz; i++) buf[k++] = pfx[i];
-    for (unsigned i = 0; seed[i] && k + 1u < bufsz; i++) buf[k++] = seed[i];
+    const char *pn = pattern_name(cfg.pattern);
+    for (unsigned i = 0; pn[i] && k + 1u < bufsz; i++) buf[k++] = pn[i];
     buf[k] = 0;
 }
 
 static uint8_t menu_get(uint8_t group) {
     if (group == G_SPEED) return cfg.speed;
     if (group == G_SIZE) return size_idx_normalize(cfg.size);
+    if (group == G_PATTERN) return pattern_normalize(cfg.pattern);
     return 0;
 }
 
@@ -611,6 +707,10 @@ static void menu_set(uint8_t group, uint8_t value) {
         cfg_save();
         gw = 0;
         sync_dims();
+    } else if (group == G_PATTERN && value < PATTERN_COUNT) {
+        cfg.pattern = value;
+        cfg_save();
+        pending_reseed = true;
     }
 }
 
@@ -625,67 +725,8 @@ static void menu_color_set(uint8_t group, uint16_t rgb565) {
     cfg_save();
 }
 
-static uint32_t menu_uint_get(uint8_t group) {
-    if (group == G_DENSITY) return cfg.density;
-    return 0;
-}
-
-static void menu_uint_set(uint8_t group, uint32_t value) {
-    if (group != G_DENSITY) return;
-    if (value < 1u) value = 1u;
-    if (value > 100u) value = 100u;
-    if (cfg.density == (uint8_t)value) return;
-    cfg.density = (uint8_t)value;
-    cfg_save();
-    pending_reseed = true;
-}
-
-static void menu_uint_spec(uint8_t group, uint32_t *min, uint32_t *max, uint32_t *step) {
-    if (group != G_DENSITY) return;
-    if (min) *min = 1;
-    if (max) *max = 100;
-    if (step) *step = 1;
-}
-
-static uint32_t parse_u32_decimal(const char *s) {
-    uint32_t n = 0;
-    while (s && *s >= '0' && *s <= '9') {
-        uint32_t d = (uint32_t)(*s - '0');
-        if (n > 429496729u || (n == 429496729u && d > 5u)) return 4294967295u;
-        n = n * 10u + d;
-        s++;
-    }
-    return n ? n : 1u;
-}
-
-static void menu_text_get(uint8_t group, char *buf, unsigned bufsz) {
-    if (group != G_SEED || !buf || bufsz < 2u) return;
-    u32_dec(buf, cfg.seed);
-}
-
-static void menu_text_set(uint8_t group, const char *text) {
-    if (group != G_SEED || !text) return;
-    uint32_t v = parse_u32_decimal(text);
-    if (v != cfg.seed) {
-        cfg.seed = v;
-        cfg_save();
-    }
-    pending_reseed = true;
-}
-
-static uint8_t menu_text_flags(uint8_t group) {
-    if (group == G_SEED) return APP_TEXT_NUMERIC;
-    return 0;
-}
-
-static unsigned menu_text_max_len(uint8_t group) {
-    if (group == G_SEED) return 10u;
-    return 15u;
-}
-
 static void menu_action(uint8_t act) {
-    if (act == ACT_RESEED_RANDOM) pending_random_reseed = true;
-    else if (act == ACT_SAVE_PRESET) preset_save_current();
+    if (act == ACT_SAVE_PRESET) preset_save_current();
     else if (act >= ACT_LOAD_PRESET && act < ACT_LOAD_PRESET + PRESET_MAX) {
         const life_preset_t *p = preset_by_menu_index((uint8_t)(act - ACT_LOAD_PRESET));
         preset_apply(p);
@@ -702,13 +743,6 @@ static const app_menu_model_t menu_model = {
     .action          = menu_action,
     .color_get       = menu_color_get,
     .color_set       = menu_color_set,
-    .uint_get        = menu_uint_get,
-    .uint_set        = menu_uint_set,
-    .uint_spec       = menu_uint_spec,
-    .text_get        = menu_text_get,
-    .text_set        = menu_text_set,
-    .text_flags      = menu_text_flags,
-    .text_max_len    = menu_text_max_len,
     .root_title_fill = root_title_fill,
 };
 
@@ -734,19 +768,13 @@ static void life_key_action(uint16_t keycode) {
     } else if (keycode == APP_KEY_SPACE) {
         pending_reseed = true;
     } else if (keycode == APP_KEY_LEFT) {
-        cfg.seed = (cfg.seed <= 1u) ? 0xFFFFFFFFu : cfg.seed - 1u;
-        cfg_save();
-        pending_reseed = true;
-        hud_show_seed();
+        pattern_nudge(-1);
     } else if (keycode == APP_KEY_RIGHT) {
-        cfg.seed = (cfg.seed >= 0xFFFFFFFFu) ? 1u : cfg.seed + 1u;
-        cfg_save();
-        pending_reseed = true;
-        hud_show_seed();
+        pattern_nudge(+1);
     } else if (keycode == APP_KEY_UP) {
-        fill_nudge(+1);
+        pattern_nudge(+1);
     } else if (keycode == APP_KEY_DOWN) {
-        fill_nudge(-1);
+        pattern_nudge(-1);
     } else if (keycode == APP_KEY_MINUS && cfg.speed < 3u) {
         cfg.speed++;
         cfg_save();
@@ -796,7 +824,6 @@ static void life_enter(void) {
     inp_rpt_kc   = 0;
     cfg_load();
     presets_load();
-    rng_seed(cfg.seed);
     gw = gh = 0;
     pix_w = pix_h = 0;
     last_dims_check = 0;
@@ -821,10 +848,6 @@ static void life_tick(uint32_t dt_ms) {
     if (pending_preset_apply) {
         pending_preset_apply = false;
         preset_apply_now(&pending_preset_body);
-    }
-    if (pending_random_reseed) {
-        pending_random_reseed = false;
-        reseed_random();
     }
     if (pending_reseed) {
         pending_reseed = false;
@@ -852,8 +875,7 @@ static void life_tick(uint32_t dt_ms) {
     step_t = now;
 
     life_step();
-    if (steps_since_reseed < 0xFFFFu) steps_since_reseed++;
-    if (steps_since_reseed > 12u && count_live() < 8u) reseed_grid();
+    if (count_live() == 0u) reseed_grid();
     life_draw();
 }
 
