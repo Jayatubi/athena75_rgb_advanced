@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Replay feat/rle-mcu-tween onto openkbd/ava: linear history of athena75 work only
-# (commits reachable from TIP but not from upstream ava). Rewrites feat/rle-mcu-tween.
+# Replay athena75_rgb_advanced commits (fork..tip) onto openkbd/ava. Rewrites feat/rle-mcu-tween.
 set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
@@ -16,43 +15,31 @@ FORK="${FORK:-$(${GIT} log --reverse --format=%H --grep='fork advanced board to 
 ${GIT} fetch openkbd ava
 ${GIT} cherry-pick --abort 2>/dev/null || true
 
-if ! ${GIT} rev-parse "${TIP_SHA}" >/dev/null 2>&1; then
-  echo "error: TIP ${TIP} not found" >&2
+${GIT} merge-base --is-ancestor "${FORK}" "${TIP_SHA}" || {
+  echo "error: fork ${FORK} not ancestor of ${TIP_SHA}" >&2
   exit 1
-fi
-if ! ${GIT} rev-parse "${FORK}" >/dev/null 2>&1; then
-  echo "error: fork commit not found (set FORK=)" >&2
-  exit 1
-fi
-if ! ${GIT} merge-base --is-ancestor "${FORK}" "${TIP_SHA}"; then
-  echo "error: fork is not an ancestor of TIP" >&2
-  exit 1
-fi
+}
 
 ${GIT} tag -f "${BACKUP_TAG}" "${TIP_SHA}"
-echo ">> safety tag ${BACKUP_TAG} -> $(${GIT} rev-parse --short ${BACKUP_TAG})"
-
-FIRST="${FORK}"
-COUNT="$(${GIT} rev-list --count "${FORK}".."${TIP_SHA}")"
-echo ">> replay ${COUNT} athena75 commits onto ${UPSTREAM} (fork ${FIRST})"
+echo ">> backup ${BACKUP_TAG} = $( ${GIT} rev-parse --short ${BACKUP_TAG} )"
+echo ">> replay $(${GIT} rev-list --count ${FORK}..${TIP_SHA}) commits onto ${UPSTREAM}"
 
 ${GIT} checkout -B "${BRANCH}" "${UPSTREAM}"
-${GIT} branch -f ava "${UPSTREAM}" 2>/dev/null || true
 
-echo ">> seed: $(${GIT} log -1 --oneline ${FIRST})"
-${GIT} checkout "${FIRST}" -- keyboards/ydkb/athena75_rgb_advanced
+echo ">> seed $(${GIT} log -1 --oneline ${FORK})"
+${GIT} checkout "${FORK}" -- keyboards/ydkb/athena75_rgb_advanced
 ${GIT} checkout "${UPSTREAM}" -- keyboards/ydkb/athena75_rgb
 ${GIT} rm -rf --ignore-unmatch \
   keyboards/ydkb/athena75_rgb_advanced/tools/.patch-queue \
   keyboards/ydkb/athena75_rgb_advanced/tools/_count_patches.sh \
   keyboards/ydkb/athena75_rgb_advanced/tools/rebase_onto_openkbd.sh \
   keyboards/ydkb/athena75_rgb_advanced/tools/host 2>/dev/null || true
-if ${GIT} show "${FIRST}:.vscode/settings.json" >/dev/null 2>&1; then
-  ${GIT} checkout "${FIRST}" -- .vscode/settings.json
+if ${GIT} show "${FORK}:.vscode/settings.json" >/dev/null 2>&1; then
+  ${GIT} checkout "${FORK}" -- .vscode/settings.json
   ${GIT} add .vscode/settings.json
 fi
 ${GIT} add keyboards/ydkb/athena75_rgb_advanced
-${GIT} commit -C "${FIRST}"
+${GIT} commit -C "${FORK}"
 
 resolve() {
   local f
@@ -67,13 +54,12 @@ resolve() {
 }
 
 while IFS= read -r h; do
-  [[ "${h}" == "${FIRST}" ]] && continue
-  echo ">> ${h} $(${GIT} log -1 --oneline ${h})"
+  [[ "${h}" == "${FORK}" ]] && continue
+  echo ">> $(${GIT} log -1 --oneline ${h})"
   if ! ${GIT} cherry-pick -n "${h}"; then
     resolve
     if [[ -n "$(${GIT} diff --name-only --diff-filter=U)" ]]; then
-      echo "error: unresolved conflict at ${h}" >&2
-      ${GIT} diff --name-only --diff-filter=U
+      echo "error: conflict at ${h}" >&2
       exit 1
     fi
   fi
@@ -84,7 +70,5 @@ while IFS= read -r h; do
   fi
 done < <(${GIT} rev-list --reverse "${FORK}".."${TIP_SHA}")
 
-echo ">> done: $(${GIT} rev-list --count ${UPSTREAM}..HEAD) commits on ${BRANCH}"
-${GIT} branch -u origin/${BRANCH} 2>/dev/null || true
-${GIT} log --oneline -3
-${GIT} diff --stat "${UPSTREAM}" HEAD -- keyboards/ydkb/athena75_rgb_advanced | tail -3
+echo ">> done: $(${GIT} rev-list --count ${UPSTREAM}..HEAD) commits above ${UPSTREAM}"
+${GIT} log --oneline -5
