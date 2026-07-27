@@ -99,7 +99,8 @@ void app_run(void) {
     bool         reinit = reinit_req || (c1_wake_seq() != wake_ack);
 
     if (want != cur) {                               // switch: exit old, enter new
-        if (cur && cur->exit)  cur->exit();
+        if (cur == &app_slot) app_slot_flush_pending_save();
+        if (cur && cur->exit) cur->exit();
         cur = want;
         if (cur && cur->enter) cur->enter();
     } else if (reinit && cur) {                       // same app, but woke / asked: re-init

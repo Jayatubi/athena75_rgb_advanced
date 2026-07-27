@@ -6,6 +6,8 @@
 void c1_main_task(void);
 void c1_before_flash_operation(void);
 void c1_after_flash_operation(void);
+// core1 spin-waits (e.g. save_busy) must call this so core0 flash can park core1.
+void c1_cooperate_with_flash(void);
 bool lcd_is_on(void);
 
 // True while the panel is in transient idle or USB hard-sleep (GP17 off). Used by

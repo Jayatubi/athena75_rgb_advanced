@@ -271,10 +271,12 @@ typedef struct host_api_t {
     uint32_t (*save_base)(void);                 // XIP addr of this app's save sector (0=none)
     uint32_t (*save_size)(void);                 // bytes in the save sector (4096)
     bool     (*save_read)(uint32_t off, void *dst, uint32_t len);   // free (XIP read)
-    // Async: stages the request for core0 (which erases+programs the sector while
-    // core1 is parked). src must stay valid until save_busy() returns false.
+    // Legacy low-level write (prefer cfg_save / cfg_flush). Full-sector replace only
+    // (off must be 0). Async — src must stay valid until save_busy() clears.
     bool     (*save_write)(uint32_t off, const void *src, uint32_t len);
     bool     (*save_busy)(void);
+    void     (*cfg_save)(uint32_t off, const void *src, uint32_t len);
+    bool     (*cfg_flush)(uint32_t off, const void *src, uint32_t len);
 
     // ---- UI services: the OS menu engine (common look) ----------------------
     // The firmware provides the menu ENGINE; the app provides the menu CONTENT

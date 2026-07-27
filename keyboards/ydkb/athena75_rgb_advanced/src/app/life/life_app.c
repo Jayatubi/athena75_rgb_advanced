@@ -55,7 +55,7 @@ typedef struct {
 
 #define LIFE_SAVE_MAGIC 0x4546494Cu /* "LIFE" LE */
 static life_save_t cfg;
-static bool save_pending, leave_pending;
+static bool leave_pending;
 
 static uint8_t grid[2][GW_MAX * GH_MAX];
 static uint8_t cur_buf;
@@ -177,22 +177,20 @@ static void cfg_load(void) {
     cfg_defaults();
 }
 
-static void cfg_save(void) {
+static void cfg_commit(void) {
     cfg.version = 4;
     cfg.size    = 0;
     cfg.pattern = pattern_normalize(cfg.pattern);
     cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
-    save_pending = true;
+    g_api->cfg_save(0, &cfg, sizeof cfg);
 }
 
-static bool persist_write(void) {
-    if (g_api->save_busy()) return false;
+static void cfg_flush_now(void) {
     cfg.version = 4;
     cfg.size    = 0;
+    cfg.pattern = pattern_normalize(cfg.pattern);
     cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
-    if (!g_api->save_write(0, &cfg, sizeof cfg)) return false;
-    save_pending = false;
-    return true;
+    g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 static inline uint32_t idx(int16_t x, int16_t y) {
@@ -424,7 +422,7 @@ static void pattern_nudge(int8_t delta) {
     else if (v >= (int)PATTERN_COUNT) v = 0;
     if ((uint8_t)v == cfg.pattern) return;
     cfg.pattern = (uint8_t)v;
-    cfg_save();
+    cfg_commit();
     pending_reseed = true;
     hud_show_pattern();
 }
@@ -564,10 +562,10 @@ static uint8_t menu_get(uint8_t group) {
 static void menu_set(uint8_t group, uint8_t value) {
     if (group == G_SPEED && value < 4) {
         cfg.speed = value;
-        cfg_save();
+        cfg_flush_now();
     } else if (group == G_PATTERN && value < PATTERN_COUNT) {
         cfg.pattern = value;
-        cfg_save();
+        cfg_flush_now();
         pending_reseed = true;
         hud_show_pattern();
     }
@@ -581,7 +579,7 @@ static uint16_t menu_color_get(uint8_t group) {
 static void menu_color_set(uint8_t group, uint16_t rgb565) {
     if (group != G_COLOR) return;
     cfg.cell_color = rgb565;
-    cfg_save();
+    cfg_flush_now();
 }
 
 static const app_menu_model_t menu_model = {
@@ -625,10 +623,10 @@ static void life_key_action(uint16_t keycode) {
         pattern_nudge(-1);
     } else if (keycode == APP_KEY_MINUS && cfg.speed < 3u) {
         cfg.speed++;
-        cfg_save();
+        cfg_commit();
     } else if (keycode == APP_KEY_EQUAL && cfg.speed > 0u) {
         cfg.speed--;
-        cfg_save();
+        cfg_commit();
     }
 }
 
@@ -668,7 +666,7 @@ static void life_input(void) {
 }
 
 static void life_enter(void) {
-    save_pending = leave_pending = false;
+    leave_pending = false;
     inp_rpt_kc   = 0;
     cfg_load();
     gw = gh = 0;
@@ -682,9 +680,6 @@ static void life_tick(uint32_t dt_ms) {
     (void)dt_ms;
 
     if (leave_pending) {
-        if (save_pending) {
-            if (!persist_write()) return;
-        }
         if (g_api->save_busy()) return;
         g_api->exit_to_launcher();
         return;
@@ -740,6 +735,7 @@ static const app_desc_t life_desc = {
 const app_desc_t *app_init(const host_api_t *api) {
     g_api = api;
     if (!api || api->abi_version != ATHENA_APP_ABI_VERSION) return 0;
+    if (!api->cfg_save || !api->cfg_flush) return 0;
     return &life_desc;
 }
 

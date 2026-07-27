@@ -33,6 +33,10 @@ static void __no_inline_not_in_flash_func(c1_trap_for_flash_operation)(void) {
     }
 }
 
+void c1_cooperate_with_flash(void) {
+    c1_trap_for_flash_operation();
+}
+
 // Main process for core1
 static THD_WORKING_AREA(wa_c1_main_task_wrapper, 2048);
 static THD_FUNCTION(c1_main_task_wrapper, arg)

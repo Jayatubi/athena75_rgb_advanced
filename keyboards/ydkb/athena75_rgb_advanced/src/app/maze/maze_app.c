@@ -15,7 +15,7 @@ void *memset(void *d, int c, unsigned long n) {
     return d;
 }
 
-static const host_api_t *g;
+static const host_api_t *g_api;
 
 #define GRID_MAX   16u
 #define PANEL      128u
@@ -32,8 +32,24 @@ static uint8_t walls[GRID_MAX][GRID_MAX];
 static uint8_t maze_seed;
 static uint32_t prng;
 
-static uint8_t cell_px; /* 8 or 16 — runtime only, not saved */
+/* Compare mode only (not in save sector): 16 px/cell = 8×8 maze, 8 px/cell = 16×16. */
+static uint8_t cell_px;
 static uint8_t grid_n;
+
+typedef union {
+    struct {
+        uint8_t stack_x[GRID_MAX * GRID_MAX];
+        uint8_t stack_y[GRID_MAX * GRID_MAX];
+    } carve;
+    struct {
+        uint8_t qx[PATH_MAX];
+        uint8_t qy[PATH_MAX];
+        int8_t  parent[GRID_MAX][GRID_MAX];
+        uint8_t from_x[GRID_MAX][GRID_MAX];
+        uint8_t from_y[GRID_MAX][GRID_MAX];
+    } bfs;
+} maze_algo_ws_t;
+static maze_algo_ws_t algo_ws;
 
 static uint8_t path_x[PATH_MAX];
 static uint8_t path_y[PATH_MAX];
@@ -79,7 +95,6 @@ typedef struct {
 #define MAZE_SAVE_MAGIC   0x4D5A4131u /* "MZA1" */
 #define MAZE_SAVE_VERSION 3u
 static maze_save_t cfg;
-static bool save_pending;
 
 static const uint16_t speed_ms[4] = { 6u, 12u, 24u, 40u }; /* ms per pixel step */
 
@@ -119,7 +134,7 @@ static void cfg_defaults(void) {
 
 static bool cfg_load(void) {
     maze_save_t s;
-    if (g->save_read(0, &s, sizeof s) && s.magic == MAZE_SAVE_MAGIC && s.speed < 4u &&
+    if (g_api->save_read(0, &s, sizeof s) && s.magic == MAZE_SAVE_MAGIC && s.speed < 4u &&
         s.crc == crc32(&s, (uint32_t)__builtin_offsetof(maze_save_t, crc)) &&
         (s.version == MAZE_SAVE_VERSION || s.version == 1u)) {
         cfg = s;
@@ -135,7 +150,7 @@ static bool cfg_load(void) {
         uint32_t crc;
     } maze_save_v2_t;
     maze_save_v2_t v2;
-    if (g->save_read(0, &v2, sizeof v2) && v2.magic == MAZE_SAVE_MAGIC && v2.version == 2u &&
+    if (g_api->save_read(0, &v2, sizeof v2) && v2.magic == MAZE_SAVE_MAGIC && v2.version == 2u &&
         v2.speed < 4u &&
         v2.crc == crc32(&v2, (uint32_t)__builtin_offsetof(maze_save_v2_t, crc))) {
         cfg_defaults();
@@ -147,17 +162,14 @@ static bool cfg_load(void) {
     return false;
 }
 
-static void cfg_save(void) {
+static void cfg_commit(void) {
     cfg_rehash();
-    save_pending = true;
+    g_api->cfg_save(0, &cfg, sizeof cfg);
 }
 
-static bool persist_write(void) {
-    if (g->save_busy()) return false;
+static void cfg_flush_now(void) {
     cfg_rehash();
-    if (!g->save_write(0, &cfg, sizeof cfg)) return false;
-    save_pending = false;
-    return true;
+    g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 static void prng_seed(void) {
@@ -227,10 +239,11 @@ static void open_center_internal(void) {
 
 /* Iterative backtracker — recursive DFS blew core1's 2 KiB thread stack. */
 static void maze_carve(void) {
-    static uint8_t stack_x[GRID_MAX * GRID_MAX];
-    static uint8_t stack_y[GRID_MAX * GRID_MAX];
     static const int8_t dx[4] = {0, 1, 0, -1};
     static const int8_t dy[4] = {-1, 0, 1, 0};
+
+    uint8_t *stack_x = algo_ws.carve.stack_x;
+    uint8_t *stack_y = algo_ws.carve.stack_y;
 
     uint8_t sp = 0;
     stack_x[0] = start_x;
@@ -285,12 +298,12 @@ static void pick_corners(void) {
 }
 
 static bool bfs_path(void) {
-    static uint8_t qx[PATH_MAX];
-    static uint8_t qy[PATH_MAX];
-    static int8_t  parent[GRID_MAX][GRID_MAX];
-    static uint8_t from_x[GRID_MAX][GRID_MAX];
-    static uint8_t from_y[GRID_MAX][GRID_MAX];
-    memset(parent, -1, sizeof parent);
+    uint8_t *qx = algo_ws.bfs.qx;
+    uint8_t *qy = algo_ws.bfs.qy;
+    int8_t (*parent)[GRID_MAX] = algo_ws.bfs.parent;
+    uint8_t (*from_x)[GRID_MAX] = algo_ws.bfs.from_x;
+    uint8_t (*from_y)[GRID_MAX] = algo_ws.bfs.from_y;
+    memset(parent, -1, sizeof algo_ws.bfs.parent);
     uint16_t head = 0, tail = 0;
     qx[tail] = start_x;
     qy[tail] = start_y;
@@ -401,7 +414,7 @@ static void draw_trail_pixels(uint8_t *fb, uint16_t dist) {
         int8_t  sy = (ty > y) ? 1 : (ty < y) ? -1 : 0;
         for (uint8_t p = 0; p < cell_px; p++) {
             if (rem == 0u) return;
-            g->fill_rect(fb, x, y, 1, 1, TRAIL_COL);
+            g_api->fill_rect(fb, x, y, 1, 1, TRAIL_COL);
             rem--;
             x += sx;
             y += sy;
@@ -432,7 +445,7 @@ static void maze_generate(void) {
     path_compute_px_total();
     demo_pos  = 0u;
     phase     = PHASE_DEMO;
-    phase_t   = g->now_ms();
+    phase_t   = g_api->now_ms();
 }
 
 static void maze_seed_bump(int8_t delta) {
@@ -450,7 +463,7 @@ static void hud_show(const char *msg) {
     for (unsigned i = 0; msg[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = msg[i];
     hud_text[k] = 0;
     hud_active  = true;
-    hud_until   = g->now_ms() + MAZE_HUD_MS;
+    hud_until   = g_api->now_ms() + MAZE_HUD_MS;
 }
 
 static void hud_show_seed(void) {
@@ -484,8 +497,10 @@ static void hud_show_cell(void) {
     hud_show(cell_px == 8u ? "CELL 8" : "CELL 16");
 }
 
-static void cell_mode_toggle(void) {
-    cell_px = (cell_px == 16u) ? 8u : 16u;
+static void cell_px_set(uint8_t px) {
+    if (px != 8u && px != 16u) return;
+    if (cell_px == px) return;
+    cell_px = px;
     maze_dims_from_cell();
     hud_show_cell();
     maze_generate();
@@ -497,28 +512,28 @@ static void speed_nudge(int8_t delta) {
     else if (v > 3) v = 3;
     if ((uint8_t)v == cfg.speed) return;
     cfg.speed = (uint8_t)v;
-    cfg_save();
+    cfg_commit();
     hud_show_speed();
 }
 
 static int16_t view_w(void) {
-    int16_t w = g->vw();
+    int16_t w = g_api->vw();
     if (w <= 0 || w > (int16_t)PANEL) w = (int16_t)PANEL;
     return w;
 }
 
 static int16_t view_h(void) {
-    int16_t h = g->vh();
+    int16_t h = g_api->vh();
     if (h <= 0 || h > (int16_t)PANEL) h = (int16_t)PANEL;
     return h;
 }
 
 static void text_outlined(uint8_t *fb, int16_t x, int16_t y, const char *s, uint16_t fg) {
-    g->text_alpha(fb, (int16_t)(x - 1), y, s, 0x0000, 0x0000, 255);
-    g->text_alpha(fb, (int16_t)(x + 1), y, s, 0x0000, 0x0000, 255);
-    g->text_alpha(fb, x, (int16_t)(y - 1), s, 0x0000, 0x0000, 255);
-    g->text_alpha(fb, x, (int16_t)(y + 1), s, 0x0000, 0x0000, 255);
-    g->text_alpha(fb, x, y, s, fg, 0x0000, 255);
+    g_api->text_alpha(fb, (int16_t)(x - 1), y, s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, (int16_t)(x + 1), y, s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, x, (int16_t)(y - 1), s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, x, (int16_t)(y + 1), s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, x, y, s, fg, 0x0000, 255);
 }
 
 static void draw_seed(uint8_t *fb) {
@@ -527,8 +542,8 @@ static void draw_seed(uint8_t *fb) {
     buf[0] = hex[(maze_seed >> 4) & 0x0Fu];
     buf[1] = hex[maze_seed & 0x0Fu];
     buf[2] = 0;
-    int16_t tw = g->text_width(buf);
-    int16_t lh = g->line_height();
+    int16_t tw = g_api->text_width(buf);
+    int16_t lh = g_api->line_height();
     int16_t box = (int16_t)((PANEL - CENTER_ABS) / 2);
     int16_t x   = (int16_t)(box + (CENTER_ABS - tw) / 2);
     int16_t y   = (int16_t)(box + (CENTER_ABS - lh) / 2);
@@ -555,56 +570,56 @@ static void path_move_dir(uint16_t dist, int8_t *odx, int8_t *ody) {
 static void draw_arrow_px(uint8_t *fb, int16_t px, int16_t py, int8_t dx, int8_t dy) {
     uint16_t col = 0xFFE0u;
     if (dx > 0) {
-        g->fill_rect(fb, (int16_t)(px + 2), (int16_t)(py - 1), 2, 2, col);
-        g->fill_rect(fb, px, (int16_t)(py - 2), 2, 4, col);
-        g->fill_rect(fb, (int16_t)(px - 2), (int16_t)(py - 1), 2, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 3), py, 1, 1, col);
+        g_api->fill_rect(fb, (int16_t)(px + 2), (int16_t)(py - 1), 2, 2, col);
+        g_api->fill_rect(fb, px, (int16_t)(py - 2), 2, 4, col);
+        g_api->fill_rect(fb, (int16_t)(px - 2), (int16_t)(py - 1), 2, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 3), py, 1, 1, col);
     } else if (dx < 0) {
-        g->fill_rect(fb, (int16_t)(px - 3), (int16_t)(py - 1), 2, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py - 2), 2, 4, col);
-        g->fill_rect(fb, (int16_t)(px + 1), (int16_t)(py - 1), 2, 2, col);
-        g->fill_rect(fb, (int16_t)(px + 2), py, 1, 1, col);
+        g_api->fill_rect(fb, (int16_t)(px - 3), (int16_t)(py - 1), 2, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py - 2), 2, 4, col);
+        g_api->fill_rect(fb, (int16_t)(px + 1), (int16_t)(py - 1), 2, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px + 2), py, 1, 1, col);
     } else if (dy > 0) {
-        g->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py + 2), 2, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 2), py, 4, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py - 2), 2, 2, col);
-        g->fill_rect(fb, px, (int16_t)(py - 3), 1, 1, col);
+        g_api->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py + 2), 2, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 2), py, 4, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py - 2), 2, 2, col);
+        g_api->fill_rect(fb, px, (int16_t)(py - 3), 1, 1, col);
     } else if (dy < 0) {
-        g->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py - 3), 2, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 2), (int16_t)(py - 1), 4, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py + 1), 2, 2, col);
-        g->fill_rect(fb, px, (int16_t)(py + 2), 1, 1, col);
+        g_api->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py - 3), 2, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 2), (int16_t)(py - 1), 4, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 1), (int16_t)(py + 1), 2, 2, col);
+        g_api->fill_rect(fb, px, (int16_t)(py + 2), 1, 1, col);
     } else {
-        g->fill_rect(fb, px, (int16_t)(py - 1), 2, 2, col);
-        g->fill_rect(fb, (int16_t)(px - 1), py, 2, 2, col);
+        g_api->fill_rect(fb, px, (int16_t)(py - 1), 2, 2, col);
+        g_api->fill_rect(fb, (int16_t)(px - 1), py, 2, 2, col);
     }
 }
 
 static void maze_draw(void) {
-    uint8_t *fb = g->fb;
+    uint8_t *fb = g_api->fb;
     int16_t  vw = view_w();
     int16_t  vh = view_h();
 
-    g->clip_set(0, 0, vw, vh);
-    g->clear(fb, 0x0000);
+    g_api->clip_set(0, 0, vw, vh);
+    g_api->clear(fb, 0x0000);
 
     for (uint8_t y = 0; y < grid_n; y++) {
         for (uint8_t x = 0; x < grid_n; x++) {
             int16_t px = (int16_t)(x * cell_px);
             int16_t py = (int16_t)(y * cell_px);
             uint16_t floor = is_center(x, y) ? 0x1084u : 0x0841u;
-            g->fill_rect(fb, px, py, (int16_t)cell_px, (int16_t)cell_px, floor);
+            g_api->fill_rect(fb, px, py, (int16_t)cell_px, (int16_t)cell_px, floor);
             uint8_t w = walls[y][x];
-            if (w & W_N) g->hline(fb, px, py, (int16_t)cell_px, 0xFFFFu);
-            if (w & W_W) g->vline(fb, px, py, (int16_t)cell_px, 0xFFFFu);
-            if (w & W_E) g->vline(fb, (int16_t)(px + cell_px - 1), py, (int16_t)cell_px, 0xFFFFu);
-            if (w & W_S) g->hline(fb, px, (int16_t)(py + cell_px - 1), (int16_t)cell_px, 0xFFFFu);
+            if (w & W_N) g_api->hline(fb, px, py, (int16_t)cell_px, 0xFFFFu);
+            if (w & W_W) g_api->vline(fb, px, py, (int16_t)cell_px, 0xFFFFu);
+            if (w & W_E) g_api->vline(fb, (int16_t)(px + cell_px - 1), py, (int16_t)cell_px, 0xFFFFu);
+            if (w & W_S) g_api->hline(fb, px, (int16_t)(py + cell_px - 1), (int16_t)cell_px, 0xFFFFu);
         }
     }
 
-    g->ring(fb, (int16_t)(start_x * cell_px + cell_px / 2),
+    g_api->ring(fb, (int16_t)(start_x * cell_px + cell_px / 2),
             (int16_t)(start_y * cell_px + cell_px / 2), 4, true, 0x07E0u);
-    g->ring(fb, (int16_t)(end_x * cell_px + cell_px / 2),
+    g_api->ring(fb, (int16_t)(end_x * cell_px + cell_px / 2),
             (int16_t)(end_y * cell_px + cell_px / 2), 4, true, END_COL);
 
     if (phase == PHASE_DEMO || phase == PHASE_WIN) {
@@ -622,7 +637,7 @@ static void maze_draw(void) {
 
     draw_seed(fb);
 
-    if (hud_active && g->now_ms() < hud_until) {
+    if (hud_active && g_api->now_ms() < hud_until) {
         text_outlined(fb, 2, 1, hud_text, 0xFFFFu);
     } else if (hud_active) {
         hud_active = false;
@@ -630,13 +645,13 @@ static void maze_draw(void) {
 
     if (phase == PHASE_WIN) {
         const char *msg = "WIN!";
-        int16_t tw = g->text_width(msg);
-        int16_t lh = g->line_height();
+        int16_t tw = g_api->text_width(msg);
+        int16_t lh = g_api->line_height();
         text_outlined(fb, (int16_t)((vw - tw) / 2), (int16_t)((vh - lh) / 2), msg, 0x07FFu);
     }
 
-    g->clip_reset();
-    g->present(fb);
+    g_api->clip_reset();
+    g_api->present(fb);
 }
 
 static const app_menu_model_t menu_model;
@@ -645,9 +660,12 @@ static void maze_key_action(uint16_t keycode) {
     if (keycode == APP_KEY_ESC) {
         leave_pending = true;
     } else if (keycode == APP_KEY_ENTER) {
-        g->menu_run(&menu_model);
-    } else if (keycode == APP_KEY_SPACE) {
-        cell_mode_toggle();
+        g_api->menu_run(&menu_model);
+    } else if (keycode == APP_KEY_MINUS) {
+        cell_px_set(8u);
+        maze_draw();
+    } else if (keycode == APP_KEY_EQUAL) {
+        cell_px_set(16u);
         maze_draw();
     } else if (keycode == APP_KEY_LEFT) {
         maze_seed_bump(-1);
@@ -668,7 +686,7 @@ static void maze_key_action(uint16_t keycode) {
 
 static void maze_input(void) {
     app_key_event_t ev;
-    while (g->poll_event(&ev)) {
+    while (g_api->poll_event(&ev)) {
         if (!ev.pressed) continue;
         maze_key_action(ev.keycode);
     }
@@ -698,7 +716,7 @@ static uint8_t menu_get(uint8_t group) {
 static void menu_set(uint8_t group, uint8_t value) {
     if (group == G_SPEED && value < 4u) {
         cfg.speed = value;
-        cfg_save();
+        cfg_flush_now();
         hud_show_speed();
     }
 }
@@ -712,12 +730,11 @@ static const app_menu_model_t menu_model = {
 
 static void maze_enter(void) {
     leave_pending = false;
-    save_pending  = false;
     hud_active    = false;
     cell_px       = 16u;
     maze_dims_from_cell();
     cfg_load();
-    maze_seed = (uint8_t)(g->rng() & 0xFFu);
+    maze_seed = (uint8_t)(g_api->rng() & 0xFFu);
     maze_generate();
     maze_draw();
 }
@@ -725,18 +742,15 @@ static void maze_enter(void) {
 static void maze_tick(uint32_t dt_ms) {
     (void)dt_ms;
     if (leave_pending) {
-        if (save_pending) {
-            if (!persist_write()) return;
-        }
-        if (g->save_busy()) return;
-        g->exit_to_launcher();
+        if (g_api->save_busy()) return;
+        g_api->exit_to_launcher();
         return;
     }
     maze_input();
 
-    if (g->menu_active()) return;
+    if (g_api->menu_active()) return;
 
-    uint32_t now = g->now_ms();
+    uint32_t now = g_api->now_ms();
     uint16_t step_ms = speed_ms[cfg.speed];
     if (phase == PHASE_DEMO) {
         if (path_px_total == 0u) {
@@ -772,8 +786,9 @@ static const app_desc_t maze_desc = {
 };
 
 const app_desc_t *app_init(const host_api_t *api) {
-    g = api;
+    g_api = api;
     if (!api || api->abi_version != ATHENA_APP_ABI_VERSION) return 0;
+    if (!api->cfg_save || !api->cfg_flush) return 0;
     return &maze_desc;
 }
 

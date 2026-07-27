@@ -61,3 +61,5 @@ void     app_return_to_launcher(void);
 // core0: flash at `base` was rewritten (app install/update). Next slot_enter reloads
 // from XIP even if that slot is already loaded (code-only update while running).
 void     app_slot_invalidate(uint32_t base);
+// core1: flush cfg_save staging before tearing down a slot app (app.c).
+void     app_slot_flush_pending_save(void);

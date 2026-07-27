@@ -43,7 +43,7 @@ typedef struct {
 
 #define MATRIX_SAVE_MAGIC 0x3158544Du /* "MTX1" */
 static matrix_save_t cfg;
-static bool save_pending, leave_pending;
+static bool leave_pending;
 
 static uint32_t crc32(const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
@@ -73,14 +73,13 @@ static void cfg_load(void) {
     }
     cfg = saved;
 }
-static void cfg_flush(void) {
-    if (save_pending && !g_api->save_busy() &&
-        g_api->save_write(0, &cfg, sizeof cfg))
-        save_pending = false;
-}
-static void cfg_save(void) {
+static void cfg_commit(void) {
     cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
-    save_pending = true;
+    g_api->cfg_save(0, &cfg, sizeof cfg);
+}
+static void cfg_flush_now(void) {
+    cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
+    g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 // Shim the firmware names matrix.c uses onto the host_api table so the rain
@@ -161,7 +160,7 @@ static void menu_set(uint8_t group, uint8_t value) {
     else if (group == G_DENSITY && value < 4) cfg.density = value;
     else if (group == G_CLOCK && value < 5) cfg.clock = value;
     else return;
-    cfg_save();
+    cfg_flush_now();
 }
 static const app_menu_model_t menu_model = {
     .nodes = menu_nodes,
@@ -252,7 +251,7 @@ static bool clock_build_mask(uint8_t cols, uint8_t rows) {
 }
 
 static void matrix_enter(void) {
-    save_pending = leave_pending = false;
+    leave_pending = false;
     cfg_load();
     mtx_seed();
 }
@@ -275,8 +274,7 @@ static void matrix_tick(uint32_t dt_ms) {
     (void)dt_ms;
 
     if (leave_pending) {
-        if (save_pending) cfg_flush();
-        if (save_pending || g_api->save_busy()) return;
+        if (g_api->save_busy()) return;
         g_api->exit_to_launcher();
         return;
     }
@@ -387,6 +385,7 @@ static const app_desc_t matrix_desc = {
 const app_desc_t *app_init(const host_api_t *api) {
     g_api = api;
     if (!api || api->abi_version != ATHENA_APP_ABI_VERSION) return 0;
+    if (!api->cfg_save || !api->cfg_flush) return 0;
     return &matrix_desc;
 }
 

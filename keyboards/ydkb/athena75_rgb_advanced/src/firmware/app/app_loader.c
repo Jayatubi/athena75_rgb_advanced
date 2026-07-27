@@ -17,7 +17,7 @@
 #include <string.h>
 
 #include "app.h"
-#include "c1.h"                 // lcd_clock_sec
+#include "c1.h"
 #include "c1_gfx.h"             // fbShow, rng_next, ANIM_SIZE
 #include "ui.h"                 // ui_vw/vh/clear/text_alpha/present
 #include "app_input.h"          // app_input_poll (poll_event) / mode
@@ -49,6 +49,9 @@ static uint32_t loader_save_base(void);
 static uint32_t loader_save_size(void);
 static bool     loader_save_read(uint32_t off, void *dst, uint32_t len);
 static bool     loader_save_write(uint32_t off, const void *src, uint32_t len);
+static void     loader_cfg_discard(void);
+static void     loader_cfg_save(uint32_t off, const void *src, uint32_t len);
+static bool     loader_cfg_flush(uint32_t off, const void *src, uint32_t len);
 
 // UI service: open the OS menu engine (menu.c/menu_model.c/ui_scene.c) on the
 // app-supplied content model. The request is made on core1 and serviced on core0
@@ -134,6 +137,8 @@ static const host_api_t g_api = {
     .save_read   = loader_save_read,
     .save_write  = loader_save_write,
     .save_busy   = app_sys_save_busy,
+    .cfg_save    = loader_cfg_save,
+    .cfg_flush   = loader_cfg_flush,
     // UI services: the OS menu engine (common look), exposed as a modal service
     .menu_run    = loader_menu_run,
     .menu_active = loader_menu_active,
@@ -176,12 +181,76 @@ static bool loader_save_write(uint32_t off, const void *src, uint32_t len) {
     return app_sys_save_request(b, src, len);
 }
 
+// ---- OS-managed cfg staging (deferred save on app exit) --------------------
+static uint8_t        s_cfg_snap[APP_SLOT_SAVE_SIZE];
+static const uint8_t *s_cfg_stage_src;
+static uint32_t       s_cfg_stage_off;
+static uint32_t       s_cfg_stage_len;
+static bool            s_cfg_stage_pending;
+
+static bool loader_cfg_bounds(uint32_t off, uint32_t len) {
+    if (!loader_save_base() || !len || off > APP_SLOT_SAVE_SIZE ||
+        len > APP_SLOT_SAVE_SIZE - off)
+        return false;
+    return true;
+}
+
+static bool loader_flash_same(uint32_t off, const void *src, uint32_t len) {
+    uint32_t b = loader_save_base();
+    return memcmp(src, (const void *)(uintptr_t)(b + off), len) == 0;
+}
+
+static bool loader_cfg_program(uint32_t off, const void *src, uint32_t len) {
+    if (app_sys_save_busy() || !loader_cfg_bounds(off, len) || !src || off != 0u)
+        return false;
+    if (loader_flash_same(off, src, len)) return true;
+    memcpy(s_cfg_snap, src, len);
+    return loader_save_write(0, s_cfg_snap, len);
+}
+
+void app_slot_flush_pending_save(void) {
+    while (app_sys_save_busy()) {
+        c1_cooperate_with_flash();
+    }
+    if (!s_cfg_stage_pending) return;
+    if (loader_cfg_program(s_cfg_stage_off, s_cfg_stage_src, s_cfg_stage_len))
+        s_cfg_stage_pending = false;
+    while (app_sys_save_busy()) {
+        c1_cooperate_with_flash();
+    }
+}
+
+static void loader_cfg_discard(void) {
+    s_cfg_stage_pending = false;
+    s_cfg_stage_src     = NULL;
+    s_cfg_stage_off     = 0;
+    s_cfg_stage_len     = 0;
+}
+
+static void loader_cfg_save(uint32_t off, const void *src, uint32_t len) {
+    if (!loader_cfg_bounds(off, len) || !src) return;
+    s_cfg_stage_off     = off;
+    s_cfg_stage_src     = (const uint8_t *)src;
+    s_cfg_stage_len     = len;
+    s_cfg_stage_pending = true;
+}
+
+static bool loader_cfg_flush(uint32_t off, const void *src, uint32_t len) {
+    if (app_sys_save_busy()) return false;
+    if (!loader_cfg_program(off, src, len)) return false;
+    if (s_cfg_stage_pending && s_cfg_stage_off == off && s_cfg_stage_len == len &&
+        s_cfg_stage_src == (const uint8_t *)src)
+        s_cfg_stage_pending = false;
+    return true;
+}
+
 // Load + validate the app image at XIP `base` (already relocated for this slot at
 // upload). Returns true and sets g_desc on success. Never writes outside the
 // reserved RAM window.
 static bool loader_load(uint32_t base) {
     g_desc        = NULL;
     g_loaded_base = 0;
+    loader_cfg_discard();
 
     const app_header_t *h = (const app_header_t *)(uintptr_t)base;
     if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0) return false;
