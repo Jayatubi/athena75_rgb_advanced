@@ -10,12 +10,13 @@ UPSTREAM="${UPSTREAM:-openkbd/ava}"
 BRANCH="${BRANCH:-feat/rle-mcu-tween}"
 BACKUP_TAG="${BACKUP_TAG:-backup/pre-rebase-feat/rle-mcu-tween}"
 TIP="${TIP:-HEAD}"
-FORK="${FORK:-$(${GIT} log --reverse --format=%H --grep='fork advanced board to athena75_rgb_advanced' -1 "${TIP}")}"
+TIP_SHA="$(${GIT} rev-parse "${TIP}")"
+FORK="${FORK:-$(${GIT} log --reverse --format=%H --grep='fork advanced board to athena75_rgb_advanced' -1 "${TIP_SHA}")}"
 
 ${GIT} fetch openkbd ava
 ${GIT} cherry-pick --abort 2>/dev/null || true
 
-if ! ${GIT} rev-parse "${TIP}" >/dev/null 2>&1; then
+if ! ${GIT} rev-parse "${TIP_SHA}" >/dev/null 2>&1; then
   echo "error: TIP ${TIP} not found" >&2
   exit 1
 fi
@@ -23,12 +24,16 @@ if ! ${GIT} rev-parse "${FORK}" >/dev/null 2>&1; then
   echo "error: fork commit not found (set FORK=)" >&2
   exit 1
 fi
+if ! ${GIT} merge-base --is-ancestor "${FORK}" "${TIP_SHA}"; then
+  echo "error: fork is not an ancestor of TIP" >&2
+  exit 1
+fi
 
-${GIT} tag -f "${BACKUP_TAG}" "${TIP}"
+${GIT} tag -f "${BACKUP_TAG}" "${TIP_SHA}"
 echo ">> safety tag ${BACKUP_TAG} -> $(${GIT} rev-parse --short ${BACKUP_TAG})"
 
 FIRST="${FORK}"
-COUNT="$(${GIT} rev-list --count "${FORK}".."${TIP}")"
+COUNT="$(${GIT} rev-list --count "${FORK}".."${TIP_SHA}")"
 echo ">> replay ${COUNT} athena75 commits onto ${UPSTREAM} (fork ${FIRST})"
 
 ${GIT} checkout -B "${BRANCH}" "${UPSTREAM}"
@@ -77,8 +82,9 @@ while IFS= read -r h; do
   else
     ${GIT} commit -C "${h}"
   fi
-done < <(${GIT} rev-list --reverse "${FORK}".."${TIP}")
+done < <(${GIT} rev-list --reverse "${FORK}".."${TIP_SHA}")
 
 echo ">> done: $(${GIT} rev-list --count ${UPSTREAM}..HEAD) commits on ${BRANCH}"
+${GIT} branch -u origin/${BRANCH} 2>/dev/null || true
 ${GIT} log --oneline -3
 ${GIT} diff --stat "${UPSTREAM}" HEAD -- keyboards/ydkb/athena75_rgb_advanced | tail -3
