@@ -14,7 +14,7 @@
 #include "app.h"
 #include "c1_gfx.h"
 
-extern uint16_t kb_idle_timer;
+#include "c1.h"
 
 static uint16_t boot_nframes = 0;   // frames in the boot QGF (0 = none/invalid)
 static uint16_t boot_frame   = 0;   // frame currently on screen

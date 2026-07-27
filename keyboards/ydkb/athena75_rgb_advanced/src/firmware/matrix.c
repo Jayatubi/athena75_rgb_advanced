@@ -41,7 +41,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 extern debug_config_t debug_config;
 
 bool bootmagic_checked = 0;
-uint16_t kb_idle_timer = 2;
+volatile uint16_t kb_idle_timer = 2;
 
 static matrix_row_t matrix[MATRIX_ROWS] = {0};
 static uint8_t matrix_debouncing[MATRIX_ROWS][MATRIX_COLS] = {0};

@@ -33,8 +33,10 @@
 bool is_st7735 = false;
 painter_device_t display;
 static bool now_lcd_off = 0;
-static bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
-static uint32_t lcd_idle_wake_grace_until = 0; // block re-sleep briefly after wake
+static volatile bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
+static volatile bool lcd_usb_off  = 0; // transient USB suspend / offline (not persisted)
+static volatile uint32_t lcd_idle_wake_grace_until = 0; // block re-sleep briefly after wake
+static volatile bool c1_idle_policy_armed = false; // false until boot splash / persisted LCD apply
 static volatile uint8_t lcd_sleep_code = 0; // 0=5m default, 1=1m, 2=10m, 3=15m, 4=never
 
 void lcd_sleep_timeout_set(uint8_t code) {
@@ -71,9 +73,7 @@ uint32_t rng_next(void) {
 volatile bool lcd_capture_freeze = false; // core0 -> core1: hold the current frame
 volatile bool lcd_capture_frozen = false; // core1 -> core0: fbShow is now static
 
-/* rgb info */
-extern uint16_t kb_idle_timer;
-extern uint8_t  indicator_state;
+extern uint8_t indicator_state;
 
 
 bool qp_gc9107_init(painter_device_t device, painter_rotation_t rotation) {
@@ -147,6 +147,14 @@ bool lcd_idle_panel_asleep(void) {
     return lcd_idle_off;
 }
 
+bool lcd_transient_panel_asleep(void) {
+    return lcd_idle_off || lcd_usb_off;
+}
+
+bool c1_lcd_auto_sleep_armed(void) {
+    return c1_idle_policy_armed;
+}
+
 void lcd_idle_on_wake(void) {
     kb_idle_timer           = 0;
     lcd_idle_wake_grace_until = timer_read32() + 2500u;
@@ -155,9 +163,10 @@ void lcd_idle_on_wake(void) {
 // Dialog / app-upload overlay interrupted sleep — restore the same off state after.
 static void lcd_panel_wake_for_overlay(bool *resume_idle) {
     *resume_idle = false;
-    if (!now_lcd_off && !lcd_idle_off) return;
+    if (!now_lcd_off && !lcd_idle_off && !lcd_usb_off) return;
     *resume_idle = lcd_idle_off && !now_lcd_off;
     lcd_idle_off = 0;
+    lcd_usb_off  = 0;
     lcd_switch(true);
 }
 
@@ -168,6 +177,13 @@ static void lcd_panel_restore_after_overlay(bool resume_idle) {
         lcd_idle_off = 1;
         lcd_switch(false);
     }
+}
+
+static void lcd_panel_apply_hard_off(void) {
+    lcd_gfx_frozen = true;
+    lcd_bl_holdoff = false;
+    lcd_backlight_set(false);
+    lcd_panel_powerdown();
 }
 
 static void lcd_switch(bool on) {
@@ -182,10 +198,7 @@ static void lcd_switch(bool on) {
         lcd_present_black();                                 // black GRAM + BL; then allow compositor
         lcd_gfx_frozen = false;
     } else {
-        lcd_gfx_frozen = true;
-        lcd_bl_holdoff = false;
-        lcd_backlight_set(false);
-        lcd_panel_powerdown();
+        lcd_panel_apply_hard_off();
     }
 }
 
@@ -274,7 +287,8 @@ bool lcd_is_on(void)
 {
     // A modal dialog must run even from a manually powered-off panel, so keep the
     // core1 render loop alive while one is up (it force-wakes the panel).
-    return (app_boot_active() || (now_lcd_off == 0) || dialog_is_active());
+    // Transient idle sleep must match manual off: stop qp_internal_task while asleep.
+    return (app_boot_active() || (!now_lcd_off && !lcd_idle_off && !lcd_usb_off) || dialog_is_active());
 }
 
 // Apply the persisted LCD on/off state (clear GRAM first, gate the panel). Called
@@ -283,7 +297,59 @@ void c1_lcd_apply_persisted(void) {
     qp_rect(display, 0, 0, LCD_HEIGHT, LCD_WIDTH, 0, 0, 0, 1);
     now_lcd_off = user_eeconfig.lcd_off;
     if (user_eeconfig.lcd_off) lcd_switch(false); // apply persisted off state via the shared switch
+    c1_idle_policy_armed = true;
 }
+
+// USB suspend / host sleep / cable unplug: hard-off like idle countdown (BL + panel).
+void lcd_usb_sleep_enter(void) {
+    lcd_backlight_set(false);
+    if (user_eeconfig.lcd_off) return;
+    if (!lcd_usb_off) {
+        lcd_usb_off = true;
+        if (!lcd_idle_off) lcd_panel_apply_hard_off();
+    }
+    lcd_backlight_set(false);
+}
+
+void lcd_usb_sleep_leave(void) {
+    if (!lcd_usb_off) return;
+    lcd_usb_off = false;
+    if (user_eeconfig.lcd_off || lcd_idle_off) {
+        lcd_backlight_set(false);
+        return;
+    }
+    lcd_switch(true);
+}
+
+#ifdef LCD_IDLE_TIMEOUT
+// Drive idle LCD hard-sleep from core0 (authoritative kb_idle_timer, same lcd_switch
+// as LShift+RShift+O). Core1 only skips compositing while lcd_idle_off is set.
+void lcd_idle_poll_core0(void) {
+    if (!c1_idle_policy_armed) return;
+    if (user_eeconfig.lcd_off) return;
+    if (lcd_usb_off) return;
+    if (dialog_is_active()) return;
+    if (menu_is_active()) return;
+
+    uint16_t idle_limit = lcd_sleep_timeout_ticks();
+    if (!idle_limit) return;
+
+    if (lcd_idle_off) {
+        lcd_backlight_set(false);
+        if (kb_idle_timer < idle_limit) {
+            lcd_idle_off = 0;
+            lcd_idle_on_wake();
+            lcd_switch(true);
+        }
+        return;
+    }
+
+    if (timer_read32() >= lcd_idle_wake_grace_until && kb_idle_timer >= idle_limit) {
+        lcd_idle_off = 1;
+        lcd_switch(false);
+    }
+}
+#endif
 
 // -- Virtual screen (calibrated visible window) ------------------------------
 // The panel is 128x128 but a bezel hides some edge pixels. The virtual screen is
@@ -809,7 +875,7 @@ static bool dialog_render_tick(void) {
         if (!on) {                                  // entrance
             on    = true;
             tshow = timer_read32();
-            if (now_lcd_off || lcd_idle_off) lcd_panel_wake_for_overlay(&resume_idle);
+            if (now_lcd_off || lcd_idle_off || lcd_usb_off) lcd_panel_wake_for_overlay(&resume_idle);
         }
         uint32_t el = timer_elapsed32(tshow);
         uint8_t  ta = (el >= LCD_MENU_FADE_MS) ? 255 : (uint8_t)(el * 255u / LCD_MENU_FADE_MS);
@@ -878,7 +944,7 @@ bool app_upload_render_tick(void) {
     if (show) {
         if (!on) {
             on = true;
-            if (now_lcd_off || lcd_idle_off) lcd_panel_wake_for_overlay(&resume_idle);
+            if (now_lcd_off || lcd_idle_off || lcd_usb_off) lcd_panel_wake_for_overlay(&resume_idle);
         }
         app_upload_render();
         return true;
@@ -922,25 +988,7 @@ void display_task_user(void)
     if (!app_boot_active() && user_eeconfig.lcd_off) return;
 
 #ifdef LCD_IDLE_TIMEOUT
-    // Idle auto-sleep: power-gate the panel after inactivity, wake on key press.
-    if (!app_boot_active() && !menu_is_active()) {
-        uint16_t idle_limit = lcd_sleep_timeout_ticks();
-        if (lcd_idle_off) {
-            lcd_gfx_frozen = true;
-            if (!idle_limit || kb_idle_timer < idle_limit) {
-                lcd_idle_off = 0;
-                lcd_idle_on_wake();
-                lcd_switch(true);
-            } else {
-                return;
-            }
-        } else if (idle_limit && timer_read32() >= lcd_idle_wake_grace_until &&
-                   kb_idle_timer >= idle_limit) {
-            lcd_idle_off = 1;
-            lcd_switch(false);
-            return;
-        }
-    }
+    if (lcd_idle_off || lcd_usb_off) return;
 #endif
 
     if (lcd_gfx_compositor_frozen()) return;
@@ -950,17 +998,11 @@ void display_task_user(void)
 
 void suspend_power_down_user_display(void)
 {
-    // LCD Power OFF, via the shared switch (same as the ON/OFF key / idle sleep).
-    if (!now_lcd_off) {
-        now_lcd_off = 1;
-        lcd_switch(false);
-    }
+    // Called repeatedly from the USB suspend loop — must always kill the backlight.
+    lcd_usb_sleep_enter();
 }
 
 void suspend_wakeup_init_user_display(void)
 {
-    if (now_lcd_off && (!user_eeconfig.lcd_off || app_boot_active())) {
-        now_lcd_off = 0;
-        lcd_switch(true); // same switch as the ON/OFF key / idle wake
-    }
+    lcd_usb_sleep_leave();
 }

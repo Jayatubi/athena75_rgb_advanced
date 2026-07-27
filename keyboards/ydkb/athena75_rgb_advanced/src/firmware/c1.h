@@ -8,9 +8,15 @@ void c1_before_flash_operation(void);
 void c1_after_flash_operation(void);
 bool lcd_is_on(void);
 
-// True while the panel is in transient idle hard-sleep (GP17 off). Used by core0
-// to keep RGB suspend aligned with the LCD without racing the idle timer tick.
+// True while the panel is in transient idle or USB hard-sleep (GP17 off). Used by
+// core0 to keep RGB suspend aligned with the LCD.
 bool lcd_idle_panel_asleep(void);
+bool lcd_transient_panel_asleep(void);
+
+// USB suspend / unplug (core0): same hard-off as idle countdown (backlight + panel).
+void lcd_usb_sleep_enter(void);
+void lcd_usb_sleep_leave(void);
+bool c1_lcd_auto_sleep_armed(void);
 
 // Call when idle auto-sleep wakes the panel (core1): resets the shared idle
 // counter and starts a grace window so we do not re-sleep on the next 0.5s tick.
@@ -43,6 +49,12 @@ void     lcd_sleep_timeout_set(uint8_t code);
 uint8_t  lcd_sleep_timeout_load(void);  // read eeprom -> apply runtime, return code
 void     lcd_sleep_timeout_store(uint8_t code); // write eeprom + apply runtime
 uint16_t lcd_sleep_timeout_ticks(void); // kb_idle_timer ticks (500 ms), 0=never
+
+// Shared idle counter (core0 matrix scan, 0.5 s ticks). volatile for core1 reads.
+extern volatile uint16_t kb_idle_timer;
+
+// Idle LCD hard-sleep policy on core0 (same path as LShift+RShift+O / display_power_toggle).
+void lcd_idle_poll_core0(void);
 void next_gif_id(void);
 void next_gif_speed(int8_t dir);
 void next_gif_dir(int8_t step);

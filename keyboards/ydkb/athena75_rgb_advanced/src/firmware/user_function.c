@@ -28,6 +28,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "dialog.h"
 #include "app_upload.h"
 #include "app_input.h"
+#include "usb_device_state.h"
 #include "app_sys.h"
 
 void reboot(bool bootloader)
@@ -206,5 +207,21 @@ void post_process_record_user(uint16_t keycode, keyrecord_t *record)
                 register_code(SOCD_KEY[k_group][k_op_num]);
             }
         }
+    }
+}
+
+void notify_usb_device_state_change_user(struct usb_device_state state) {
+    switch (state.configure_state) {
+        case USB_DEVICE_STATE_SUSPEND:
+            lcd_usb_sleep_enter();
+            break;
+        case USB_DEVICE_STATE_CONFIGURED:
+            lcd_usb_sleep_leave();
+            break;
+        case USB_DEVICE_STATE_INIT:
+            if (c1_lcd_auto_sleep_armed()) lcd_usb_sleep_enter();
+            break;
+        default:
+            break;
     }
 }
