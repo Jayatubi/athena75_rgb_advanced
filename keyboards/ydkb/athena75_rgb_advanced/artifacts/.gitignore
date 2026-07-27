@@ -8,3 +8,6 @@
 # Slot apps (src/app/.gitignore ignores *.app under src/app/<name>/).
 !apps/
 !apps/*.app
+
+# Local-only apps: ACE embeds the keyframe QGF built from private PNGs.
+apps/hidden/

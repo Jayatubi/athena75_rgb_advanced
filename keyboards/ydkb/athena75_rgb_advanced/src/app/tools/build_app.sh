@@ -122,6 +122,8 @@ fi
 "${HOST_TOOL}" "${PACK_ARGS[@]}"
 
 ART_DIR="${KBD_DIR}/artifacts/apps"
+# ACE embeds the keyframe QGF built from private PNGs: keep it out of the repo.
+[[ "${APP}" == "ace" ]] && ART_DIR="${ART_DIR}/hidden"
 mkdir -p "${ART_DIR}"
 cp "${APPS_DIR}/${APP}/${APP}.app" "${ART_DIR}/${APP}.app"
 
