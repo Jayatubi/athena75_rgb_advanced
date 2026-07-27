@@ -12,10 +12,18 @@ DOCKER_IMAGE="ghcr.io/qmk/qmk_cli@sha256:16c4916e95b99bf88d27b15aec8db409ee17265
 
 APPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # .../src/app
 KBD_DIR="$(cd "${APPS_DIR}/../.." && pwd)"                     # keyboard root
+REPO_ROOT="$(git -C "${APPS_DIR}" rev-parse --show-toplevel)"
+REPO_WIN="$(wslpath -w "${REPO_ROOT}" 2>/dev/null | sed 's/\\/\//g' || true)"
 SRC="${APPS_DIR}/${APP}/${APP}_app.c"
 BUILD="${APPS_DIR}/${APP}/build"
 HOST_DIR="${KBD_DIR}/src/host"
-HOST_TOOL="${HOST_DIR}/build/Release/host_tool"
+HOST_TOOL="${HOST_DIR}/build/Release/host_tool.exe"
+if [[ ! -x "${HOST_TOOL}" && -f "${HOST_DIR}/build/Release/host_tool" ]]; then
+    HOST_TOOL="${HOST_DIR}/build/Release/host_tool"
+fi
+if [[ ! -f "${HOST_TOOL}" && -f "${KBD_DIR}/artifacts/host/windows/host_tool.exe" ]]; then
+    HOST_TOOL="${KBD_DIR}/artifacts/host/windows/host_tool.exe"
+fi
 ICON_SRC="${APPS_DIR}/${APP}/icon.png"
 DEFAULT_ICON="${APPS_DIR}/sdk/default_app_icon_32.png"
 ICON_RGB="${BUILD}/${APP}_icon.rgb565"
@@ -74,17 +82,43 @@ echo ">> compiling ${APP} (docker: pinned QMK image)"
 docker run --rm -v "${APPS_DIR}:/apps" -v "${KBD_DIR}:/kbd" \
     -w /apps "${DOCKER_IMAGE}" bash -lc "${DOCKER_CMD}"
 
-if [[ ! -d "${HOST_DIR}/build" ]]; then
-    cmake -S "${HOST_DIR}" -B "${HOST_DIR}/build" >/dev/null
+if [[ ! -f "${HOST_TOOL}" ]]; then
+    if [[ -n "${REPO_WIN}" ]] && command -v cmake.exe >/dev/null 2>&1; then
+        cmake.exe -S "${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/host" \
+            -B "${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/host/build"
+        cmake.exe --build "${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/host/build" --config Release
+        HOST_TOOL="${HOST_DIR}/build/Release/host_tool.exe"
+    else
+        cmake -S "${HOST_DIR}" -B "${HOST_DIR}/build" >/dev/null
+        cmake --build "${HOST_DIR}/build" --config Release >/dev/null
+        HOST_TOOL="${HOST_DIR}/build/Release/host_tool"
+    fi
 fi
-cmake --build "${HOST_DIR}/build" --config Release >/dev/null
 
 echo ">> packaging ${APP}.app (native: host_tool app pack)"
-PACK_ARGS=(app pack "${BUILD}/${APP}.elf" --icon "${ICON_RGB}")
-if [[ -f "${DATA_BLOB}" ]]; then
-    PACK_ARGS+=(--data "${DATA_BLOB}")
+WIN_ELF="${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/app/${APP}/build/${APP}.elf"
+WIN_ICON="${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/app/${APP}/build/${APP}_icon.rgb565"
+WIN_OUT="${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/app/${APP}/${APP}.app"
+PACK_ARGS=(app pack)
+if [[ -n "${REPO_WIN}" ]]; then
+    PACK_ARGS+=("${WIN_ELF}" --icon "${WIN_ICON}")
+else
+    PACK_ARGS+=("${BUILD}/${APP}.elf" --icon "${ICON_RGB}")
 fi
-PACK_ARGS+=(-o "${APPS_DIR}/${APP}/${APP}.app")
+if [[ -f "${DATA_BLOB}" ]]; then
+    if [[ -n "${REPO_WIN}" ]]; then
+        DATA_WIN="${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/app/${APP}/build/data.bin"
+        [[ -f "${DATA_BLOB}" && "${DATA_BLOB}" != "${BUILD}/data.bin" ]] && DATA_WIN="$(wslpath -w "${DATA_BLOB}" | sed 's/\\/\//g')"
+        PACK_ARGS+=(--data "${DATA_WIN}")
+    else
+        PACK_ARGS+=(--data "${DATA_BLOB}")
+    fi
+fi
+if [[ -n "${REPO_WIN}" ]]; then
+    PACK_ARGS+=(-o "${WIN_OUT}")
+else
+    PACK_ARGS+=(-o "${APPS_DIR}/${APP}/${APP}.app")
+fi
 "${HOST_TOOL}" "${PACK_ARGS[@]}"
 
 ART_DIR="${KBD_DIR}/artifacts/apps"
