@@ -271,8 +271,9 @@ typedef struct host_api_t {
     uint32_t (*save_base)(void);                 // XIP addr of this app's save sector (0=none)
     uint32_t (*save_size)(void);                 // bytes in the save sector (4096)
     bool     (*save_read)(uint32_t off, void *dst, uint32_t len);   // free (XIP read)
-    // Legacy low-level write (prefer cfg_save / cfg_flush). Full-sector replace only
-    // (off must be 0). Async — src must stay valid until save_busy() clears.
+    // Full-sector replace only (off must be 0). Async — src must stay valid until
+    // save_busy() clears. Prefer cfg_save (stage; OS compares+writes on app exit)
+    // and cfg_flush (write now if changed; use from menu / explicit commit).
     bool     (*save_write)(uint32_t off, const void *src, uint32_t len);
     bool     (*save_busy)(void);
     void     (*cfg_save)(uint32_t off, const void *src, uint32_t len);

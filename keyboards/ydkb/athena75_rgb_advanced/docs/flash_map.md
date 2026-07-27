@@ -54,8 +54,10 @@
 > 找到首 slot，固件核对名称与 slot_count 后仅擦写代码和 icon；后续数据 slots 以及
 > 首 slot `+0x3F000` 的 4 KiB save sector 均保持不动。
 >
-> MATRIX/ACE 的菜单设置只通过 `host_api.save_read/save_write/save_busy` 访问该
-> save sector；App 不直接调用 flash 擦写接口。
+> Slot apps persist settings in the first slot's 4 KiB save sector via
+> `cfg_save` (stage; firmware flushes on app exit if changed) and `cfg_flush`
+> (write immediately when not `save_busy`). Low-level `save_write` remains for
+> legacy callers. MATRIX/ACE/LIFE/MAZE use the cfg helpers only.
 
 ---
 

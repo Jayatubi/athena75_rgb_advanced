@@ -1,8 +1,8 @@
 // Copyright 2026 jayatubi
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// MAZE — perfect maze on 128×128 (8 or 16 cells per side). Center 32×32 px is
-// impassable (seed overlay). Arrow walks the unique path between random corners.
+// MAZE — 16×16 perfect maze on 128×128 (8 px/cell). Center 32×32 px hub is
+// impassable (4×4 cells; seed overlay). Persistence: speed via cfg_save / cfg_flush.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -17,10 +17,11 @@ void *memset(void *d, int c, unsigned long n) {
 
 static const host_api_t *g_api;
 
-#define GRID_MAX   16u
+#define GRID       16u
+#define CELL_PX    8u
 #define PANEL      128u
-#define CENTER_ABS 32u /* closed hub size in pixels (2×16 or 4×8 cells) */
-#define PATH_MAX   256u
+#define CENTER_ABS 32u /* closed hub: 4×4 cells at 8 px/cell */
+#define PATH_MAX   272u
 
 #define W_N 8u
 #define W_E 4u
@@ -28,25 +29,21 @@ static const host_api_t *g_api;
 #define W_W 1u
 #define W_ALL (W_N | W_E | W_S | W_W)
 
-static uint8_t walls[GRID_MAX][GRID_MAX];
+static uint8_t walls[GRID][GRID];
 static uint8_t maze_seed;
 static uint32_t prng;
 
-/* Compare mode only (not in save sector): 16 px/cell = 8×8 maze, 8 px/cell = 16×16. */
-static uint8_t cell_px;
-static uint8_t grid_n;
-
 typedef union {
     struct {
-        uint8_t stack_x[GRID_MAX * GRID_MAX];
-        uint8_t stack_y[GRID_MAX * GRID_MAX];
+        uint8_t stack_x[GRID * GRID];
+        uint8_t stack_y[GRID * GRID];
     } carve;
     struct {
         uint8_t qx[PATH_MAX];
         uint8_t qy[PATH_MAX];
-        int8_t  parent[GRID_MAX][GRID_MAX];
-        uint8_t from_x[GRID_MAX][GRID_MAX];
-        uint8_t from_y[GRID_MAX][GRID_MAX];
+        int8_t  parent[GRID][GRID];
+        uint8_t from_x[GRID][GRID];
+        uint8_t from_y[GRID][GRID];
     } bfs;
 } maze_algo_ws_t;
 static maze_algo_ws_t algo_ws;
@@ -58,7 +55,7 @@ static uint16_t path_px_total;
 static uint16_t demo_pos;
 
 static uint8_t start_x, start_y, end_x, end_y;
-static bool visited[GRID_MAX][GRID_MAX];
+static bool visited[GRID][GRID];
 
 enum { PHASE_DEMO = 0, PHASE_WIN };
 static uint8_t phase;
@@ -96,18 +93,14 @@ typedef struct {
 #define MAZE_SAVE_VERSION 3u
 static maze_save_t cfg;
 
-static const uint16_t speed_ms[4] = { 6u, 12u, 24u, 40u }; /* ms per pixel step */
-
-static void maze_dims_from_cell(void) {
-    grid_n = (uint8_t)(PANEL / cell_px);
-}
+static const uint16_t speed_ms[4] = { 4u, 8u, 16u, 32u }; /* ms per pixel step (FAST bursts) */
 
 static uint8_t center_cell0(void) {
-    return (uint8_t)((PANEL - CENTER_ABS) / 2u / cell_px);
+    return (uint8_t)((PANEL - CENTER_ABS) / 2u / CELL_PX);
 }
 
 static uint8_t center_cell_span(void) {
-    return (uint8_t)(CENTER_ABS / cell_px);
+    return (uint8_t)(CENTER_ABS / CELL_PX);
 }
 
 static uint32_t crc32(const void *data, uint32_t len) {
@@ -169,7 +162,8 @@ static void cfg_commit(void) {
 
 static void cfg_flush_now(void) {
     cfg_rehash();
-    g_api->cfg_flush(0, &cfg, sizeof cfg);
+    if (g_api->save_busy()) return;
+    (void)g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 static void prng_seed(void) {
@@ -266,7 +260,7 @@ static void maze_carve(void) {
             int8_t  nd = order[k];
             int16_t nx = (int16_t)x + dx[nd];
             int16_t ny = (int16_t)y + dy[nd];
-            if (nx < 0 || ny < 0 || nx >= (int16_t)grid_n || ny >= (int16_t)grid_n) continue;
+            if (nx < 0 || ny < 0 || nx >= (int16_t)GRID || ny >= (int16_t)GRID) continue;
             uint8_t ux = (uint8_t)nx;
             uint8_t uy = (uint8_t)ny;
             if (is_center(ux, uy)) continue;
@@ -286,7 +280,7 @@ static void maze_carve(void) {
 }
 
 static void pick_corners(void) {
-    uint8_t last = (uint8_t)(grid_n - 1u);
+    uint8_t last = (uint8_t)(GRID - 1u);
     uint8_t a    = (uint8_t)prng_mod(4u);
     uint8_t b    = (uint8_t)prng_mod(3u);
     if (b >= a) b++;
@@ -300,9 +294,9 @@ static void pick_corners(void) {
 static bool bfs_path(void) {
     uint8_t *qx = algo_ws.bfs.qx;
     uint8_t *qy = algo_ws.bfs.qy;
-    int8_t (*parent)[GRID_MAX] = algo_ws.bfs.parent;
-    uint8_t (*from_x)[GRID_MAX] = algo_ws.bfs.from_x;
-    uint8_t (*from_y)[GRID_MAX] = algo_ws.bfs.from_y;
+    int8_t (*parent)[GRID] = algo_ws.bfs.parent;
+    uint8_t (*from_x)[GRID] = algo_ws.bfs.from_x;
+    uint8_t (*from_y)[GRID] = algo_ws.bfs.from_y;
     memset(parent, -1, sizeof algo_ws.bfs.parent);
     uint16_t head = 0, tail = 0;
     qx[tail] = start_x;
@@ -321,7 +315,7 @@ static bool bfs_path(void) {
         for (uint8_t d = 0; d < 4u; d++) {
             int16_t nx = (int16_t)cx + dx[d];
             int16_t ny = (int16_t)cy + dy[d];
-            if (nx < 0 || ny < 0 || nx >= (int16_t)grid_n || ny >= (int16_t)grid_n) continue;
+            if (nx < 0 || ny < 0 || nx >= (int16_t)GRID || ny >= (int16_t)GRID) continue;
             uint8_t ux = (uint8_t)nx;
             uint8_t uy = (uint8_t)ny;
             if (is_center(ux, uy)) continue;
@@ -369,22 +363,22 @@ static void path_compute_px_total(void) {
         path_px_total = 0u;
         return;
     }
-    path_px_total = (uint16_t)((path_len - 1u) * (uint16_t)cell_px);
+    path_px_total = (uint16_t)((path_len - 1u) * (uint16_t)CELL_PX);
 }
 
 static void path_at_dist(uint16_t dist, int16_t *ox, int16_t *oy, int8_t *odx, int8_t *ody) {
-    int16_t x = (int16_t)(path_x[0] * cell_px + cell_px / 2);
-    int16_t y = (int16_t)(path_y[0] * cell_px + cell_px / 2);
+    int16_t x = (int16_t)(path_x[0] * CELL_PX + CELL_PX / 2);
+    int16_t y = (int16_t)(path_y[0] * CELL_PX + CELL_PX / 2);
     uint16_t rem = dist;
     if (odx) *odx = 0;
     if (ody) *ody = 0;
 
     for (uint16_t i = 0; i + 1u < path_len; i++) {
-        int16_t tx = (int16_t)(path_x[i + 1u] * cell_px + cell_px / 2);
-        int16_t ty = (int16_t)(path_y[i + 1u] * cell_px + cell_px / 2);
+        int16_t tx = (int16_t)(path_x[i + 1u] * CELL_PX + CELL_PX / 2);
+        int16_t ty = (int16_t)(path_y[i + 1u] * CELL_PX + CELL_PX / 2);
         int8_t  sx = (tx > x) ? 1 : (tx < x) ? -1 : 0;
         int8_t  sy = (ty > y) ? 1 : (ty < y) ? -1 : 0;
-        for (uint8_t p = 0; p < cell_px; p++) {
+        for (uint8_t p = 0; p < CELL_PX; p++) {
             if (rem == 0u) {
                 if (ox) *ox = x;
                 if (oy) *oy = y;
@@ -401,25 +395,51 @@ static void path_at_dist(uint16_t dist, int16_t *ox, int16_t *oy, int8_t *odx, i
     if (oy) *oy = y;
 }
 
+#define WALL_COL 0xFFFFu
+
+/* Trail is 2 px wide, always occupying rows y-1..y (horizontal) or cols x-1..x
+ * (vertical), so a 2x2 block at a turn point joins both runs exactly. */
+static void trail_stamp(uint8_t *fb, int16_t x, int16_t y, int8_t dx, int8_t dy) {
+    if (dx != 0) {
+        g_api->fill_rect(fb, x, (int16_t)(y - 1), 1, 2, TRAIL_COL);
+    } else if (dy != 0) {
+        g_api->fill_rect(fb, (int16_t)(x - 1), y, 2, 1, TRAIL_COL);
+    } else {
+        g_api->fill_rect(fb, (int16_t)(x - 1), (int16_t)(y - 1), 2, 2, TRAIL_COL);
+    }
+}
+
+static void trail_joint(uint8_t *fb, int16_t x, int16_t y) {
+    g_api->fill_rect(fb, (int16_t)(x - 1), (int16_t)(y - 1), 2, 2, TRAIL_COL);
+}
+
 static void draw_trail_pixels(uint8_t *fb, uint16_t dist) {
     if (!dist) return;
-    int16_t x = (int16_t)(path_x[0] * cell_px + cell_px / 2);
-    int16_t y = (int16_t)(path_y[0] * cell_px + cell_px / 2);
+    int16_t x = (int16_t)(path_x[0] * CELL_PX + CELL_PX / 2);
+    int16_t y = (int16_t)(path_y[0] * CELL_PX + CELL_PX / 2);
     uint16_t rem = dist;
+    int8_t   pdx = 0;
+    int8_t   pdy = 0;
 
     for (uint16_t i = 0; i + 1u < path_len; i++) {
-        int16_t tx = (int16_t)(path_x[i + 1u] * cell_px + cell_px / 2);
-        int16_t ty = (int16_t)(path_y[i + 1u] * cell_px + cell_px / 2);
+        int16_t tx = (int16_t)(path_x[i + 1u] * CELL_PX + CELL_PX / 2);
+        int16_t ty = (int16_t)(path_y[i + 1u] * CELL_PX + CELL_PX / 2);
         int8_t  sx = (tx > x) ? 1 : (tx < x) ? -1 : 0;
         int8_t  sy = (ty > y) ? 1 : (ty < y) ? -1 : 0;
-        for (uint8_t p = 0; p < cell_px; p++) {
+        if (sx != pdx || sy != pdy) {
+            if ((pdx || pdy) && rem) trail_joint(fb, x, y);
+            pdx = sx;
+            pdy = sy;
+        }
+        for (uint8_t p = 0; p < CELL_PX; p++) {
             if (rem == 0u) return;
-            g_api->fill_rect(fb, x, y, 1, 1, TRAIL_COL);
+            trail_stamp(fb, x, y, sx, sy);
             rem--;
             x += sx;
             y += sy;
         }
     }
+    trail_joint(fb, x, y);
 }
 
 static void maze_generate(void) {
@@ -491,19 +511,6 @@ static void hud_show_speed(void) {
     for (unsigned i = 0; sl[i] && k + 1u < sizeof buf; i++) buf[k++] = sl[i];
     buf[k] = 0;
     hud_show(buf);
-}
-
-static void hud_show_cell(void) {
-    hud_show(cell_px == 8u ? "CELL 8" : "CELL 16");
-}
-
-static void cell_px_set(uint8_t px) {
-    if (px != 8u && px != 16u) return;
-    if (cell_px == px) return;
-    cell_px = px;
-    maze_dims_from_cell();
-    hud_show_cell();
-    maze_generate();
 }
 
 static void speed_nudge(int8_t delta) {
@@ -595,6 +602,57 @@ static void draw_arrow_px(uint8_t *fb, int16_t px, int16_t py, int8_t dx, int8_t
     }
 }
 
+/* A shared border is a 2 px band (1 px from each neighbour). Where a horizontal
+ * band crosses a vertical one the 2x2 intersection needs filling, same as the
+ * trail joints. Border yi occupies rows yi*CELL-1 (S side) and yi*CELL (N side);
+ * border xi occupies cols xi*CELL-1 and xi*CELL. Outer borders are 1 px. */
+static bool hband_at(uint8_t yi, uint8_t cx) {
+    if (cx >= GRID) return false;
+    if (yi < GRID && (walls[yi][cx] & W_N)) return true;
+    if (yi > 0u && (walls[yi - 1u][cx] & W_S)) return true;
+    return false;
+}
+
+static bool vband_at(uint8_t xi, uint8_t cy) {
+    if (cy >= GRID) return false;
+    if (xi < GRID && (walls[cy][xi] & W_W)) return true;
+    if (xi > 0u && (walls[cy][xi - 1u] & W_E)) return true;
+    return false;
+}
+
+static void draw_wall_joints(uint8_t *fb) {
+    for (uint8_t yi = 0; yi <= GRID; yi++) {
+        for (uint8_t xi = 0; xi <= GRID; xi++) {
+            bool h = (xi > 0u && hband_at(yi, (uint8_t)(xi - 1u))) || hband_at(yi, xi);
+            bool v = (yi > 0u && vband_at(xi, (uint8_t)(yi - 1u))) || vband_at(xi, yi);
+            if (!h || !v) continue;
+
+            int16_t bx, by, bw, bh;
+            if (xi == 0u) {
+                bx = 0;
+                bw = 1;
+            } else if (xi == GRID) {
+                bx = (int16_t)(GRID * CELL_PX - 1);
+                bw = 1;
+            } else {
+                bx = (int16_t)(xi * CELL_PX - 1);
+                bw = 2;
+            }
+            if (yi == 0u) {
+                by = 0;
+                bh = 1;
+            } else if (yi == GRID) {
+                by = (int16_t)(GRID * CELL_PX - 1);
+                bh = 1;
+            } else {
+                by = (int16_t)(yi * CELL_PX - 1);
+                bh = 2;
+            }
+            g_api->fill_rect(fb, bx, by, bw, bh, WALL_COL);
+        }
+    }
+}
+
 static void maze_draw(void) {
     uint8_t *fb = g_api->fb;
     int16_t  vw = view_w();
@@ -603,24 +661,25 @@ static void maze_draw(void) {
     g_api->clip_set(0, 0, vw, vh);
     g_api->clear(fb, 0x0000);
 
-    for (uint8_t y = 0; y < grid_n; y++) {
-        for (uint8_t x = 0; x < grid_n; x++) {
-            int16_t px = (int16_t)(x * cell_px);
-            int16_t py = (int16_t)(y * cell_px);
+    for (uint8_t y = 0; y < GRID; y++) {
+        for (uint8_t x = 0; x < GRID; x++) {
+            int16_t px = (int16_t)(x * CELL_PX);
+            int16_t py = (int16_t)(y * CELL_PX);
             uint16_t floor = is_center(x, y) ? 0x1084u : 0x0841u;
-            g_api->fill_rect(fb, px, py, (int16_t)cell_px, (int16_t)cell_px, floor);
+            g_api->fill_rect(fb, px, py, (int16_t)CELL_PX, (int16_t)CELL_PX, floor);
             uint8_t w = walls[y][x];
-            if (w & W_N) g_api->hline(fb, px, py, (int16_t)cell_px, 0xFFFFu);
-            if (w & W_W) g_api->vline(fb, px, py, (int16_t)cell_px, 0xFFFFu);
-            if (w & W_E) g_api->vline(fb, (int16_t)(px + cell_px - 1), py, (int16_t)cell_px, 0xFFFFu);
-            if (w & W_S) g_api->hline(fb, px, (int16_t)(py + cell_px - 1), (int16_t)cell_px, 0xFFFFu);
+            if (w & W_N) g_api->hline(fb, px, py, (int16_t)CELL_PX, WALL_COL);
+            if (w & W_W) g_api->vline(fb, px, py, (int16_t)CELL_PX, WALL_COL);
+            if (w & W_E) g_api->vline(fb, (int16_t)(px + CELL_PX - 1), py, (int16_t)CELL_PX, WALL_COL);
+            if (w & W_S) g_api->hline(fb, px, (int16_t)(py + CELL_PX - 1), (int16_t)CELL_PX, WALL_COL);
         }
     }
+    draw_wall_joints(fb);
 
-    g_api->ring(fb, (int16_t)(start_x * cell_px + cell_px / 2),
-            (int16_t)(start_y * cell_px + cell_px / 2), 4, true, 0x07E0u);
-    g_api->ring(fb, (int16_t)(end_x * cell_px + cell_px / 2),
-            (int16_t)(end_y * cell_px + cell_px / 2), 4, true, END_COL);
+    g_api->ring(fb, (int16_t)(start_x * CELL_PX + CELL_PX / 2),
+            (int16_t)(start_y * CELL_PX + CELL_PX / 2), 4, true, 0x07E0u);
+    g_api->ring(fb, (int16_t)(end_x * CELL_PX + CELL_PX / 2),
+            (int16_t)(end_y * CELL_PX + CELL_PX / 2), 4, true, END_COL);
 
     if (phase == PHASE_DEMO || phase == PHASE_WIN) {
         uint16_t trail = demo_pos;
@@ -635,7 +694,7 @@ static void maze_draw(void) {
         }
     }
 
-    draw_seed(fb);
+    if (phase != PHASE_WIN) draw_seed(fb);
 
     if (hud_active && g_api->now_ms() < hud_until) {
         text_outlined(fb, 2, 1, hud_text, 0xFFFFu);
@@ -661,12 +720,6 @@ static void maze_key_action(uint16_t keycode) {
         leave_pending = true;
     } else if (keycode == APP_KEY_ENTER) {
         g_api->menu_run(&menu_model);
-    } else if (keycode == APP_KEY_MINUS) {
-        cell_px_set(8u);
-        maze_draw();
-    } else if (keycode == APP_KEY_EQUAL) {
-        cell_px_set(16u);
-        maze_draw();
     } else if (keycode == APP_KEY_LEFT) {
         maze_seed_bump(-1);
         hud_show_seed();
@@ -716,6 +769,7 @@ static uint8_t menu_get(uint8_t group) {
 static void menu_set(uint8_t group, uint8_t value) {
     if (group == G_SPEED && value < 4u) {
         cfg.speed = value;
+        cfg_commit();
         cfg_flush_now();
         hud_show_speed();
     }
@@ -731,8 +785,6 @@ static const app_menu_model_t menu_model = {
 static void maze_enter(void) {
     leave_pending = false;
     hud_active    = false;
-    cell_px       = 16u;
-    maze_dims_from_cell();
     cfg_load();
     maze_seed = (uint8_t)(g_api->rng() & 0xFFu);
     maze_generate();
@@ -759,13 +811,20 @@ static void maze_tick(uint32_t dt_ms) {
             maze_draw();
             return;
         }
-        if ((uint32_t)(now - phase_t) >= step_ms) {
+        if (demo_pos < path_px_total && (uint32_t)(now - phase_t) >= step_ms) {
+            uint16_t advance = 1u;
+            if (cfg.speed == 0u && step_ms > 0u) {
+                advance = (uint16_t)((now - phase_t) / step_ms);
+                if (advance < 1u) advance = 1u;
+                if (advance > 24u) advance = 24u;
+            }
             phase_t = now;
-            if (demo_pos < path_px_total) {
+            while (advance-- > 0u && demo_pos < path_px_total) {
                 demo_pos++;
                 if (demo_pos >= path_px_total) {
                     phase   = PHASE_WIN;
                     phase_t = now;
+                    break;
                 }
             }
             maze_draw();
