@@ -53,23 +53,26 @@ resolve() {
   done < <(${GIT} diff --name-only --diff-filter=U)
 }
 
-while IFS= read -r h || [[ -n "${h:-}" ]]; do
-  [[ -z "${h:-}" ]] && continue
+set +e
+for h in $(${GIT} rev-list --reverse "${FORK}".."${TIP_SHA}"); do
+  h="${h//$'\r'/}"
+  [[ -z "${h}" ]] && continue
   [[ "${h}" == "${FORK}" ]] && continue
   echo ">> $(${GIT} log -1 --oneline ${h})"
   if ! ${GIT} cherry-pick -n "${h}"; then
     resolve
-    if [[ -n "$(${GIT} diff --name-only --diff-filter=U)" ]]; then
+    if [[ -n "$(${GIT} diff --name-only --diff-filter=U 2>/dev/null)" ]]; then
       echo "error: conflict at ${h}" >&2
       exit 1
     fi
   fi
-  if ${GIT} diff --cached --quiet && ${GIT} diff --quiet; then
+  if ${GIT} diff --cached --quiet 2>/dev/null && ${GIT} diff --quiet 2>/dev/null; then
     ${GIT} commit --allow-empty -C "${h}"
   else
     ${GIT} commit -C "${h}"
   fi
-done < <(${GIT} rev-list --reverse "${FORK}".."${TIP_SHA}")
+done
+set -e
 
 echo ">> done: $(${GIT} rev-list --count ${UPSTREAM}..HEAD) commits above ${UPSTREAM}"
 ${GIT} log --oneline -5
