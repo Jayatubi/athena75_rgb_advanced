@@ -23,6 +23,8 @@ typedef struct app_scan_entry {
     uint8_t  slot_count;  // contiguous 256 KiB slots reserved by this app
 } app_scan_entry_t;
 
+bool app_header_abi_ok(uint16_t abi_ver);
+
 // Re-scan the whole app area, rebuilding the table. Cheap (reads only); safe to
 // call from either core when no flash write is in flight.
 void app_scan(void);

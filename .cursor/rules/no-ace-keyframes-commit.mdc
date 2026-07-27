@@ -1,0 +1,12 @@
+---
+description: Never git-add or commit ACE keyframes PNG tree
+globs:
+  - keyboards/ydkb/athena75_rgb_advanced/src/app/ace/keyframes/**
+alwaysApply: true
+---
+
+# Do not commit `ace/keyframes/`
+
+- **`keyboards/ydkb/athena75_rgb_advanced/src/app/ace/keyframes/`** holds local `Icon_*.png` inputs for ACE. **Never** `git add`, commit, or push this directory or any file under it (including bulk `git add -A` without excluding it).
+- **`keyboards/ydkb/athena75_rgb_advanced/artifacts/apps/ace.app`** embeds the built QGF (~3MB) derived from those PNGs. **Do not commit** — same sensitivity as the PNG tree; build locally with `build_app.sh ace`.
+- Docs only: `src/README.md`, `readme.md`, `src/app/ace/keyframes/README.md` (local readme is gitignored with the folder).

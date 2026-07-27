@@ -38,6 +38,11 @@ static uint32_t image_crc(const uint8_t *base, uint32_t image_size) {
     return crc ^ 0xFFFFFFFFu;
 }
 
+bool app_header_abi_ok(uint16_t abi_ver) {
+    if (abi_ver == ATHENA_APP_ABI_VERSION) return true;
+    return ATHENA_APP_ABI_VERSION == 3u && abi_ver == 4u;
+}
+
 void app_scan(void) {
     s_count = 0;
     for (uint32_t b = APP_AREA_BEGIN; b + sizeof(app_header_t) <= APP_AREA_END;
@@ -46,7 +51,7 @@ void app_scan(void) {
 
         // Cheap rejects first (magic / ABI / header size / plausible span).
         if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0) continue;
-        if (h->abi_ver != ATHENA_APP_ABI_VERSION) continue;
+        if (!app_header_abi_ok(h->abi_ver)) continue;
         if (h->hdr_size != sizeof(app_header_t)) continue;
         uint32_t img = h->image_size;
         if (img < sizeof(app_header_t)) continue;

@@ -182,7 +182,7 @@ static bool loader_load(uint32_t base) {
 
     const app_header_t *h = (const app_header_t *)(uintptr_t)base;
     if (memcmp(h->magic, ATHENA_APP_MAGIC, 6) != 0) return false;
-    if (h->abi_ver != ATHENA_APP_ABI_VERSION)       return false;
+    if (!app_header_abi_ok(h->abi_ver))                   return false;
     if (h->hdr_size != sizeof(app_header_t))        return false;
 
     // Bounds-check the RAM footprint against the reserved window BEFORE writing.
