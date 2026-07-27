@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Replay athena75_rgb_advanced history onto openkbd/ava (57 commits from board split).
+# Requires tag backup/pre-rebase-feat/rle-mcu-tween pointing at pre-rewrite tip.
 set -euo pipefail
 REPO_ROOT=/mnt/f/work/vial-qmk-v6
 cd "${REPO_ROOT}"
@@ -16,6 +17,10 @@ ${GIT} branch -f ava openkbd/ava
 echo ">> seed commit (fork advanced board)"
 ${GIT} checkout "${FIRST}" -- keyboards/ydkb/athena75_rgb_advanced
 ${GIT} checkout openkbd/ava -- keyboards/ydkb/athena75_rgb
+${GIT} rm -rf --ignore-unmatch keyboards/ydkb/athena75_rgb_advanced/tools/.patch-queue \
+  keyboards/ydkb/athena75_rgb_advanced/tools/_count_patches.sh \
+  keyboards/ydkb/athena75_rgb_advanced/tools/rebase_onto_openkbd.sh \
+  keyboards/ydkb/athena75_rgb_advanced/tools/host 2>/dev/null || true
 if ${GIT} show "${FIRST}:.vscode/settings.json" >/dev/null 2>&1; then
   ${GIT} checkout "${FIRST}" -- .vscode/settings.json
 fi
@@ -24,23 +29,21 @@ ${GIT} add keyboards/ydkb/athena75_rgb_advanced .vscode/settings.json 2>/dev/nul
 ${GIT} commit -C "${FIRST}"
 
 resolve() {
-  ${GIT} checkout "${BACKUP}" -- keyboards/ydkb/athena75_rgb_advanced 2>/dev/null || true
-  ${GIT} checkout openkbd/ava -- keyboards/ydkb/athena75_rgb 2>/dev/null || true
   local f
   while IFS= read -r f; do
     [[ -z "${f}" ]] && continue
     case "${f}" in
       keyboards/ydkb/athena75_rgb/*) ${GIT} checkout openkbd/ava -- "${f}" 2>/dev/null || true ;;
-      keyboards/ydkb/athena75_rgb_advanced/*|.cursor/*)
-        ${GIT} checkout "${BACKUP}" -- "${f}" 2>/dev/null || true ;;
       *) ${GIT} checkout --theirs -- "${f}" 2>/dev/null || true ;;
     esac
     ${GIT} add -- "${f}" 2>/dev/null || true
   done < <(${GIT} diff --name-only --diff-filter=U)
 }
 
-while IFS= read -r h; do
-  [[ "${h}" == "${FIRST}" ]] && continue
+while IFS= read -r h <&3; do
+  if [[ "${h}" == "${FIRST}" ]]; then
+    continue
+  fi
   echo ">> ${h} $(${GIT} log -1 --oneline ${h})"
   if ! ${GIT} cherry-pick -n "${h}"; then
     resolve
@@ -54,7 +57,7 @@ while IFS= read -r h; do
   else
     ${GIT} commit -C "${h}"
   fi
-done < <(${GIT} rev-list --reverse "${SPLIT_PARENT}".."${BACKUP}")
+done 3< <(${GIT} rev-list --reverse "${SPLIT_PARENT}".."${BACKUP}")
 
 echo ">> done"
 ${GIT} rev-list --left-right --count openkbd/ava...HEAD
