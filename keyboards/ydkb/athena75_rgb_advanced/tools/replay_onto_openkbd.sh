@@ -43,8 +43,8 @@ ${GIT} commit -C "${FORK}"
 
 resolve() {
   local f
-  while IFS= read -r f; do
-    [[ -z "${f}" ]] && continue
+  while IFS= read -r f || [[ -n "${f:-}" ]]; do
+    [[ -z "${f:-}" ]] && continue
     case "${f}" in
       keyboards/ydkb/athena75_rgb/*) ${GIT} checkout "${UPSTREAM}" -- "${f}" 2>/dev/null || true ;;
       *) ${GIT} checkout --theirs -- "${f}" 2>/dev/null || true ;;
@@ -53,7 +53,8 @@ resolve() {
   done < <(${GIT} diff --name-only --diff-filter=U)
 }
 
-while IFS= read -r h; do
+while IFS= read -r h || [[ -n "${h:-}" ]]; do
+  [[ -z "${h:-}" ]] && continue
   [[ "${h}" == "${FORK}" ]] && continue
   echo ">> $(${GIT} log -1 --oneline ${h})"
   if ! ${GIT} cherry-pick -n "${h}"; then
