@@ -180,6 +180,23 @@ static uint32_t prng_mod(uint32_t n) {
     return prng_next() % n;
 }
 
+/* Endpoints come from the wall clock instead of maze_seed, so the same seed
+ * shows up with different start/end corners. Kept apart from prng so the seed
+ * still decides the carve. */
+static uint32_t clock_prng;
+
+static uint32_t clock_mod(uint32_t n) {
+    if (!n) return 0;
+    clock_prng += g_api->now_ms() + 0x9E3779B9u;
+    uint32_t z = clock_prng;
+    z ^= z >> 16;
+    z *= 0x7FEB352Du;
+    z ^= z >> 15;
+    z *= 0x846CA68Bu;
+    z ^= z >> 16;
+    return z % n;
+}
+
 static bool is_center(uint8_t x, uint8_t y) {
     uint8_t c0 = center_cell0();
     uint8_t cs = center_cell_span();
@@ -281,8 +298,8 @@ static void maze_carve(void) {
 
 static void pick_corners(void) {
     uint8_t last = (uint8_t)(GRID - 1u);
-    uint8_t a    = (uint8_t)prng_mod(4u);
-    uint8_t b    = (uint8_t)prng_mod(3u);
+    uint8_t a    = (uint8_t)clock_mod(4u);
+    uint8_t b    = (uint8_t)clock_mod(3u);
     if (b >= a) b++;
     static const uint8_t corner_idx[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
     start_x = (uint8_t)(corner_idx[a][0] ? last : 0u);
