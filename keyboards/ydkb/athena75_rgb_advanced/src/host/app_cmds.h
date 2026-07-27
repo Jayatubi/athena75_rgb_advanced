@@ -5,6 +5,7 @@
 #include "hid.h"
 
 int cmd_diag(int argc, char **argv);
+int cmd_fw(int argc, char **argv);
 
 // Vial/VIA config (logical EEPROM) backup & restore over raw-HID.
 int cmd_eeprom_backup(int argc, char **argv);

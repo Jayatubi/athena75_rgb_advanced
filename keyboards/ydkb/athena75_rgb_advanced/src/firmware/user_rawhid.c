@@ -99,6 +99,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "probe_flash.h"
 #include "app_upload.h"
 #include "app_input.h"
+#include "fw_info.h"
+#include "config.h"
 
 static inline uint32_t rawhid_be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
@@ -143,6 +145,16 @@ static void ath_handle_diag(uint8_t *data) {
     }
     data[12] = (uint8_t)(WEAR_LEVELING_LOGICAL_SIZE >> 8);
     data[13] = (uint8_t)(WEAR_LEVELING_LOGICAL_SIZE);
+
+    app_fw_info_t fw;
+    fw_info_get(&fw);
+    data[15] = (uint8_t)(fw.build_num >> 24);
+    data[16] = (uint8_t)(fw.build_num >> 16);
+    data[17] = (uint8_t)(fw.build_num >> 8);
+    data[18] = (uint8_t)(fw.build_num);
+    data[19] = (uint8_t)(fw.app_abi);
+    data[20] = (uint8_t)(fw.host_api_abi);
+    data[21] = 1; // diag reply includes firmware fields (bytes 15..20)
 }
 
 #ifndef WEAR_LEVELING_LOGICAL_SIZE

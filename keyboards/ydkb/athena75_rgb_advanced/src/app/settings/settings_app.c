@@ -12,7 +12,7 @@
 //   APP        -> INSTALLED (firmware list) / STORAGE (this app’s usage screen)
 //   LCD TEST   -> firmware panel-alignment screen
 //   REBOOT     -> NORMAL / BOOTSEL
-//   EXIT
+//   SYSTEM     -> firmware build + ABI (full-screen info)
 //
 // Selection state and edits round-trip through host_api (rgb_get/set, caps/scope,
 // reboot). Freestanding: it links no firmware symbols, only the host_api table.
@@ -24,8 +24,9 @@
 static const host_api_t *g;
 static bool             menu_opened;
 static bool             storage_after_menu;
+static bool             system_after_menu;
 
-enum { PH_MENU = 0, PH_STORAGE, PH_SLOT_DETAIL, PH_APP_DETAIL, PH_ERASE_CONFIRM, PH_ERASING, PH_LEAVE };
+enum { PH_MENU = 0, PH_STORAGE, PH_SYSTEM, PH_SLOT_DETAIL, PH_APP_DETAIL, PH_ERASE_CONFIRM, PH_ERASING, PH_LEAVE };
 
 static uint8_t phase;
 static uint8_t storage_sel;
@@ -36,6 +37,7 @@ static app_slot_info_t  erase_info;
 #define APP_HEADER_SECTOR 0x1000u
 
 #define ACT_STORAGE APP_MENU_ACT_USER
+#define ACT_SYSTEM  (APP_MENU_ACT_USER + 1u)
 
 // ---- app-defined ids --------------------------------------------------------
 enum { G_RGB_ON = 1, G_RGB_MODE, G_RGB_VAL, G_RGB_HUE, G_RGB_SAT, G_RGB_SPD, G_CAPS, G_SLEEP };
@@ -63,6 +65,15 @@ static uint8_t level_to_hue(uint8_t l, uint8_t levels) {
 
 static void u16_str(uint16_t n, char *b) {
     char t[6];
+    int  i = 0;
+    if (!n) t[i++] = '0';
+    while (n) { t[i++] = (char)('0' + n % 10u); n /= 10u; }
+    int k = 0;
+    while (i) b[k++] = t[--i];
+    b[k] = 0;
+}
+static void u32_str(uint32_t n, char *b) {
+    char t[11];
     int  i = 0;
     if (!n) t[i++] = '0';
     while (n) { t[i++] = (char)('0' + n % 10u); n /= 10u; }
@@ -289,6 +300,67 @@ static void storage_render(void) {
     }
 
     g->present(fb);
+}
+
+static void system_render(void) {
+    app_fw_info_t fw;
+    g->fw_info(&fw);
+
+    uint8_t *fb   = g->fb;
+    const int16_t w = vwin_w();
+    const int16_t h = vwin_h();
+    const int16_t lh = g->line_height();
+
+    draw_host_window(&UI_WINDOW_STYLE_SETTINGS, "SYSTEM");
+
+    ui_window_layout_t lay;
+    ui_window_layout_fill(w, h, &lay);
+    const int16_t margin = (int16_t)(lay.content_x + 2);
+    int16_t y            = lay.content_y;
+
+    char line[32];
+    g->text(fb, margin, y, fw.board[0] ? fw.board : "Athena75 RGB", 0xFFFF, 0x0000);
+    y = (int16_t)(y + lh + 2);
+
+    line[0] = 'b';
+    line[1] = 0;
+    {
+        char num[12];
+        u32_str(fw.build_num, num);
+        str_cat(line, num);
+    }
+    g->text(fb, margin, y, "BUILD", 0xBDF7, 0x0000);
+    g->text(fb, (int16_t)(margin + 52), y, line, 0xFFFF, 0x0000);
+    y = (int16_t)(y + lh);
+
+    line[0] = 0;
+    u16_str(fw.app_abi, line);
+    g->text(fb, margin, y, "APP ABI", 0xBDF7, 0x0000);
+    g->text(fb, (int16_t)(margin + 52), y, line, 0xFFFF, 0x0000);
+    y = (int16_t)(y + lh);
+
+    line[0] = 0;
+    u16_str(fw.host_api_abi, line);
+    g->text(fb, margin, y, "API ABI", 0xBDF7, 0x0000);
+    g->text(fb, (int16_t)(margin + 52), y, line, 0xFFFF, 0x0000);
+    y = (int16_t)(y + lh + 2);
+
+    if ((int16_t)(y + lh) <= h) {
+        g->text(fb, margin, y, "ESC / ENTER  BACK", 0x7BEF, 0x0000);
+    }
+
+    g->present(fb);
+}
+
+static void system_input(void) {
+    app_key_event_t ev;
+    while (g->poll_event(&ev)) {
+        if (!ev.pressed) continue;
+        if (ev.keycode == APP_KEY_ESC || ev.keycode == APP_KEY_ENTER) {
+            phase = PH_MENU;
+            g->menu_resume();
+        }
+    }
 }
 
 static void storage_move_sel(int8_t dc, int8_t dr) {
@@ -596,7 +668,7 @@ static const app_menu_item_t root_items[] = {
     { "APP",      APP_MI_FOLDER, 0, 0, 0, N_APP },
     { "LCD TEST", APP_MI_FOLDER, 0, 0, 0, APP_MENU_CHILD_LCDTEST },
     { "REBOOT",   APP_MI_FOLDER, 0, 0, 0, N_REBOOT },
-    { "EXIT",     APP_MI_ACTION, 0, 0, APP_MENU_ACT_EXIT, 0 },
+    { "SYSTEM",   APP_MI_ACTION, 0, 0, ACT_SYSTEM, 0 },
 };
 static const app_menu_item_t app_hub_items[] = {
     { "INSTALLED", APP_MI_FOLDER, 0, 0, 0, APP_MENU_CHILD_APP },
@@ -698,11 +770,18 @@ static void group_set(uint8_t gid, uint8_t v) {
 }
 
 static void menu_action(uint8_t act) {
-    if (act != ACT_STORAGE) return;
-    g->app_area_rescan();
-    g->set_input_mode(APP_INPUT_OS);
-    storage_after_menu = true;
-    g->menu_suspend();
+    if (act == ACT_STORAGE) {
+        g->app_area_rescan();
+        g->set_input_mode(APP_INPUT_OS);
+        storage_after_menu = true;
+        g->menu_suspend();
+        return;
+    }
+    if (act == ACT_SYSTEM) {
+        g->set_input_mode(APP_INPUT_OS);
+        system_after_menu = true;
+        g->menu_suspend();
+    }
 }
 
 static const app_menu_model_t model = {
@@ -718,6 +797,7 @@ static const app_menu_model_t model = {
 static void settings_enter(void) {
     menu_opened         = false;
     storage_after_menu  = false;
+    system_after_menu   = false;
     phase               = PH_MENU;
 }
 
@@ -736,6 +816,11 @@ static void settings_tick(uint32_t dt_ms) {
             phase              = PH_STORAGE;
             return;
         }
+        if (system_after_menu) {
+            system_after_menu = false;
+            phase             = PH_SYSTEM;
+            return;
+        }
         if (g->menu_active()) return;
         phase = PH_LEAVE;
         return;
@@ -744,6 +829,11 @@ static void settings_tick(uint32_t dt_ms) {
     if (phase == PH_STORAGE) {
         storage_render();
         storage_input();
+        return;
+    }
+    if (phase == PH_SYSTEM) {
+        system_render();
+        system_input();
         return;
     }
     if (phase == PH_SLOT_DETAIL) {
@@ -781,7 +871,8 @@ const app_desc_t *app_init(const host_api_t *api) {
     if (!api || api->abi_version != ATHENA_APP_ABI_VERSION) return 0;
     if (!api->slot_states || !api->app_area_rescan || !api->menu_close ||
         !api->menu_suspend || !api->menu_resume || !api->slot_query ||
-        !api->app_icon_read || !api->app_area_erase || !api->app_area_erase_busy)
+        !api->app_icon_read || !api->app_area_erase || !api->app_area_erase_busy ||
+        !api->fw_info)
         return 0;
     g = api;
     return &settings_desc;

@@ -27,6 +27,7 @@
 #include "app_scan.h"
 #include "app_upload.h"         // APP_SLOT_SIZE / APP_SLOT_SAVE_SIZE
 #include "sdk/host_api.h"  // host_api_t, app_desc_t, app_header_t, magic/abi
+#include "fw_info.h"
 
 // Reserved app RAM window — KEEP IN SYNC WITH apps/sdk/app.ld (RAM ORIGIN/LENGTH),
 // ld/RP2040_FLASH_TIMECRIT_16M.ld (ram0 shrunk to make room) and the host's
@@ -76,6 +77,7 @@ static bool loader_app_area_erase(uint32_t base, uint8_t slot_count) {
 }
 static bool loader_app_area_erase_busy(void) { return app_sys_app_delete_busy(); }
 static uint32_t loader_app_base(void) { return g_loaded_base; }
+static void loader_fw_info(app_fw_info_t *out) { fw_info_get(out); }
 
 // The firmware services handed to every app. All are core1-safe. Static const:
 // it lives in flash and just holds function addresses + the shared fb pointer.
@@ -147,6 +149,7 @@ static const host_api_t g_api = {
     .menu_close        = menu_exit,
     .menu_suspend      = menu_suspend,
     .menu_resume       = menu_request_resume,
+    .fw_info           = loader_fw_info,
 };
 
 static const app_desc_t *g_desc        = NULL; // loaded app's descriptor (NULL = none/failed)

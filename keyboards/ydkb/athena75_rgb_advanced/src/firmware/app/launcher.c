@@ -64,12 +64,32 @@ static void launcher_input(uint8_t n) {
         switch (ev.keycode) {
             case KC_RIGHT: lau_sel = (uint8_t)((lau_sel + 1) % n); break;
             case KC_LEFT:  lau_sel = (uint8_t)((lau_sel + n - 1) % n); break;
-            case KC_DOWN:
-                if (lau_sel + LAU_COLS < n) lau_sel = (uint8_t)(lau_sel + LAU_COLS);
+            case KC_DOWN: {
+                uint8_t row = (uint8_t)(lau_sel / LAU_COLS);
+                uint8_t col = (uint8_t)(lau_sel % LAU_COLS);
+                uint8_t next_row = (uint8_t)(row + 1u);
+                if (next_row * LAU_COLS >= n) break;
+                uint8_t next = (uint8_t)(next_row * LAU_COLS + col);
+                if (next >= n) next = (uint8_t)(n - 1u);
+                if (next > lau_sel) lau_sel = next;
                 break;
-            case KC_UP:
-                if (lau_sel >= LAU_COLS) lau_sel = (uint8_t)(lau_sel - LAU_COLS);
+            }
+            case KC_UP: {
+                if (lau_sel < LAU_COLS) break;
+                uint8_t row = (uint8_t)(lau_sel / LAU_COLS);
+                uint8_t col = (uint8_t)(lau_sel % LAU_COLS);
+                uint8_t prev_row = (uint8_t)(row - 1u);
+                uint8_t prev     = (uint8_t)(prev_row * LAU_COLS + col);
+                if (prev >= n) {
+                    uint8_t row_end = (uint8_t)(prev_row * LAU_COLS + LAU_COLS);
+                    if (row_end > n) row_end = n;
+                    if (row_end > prev_row * LAU_COLS) {
+                        prev = (uint8_t)(row_end - 1u);
+                    }
+                }
+                lau_sel = prev;
                 break;
+            }
             case KC_ENTER:
             case KC_KP_ENTER:
             case KC_SPACE: {

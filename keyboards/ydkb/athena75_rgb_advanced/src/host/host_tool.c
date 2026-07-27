@@ -28,6 +28,7 @@ static int usage(const char *argv0) {
         "  daemon   [--utc] [--interval SEC]         resident service: keep the clock\n"
         "           [--reconnect SEC] [--detach]     synced, auto-reconnect on reboot\n"
         "  diag                                     report flash/EEPROM layout constants\n"
+        "  fw                                       firmware build number + ABI\n"
         "  backup  [-o file.bin]                    save Vial/VIA config (EEPROM) to a file\n"
         "  restore file.bin                         write a saved Vial/VIA config back\n"
         "  probe   [read ADDR [len]]                JEDEC flash size + XIP readability map\n"
@@ -56,6 +57,7 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "synctime")) return cmd_synctime(subargc, subargv);
     if (!strcmp(cmd, "daemon"))   return cmd_daemon(subargc, subargv);
     if (!strcmp(cmd, "diag"))     return cmd_diag(subargc, subargv);
+    if (!strcmp(cmd, "fw"))       return cmd_fw(subargc, subargv);
     if (!strcmp(cmd, "backup"))   return cmd_eeprom_backup(subargc, subargv);
     if (!strcmp(cmd, "restore"))  return cmd_eeprom_restore(subargc, subargv);
     if (!strcmp(cmd, "probe"))    return cmd_probe(subargc, subargv);

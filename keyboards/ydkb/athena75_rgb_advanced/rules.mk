@@ -17,6 +17,9 @@ SRC +=  $(FW)/app_input.c
 # OS system services for slot apps (reboot/RGB/registry/persistence marshalling).
 SRC +=  $(FW)/app_sys.c
 
+# Firmware build stamp (FW_BUILD_NUM) for host_api / HID diag.
+SRC +=  $(FW)/fw_info.c
+
 VPATH += $(FW) $(FW)/app $(FW)/gfx
 EXTRAINCDIRS += $(KEYBOARD_PATH_1)/src/app $(KEYBOARD_PATH_1)/src/firmware
 

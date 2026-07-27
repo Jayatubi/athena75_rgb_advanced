@@ -51,6 +51,41 @@ int cmd_diag(int argc, char **argv) {
     if (flags & 1) printf("undefined (not set at compile time)\n");
     else printf("%u (0x%08X)\n", flash_sz, flash_sz);
     printf(">> wear_leveling EEPROM backing: base=0x%08X size=%u logical=%u\n", wl_base, (unsigned)(backing_kb * 1024u), logical);
+    if (rep[21] >= ATHENA_DIAG_FW_FIELDS) {
+        uint32_t build = ((uint32_t)rep[15] << 24) | ((uint32_t)rep[16] << 16) |
+                         ((uint32_t)rep[17] << 8) | rep[18];
+        printf(">> firmware build: b%u (0x%08X)\n", build, build);
+        printf(">> app ABI: %u   host_api ABI: %u\n", rep[19], rep[20]);
+    }
+    hid_close(d);
+    return 0;
+}
+
+int cmd_fw(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) {
+        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        return 1;
+    }
+    uint8_t req[] = {ATHENA_CMD, ATHENA_DIAG_CMD, 0x00};
+    uint8_t rep[ATHENA_REPORT_LEN];
+    if (xfer(d, req, sizeof req, rep, 1000) != 0 || rep[0] != ATHENA_CMD || rep[1] != ATHENA_DIAG_CMD) {
+        printf("error: no firmware info reply\n");
+        hid_close(d);
+        return 1;
+    }
+    if (rep[21] < ATHENA_DIAG_FW_FIELDS) {
+        printf("error: device firmware too old (no build/ABI in diag reply)\n");
+        hid_close(d);
+        return 1;
+    }
+    uint32_t build = ((uint32_t)rep[15] << 24) | ((uint32_t)rep[16] << 16) |
+                     ((uint32_t)rep[17] << 8) | rep[18];
+    printf("build: b%u\n", build);
+    printf("app_abi: %u\n", rep[19]);
+    printf("host_api_abi: %u\n", rep[20]);
     hid_close(d);
     return 0;
 }

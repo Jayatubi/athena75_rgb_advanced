@@ -60,6 +60,14 @@ typedef struct app_info_t {
     bool     enabled;
 } app_info_t;
 
+// ---- Firmware identity (read-only; core-safe) ------------------------------
+typedef struct app_fw_info_t {
+    uint32_t build_num;     // rules.mk FW_BUILD_NUM (UTC YYMMDD integer)
+    uint16_t app_abi;       // slot-app package ABI (ATHENA_APP_ABI_VERSION)
+    uint16_t host_api_abi;  // host_api_t table ABI
+    char     board[16];     // NUL-terminated product label
+} app_fw_info_t;
+
 // ---- App-supplied menu model (content) ----------------------------------
 // The firmware owns the MENU ENGINE (navigation, easing, radio/toggle marks,
 // scrolling, colours -- menu.c/menu_model.c/ui_scene.c); the APP owns the menu
@@ -309,6 +317,9 @@ typedef struct host_api_t {
     // tears down the whole session.
     void     (*menu_suspend)(void);
     void     (*menu_resume)(void);
+
+    // Firmware build stamp + ABI levels (for SETTINGS / diagnostics).
+    void     (*fw_info)(app_fw_info_t *out);
 } host_api_t;
 
 // ---- What an app exposes back to the firmware -------------------------------

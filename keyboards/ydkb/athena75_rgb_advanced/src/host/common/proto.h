@@ -43,7 +43,11 @@
 #define ATHENA_FLASH_M1   0x55
 
 // Flash / EEPROM diagnostics: 0xFD 0x60 0x00
+// Reply data[2..14] = flash size, EEPROM backing, flags (legacy).
+// When data[21] >= 1: data[15..18] = FW_BUILD_NUM (BE32), data[19] = app ABI,
+// data[20] = host_api ABI.
 #define ATHENA_DIAG_CMD   0x60
+#define ATHENA_DIAG_FW_FIELDS 1u
 
 // Logical EEPROM (Vial/VIA config) backup & restore: 0xFD 0x62 <sub>.
 #define ATHENA_EE_CMD    0x62
