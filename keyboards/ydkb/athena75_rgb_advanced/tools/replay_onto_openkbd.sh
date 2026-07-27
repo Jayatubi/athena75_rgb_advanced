@@ -1,31 +1,52 @@
 #!/usr/bin/env bash
-# Replay athena75_rgb_advanced history onto openkbd/ava (57 commits from board split).
-# Requires tag backup/pre-rebase-feat/rle-mcu-tween pointing at pre-rewrite tip.
+# Replay feat/rle-mcu-tween onto openkbd/ava: linear history of athena75 work only
+# (commits reachable from TIP but not from upstream ava). Rewrites feat/rle-mcu-tween.
 set -euo pipefail
-REPO_ROOT=/mnt/f/work/vial-qmk-v6
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
-GIT=git.exe
-BACKUP=backup/pre-rebase-feat/rle-mcu-tween
-SPLIT_PARENT=dd3ba84069
-FIRST=0e64660803a1de6884d91bd7dbb25a424b754b4c
+GIT="${GIT:-git.exe}"
+
+UPSTREAM="${UPSTREAM:-openkbd/ava}"
+BRANCH="${BRANCH:-feat/rle-mcu-tween}"
+BACKUP_TAG="${BACKUP_TAG:-backup/pre-rebase-feat/rle-mcu-tween}"
+TIP="${TIP:-HEAD}"
+FORK="${FORK:-$(${GIT} log --reverse --format=%H --grep='fork advanced board to athena75_rgb_advanced' -1 "${TIP}")}"
 
 ${GIT} fetch openkbd ava
 ${GIT} cherry-pick --abort 2>/dev/null || true
-${GIT} checkout -B feat/rle-mcu-tween openkbd/ava
-${GIT} branch -f ava openkbd/ava
 
-echo ">> seed commit (fork advanced board)"
+if ! ${GIT} rev-parse "${TIP}" >/dev/null 2>&1; then
+  echo "error: TIP ${TIP} not found" >&2
+  exit 1
+fi
+if ! ${GIT} rev-parse "${FORK}" >/dev/null 2>&1; then
+  echo "error: fork commit not found (set FORK=)" >&2
+  exit 1
+fi
+
+${GIT} tag -f "${BACKUP_TAG}" "${TIP}"
+echo ">> safety tag ${BACKUP_TAG} -> $(${GIT} rev-parse --short ${BACKUP_TAG})"
+
+FIRST="${FORK}"
+COUNT="$(${GIT} rev-list --count "${FORK}".."${TIP}")"
+echo ">> replay ${COUNT} athena75 commits onto ${UPSTREAM} (fork ${FIRST})"
+
+${GIT} checkout -B "${BRANCH}" "${UPSTREAM}"
+${GIT} branch -f ava "${UPSTREAM}" 2>/dev/null || true
+
+echo ">> seed: $(${GIT} log -1 --oneline ${FIRST})"
 ${GIT} checkout "${FIRST}" -- keyboards/ydkb/athena75_rgb_advanced
-${GIT} checkout openkbd/ava -- keyboards/ydkb/athena75_rgb
-${GIT} rm -rf --ignore-unmatch keyboards/ydkb/athena75_rgb_advanced/tools/.patch-queue \
+${GIT} checkout "${UPSTREAM}" -- keyboards/ydkb/athena75_rgb
+${GIT} rm -rf --ignore-unmatch \
+  keyboards/ydkb/athena75_rgb_advanced/tools/.patch-queue \
   keyboards/ydkb/athena75_rgb_advanced/tools/_count_patches.sh \
   keyboards/ydkb/athena75_rgb_advanced/tools/rebase_onto_openkbd.sh \
   keyboards/ydkb/athena75_rgb_advanced/tools/host 2>/dev/null || true
 if ${GIT} show "${FIRST}:.vscode/settings.json" >/dev/null 2>&1; then
   ${GIT} checkout "${FIRST}" -- .vscode/settings.json
+  ${GIT} add .vscode/settings.json
 fi
-${GIT} add keyboards/ydkb/athena75_rgb_advanced .vscode/settings.json 2>/dev/null || \
-  ${GIT} add keyboards/ydkb/athena75_rgb_advanced
+${GIT} add keyboards/ydkb/athena75_rgb_advanced
 ${GIT} commit -C "${FIRST}"
 
 resolve() {
@@ -33,22 +54,21 @@ resolve() {
   while IFS= read -r f; do
     [[ -z "${f}" ]] && continue
     case "${f}" in
-      keyboards/ydkb/athena75_rgb/*) ${GIT} checkout openkbd/ava -- "${f}" 2>/dev/null || true ;;
+      keyboards/ydkb/athena75_rgb/*) ${GIT} checkout "${UPSTREAM}" -- "${f}" 2>/dev/null || true ;;
       *) ${GIT} checkout --theirs -- "${f}" 2>/dev/null || true ;;
     esac
     ${GIT} add -- "${f}" 2>/dev/null || true
   done < <(${GIT} diff --name-only --diff-filter=U)
 }
 
-while IFS= read -r h <&3; do
-  if [[ "${h}" == "${FIRST}" ]]; then
-    continue
-  fi
+while IFS= read -r h; do
+  [[ "${h}" == "${FIRST}" ]] && continue
   echo ">> ${h} $(${GIT} log -1 --oneline ${h})"
   if ! ${GIT} cherry-pick -n "${h}"; then
     resolve
     if [[ -n "$(${GIT} diff --name-only --diff-filter=U)" ]]; then
-      echo "error: still conflicted at ${h}" >&2
+      echo "error: unresolved conflict at ${h}" >&2
+      ${GIT} diff --name-only --diff-filter=U
       exit 1
     fi
   fi
@@ -57,8 +77,8 @@ while IFS= read -r h <&3; do
   else
     ${GIT} commit -C "${h}"
   fi
-done 3< <(${GIT} rev-list --reverse "${SPLIT_PARENT}".."${BACKUP}")
+done < <(${GIT} rev-list --reverse "${FORK}".."${TIP}")
 
-echo ">> done"
-${GIT} rev-list --left-right --count openkbd/ava...HEAD
-${GIT} log --oneline -5
+echo ">> done: $(${GIT} rev-list --count ${UPSTREAM}..HEAD) commits on ${BRANCH}"
+${GIT} log --oneline -3
+${GIT} diff --stat "${UPSTREAM}" HEAD -- keyboards/ydkb/athena75_rgb_advanced | tail -3
