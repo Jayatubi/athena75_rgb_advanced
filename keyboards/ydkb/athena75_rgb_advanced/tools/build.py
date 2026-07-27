@@ -4,7 +4,7 @@
 Owns the shared work: pinned QMK docker image, make, size, uf2 archive. Platform
 entry points (build_wsl.sh / build_mac.sh) do host-specific prep (e.g. WSL mirror
 sync) then invoke this script. To flash, use the native `host_tool upload`
-(BOOTSEL + copy a UF2, built from tools/host); build and upload are separate.
+(BOOTSEL + copy a UF2, built from src/host); build and upload are separate.
 
 Usage (direct, or via a platform wrapper):
   python3 build.py                     # docker build ydkb/athena75_rgb_advanced:vial

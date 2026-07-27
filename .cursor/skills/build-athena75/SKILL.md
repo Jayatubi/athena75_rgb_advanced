@@ -1,86 +1,69 @@
 ---
 name: build-athena75
-description: Build (and prepare to flash) the ydkb/athena75_rgb_advanced firmware and its host_tool. Use whenever building, compiling, or verifying this keyboard's firmware in this repo (vial-qmk-v6), or when the user says 构建/编译/build/上传固件 for athena75.
+description: Build (and prepare to flash) the ydkb/athena75_rgb_advanced firmware and its host_tool. Use whenever building, compiling, or verifying this keyboard's firmware in this repo, or when the user says 构建/编译/build/上传固件 for athena75.
 ---
 
 # Build athena75_rgb_advanced
 
+## Path convention
+
+- **`KB`** = `keyboards/ydkb/athena75_rgb_advanced` (relative to the **git repository root**).
+- **Never** put machine-specific roots in skills, rules, or committed docs (`F:/…`, `C:/Users/…`, `/mnt/<drive>/…`).
+- When a **Windows `.exe`** needs filesystem paths (`cmake.exe`, `host_tool.exe`), resolve inside a **`.sh`** script:
+
+  ```bash
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  REPO_WIN="$(wslpath -w "${REPO_ROOT}" | sed 's/\\/\//g')"
+  ```
+
+  Pass `"${REPO_WIN}/${KB}/…"` to the Windows process (forward slashes).
+
 ## Hard rules (do not break)
 
-- **The only forbidden thing is PowerShell.** Everything runs under WSL. The
-  Cursor Shell tool launches PowerShell on this machine, so keep it a thin
-  launcher: invoke `wsl ...` with **no** PowerShell pipes/operators
-  (`|`, `&&`, `||`, `>`, `$(...)`, quoted `$vars`) — those get mangled.
-- **Windows `.exe` files are normal executables under WSL — just run them.**
-  `git.exe`, `cmake.exe`, `docker`, etc. are called directly, e.g.
-  `wsl git.exe -C F:/work/vial-qmk-v6 status`. Running a Windows exe from WSL is
-  normal and encouraged; it is not an exception.
-- **Windows exes need Windows-style path args with FORWARD slashes**
-  (`F:/work/...`, `C:/Users/...`). A `/mnt/...` path won't resolve for a Windows
-  process, and backslashes get stripped by the launcher.
-- If a command genuinely needs pipes/redirection/`$()`, put it in a real `.sh`
-  file and run `wsl bash <path.sh>`; never inline it through PowerShell.
-- **Use the ready-made scripts.** Do not improvise build commands, do not run
-  `docker run` / `make` / `python3 build.py` by hand, and do not create new
-  build scripts. The scripts already exist:
-  - `keyboards/ydkb/athena75_rgb_advanced/tools/build_wsl.sh` — firmware
-  - `keyboards/ydkb/athena75_rgb_advanced/src/host/` — host_tool (CMake)
+- See repo rule **wsl-no-powershell**: **no PowerShell, no `.ps1` ever.** Thin `wsl …` launcher only.
+- **`tools/`** — build entrypoints only (`.sh`, `build.py`, helpers). **No** `tools/host/`; host_tool sources are **`src/host/`**.
+- **`artifacts/`** — committed UF2, `host_tool` binaries, slot `.app` files.
+- **Windows `.exe` files are normal executables under WSL** (`git.exe`, `cmake.exe`, `docker`, …).
+- Pipes/redirection/`$()` → **committed `.sh`** only (`wsl bash path/to/script.sh`).
+- **Use ready-made scripts** — do not hand-run `docker` / `make` / `build.py` or invent new layouts:
+  - `${KB}/tools/build_wsl.sh` — firmware (Windows + WSL)
+  - `${KB}/tools/build_mac.sh` — firmware (macOS)
+  - `${KB}/src/host/` — host_tool (CMake)
 
 ## Build the firmware
 
-Run the existing WSL entry point (it syncs the tree to a fast WSL-disk mirror,
-then runs `build.py` → docker with a **pinned** QMK image, and archives the UF2):
+From **repository root**:
 
 ```
-wsl bash /mnt/f/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/tools/build_wsl.sh
+wsl bash keyboards/ydkb/athena75_rgb_advanced/tools/build_wsl.sh
 ```
 
-- First time only (or if the mirror is missing/incomplete): add `--sync all`.
-- Clean build: add `-c`. Change keymap with `KEYMAP=via` (default `vial`).
-- Output UF2 lands in `keyboards/ydkb/athena75_rgb_advanced/artifacts/firmware/`
-  as `ydkb_athena75_rgb_advanced_vial.uf2` (+ timestamped history in `history/`).
-
-### Capturing output
-
-The Shell tool truncates nothing to a file for you, and you must not add a
-PowerShell `| tee`/`>`. If you need to inspect the tail of a long build, let the
-script's own stdout stream back, or read the archived log the wrapper leaves in
-the mirror. Do not wrap the `wsl` call in PowerShell redirection.
+- First mirror sync: `--sync all`. Clean: `-c`. Keymap: `KEYMAP=via` (default `vial`).
+- Output: `${KB}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2` (+ `history/`).
 
 ## Build the host_tool (USB tool)
 
-`host_tool` is a Windows CMake/MSVC target (it uses USB via SetupAPI + hid.dll),
-but you still drive it from WSL by calling the Windows build tools as normal
-executables — no PowerShell. Reuse the existing `src/host/CMakeLists.txt` and
-`src/host/build/` (don't invent a new layout), e.g.:
+CMake under `${KB}/src/host/`. From WSL, repo root as Windows cwd:
 
 ```
-wsl cmake.exe --build F:/work/vial-qmk-v6/keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
+wsl cmake.exe -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb/athena75_rgb_advanced/src/host/build
+wsl cmake.exe --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-On **macOS** there is no WSL: build the native binary directly with the same
-CMake project (the `common/hid_mac.c` + `common/sys_mac.c` backend is already in
-the tree, links IOKit/CoreFoundation, no third-party deps):
+macOS (no WSL):
 
 ```
 cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb/athena75_rgb_advanced/src/host/build -DCMAKE_BUILD_TYPE=Release
 cmake --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-The binary lands at `.../src/host/build/Release/host_tool` (`build/` is
-gitignored). Committed copy: `artifacts/host/macos/host_tool`. See the `host-tool-athena75` skill for the Input Monitoring
-permission note on first USB/HID access.
-
-Only rebuild when host_tool sources actually change and the user wants a new exe.
+Binary: `${KB}/src/host/build/Release/host_tool` / `host_tool.exe`. Committed: `${KB}/artifacts/host/{windows,macos}/`. See **host-tool-athena75** for macOS Input Monitoring.
 
 ## Flashing
 
-Flashing is done by running the Windows `host_tool.exe` from WSL (interop reaches
-USB fine): `wsl .../host_tool.exe upload F:/.../vial.uf2`. See the
-`host-tool-athena75` skill for details. Build and upload are separate steps; only
-flash when the user asks.
+Run `host_tool.exe` from WSL — see **host-tool-athena75**. Flash only when asked.
 
 ## Reminders
 
 - Never `git commit`/`push` as a finishing step (see repo rule).
-- Do not leave stray temp scripts/logs in `tools/`; clean up anything you add.
+- No stray temp scripts under `${KB}/tools/`.

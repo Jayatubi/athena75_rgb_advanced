@@ -1,0 +1,28 @@
+---
+description: Windows dev via WSL only — no PowerShell; src vs tools layout; unified sh+Python builds
+alwaysApply: true
+---
+
+# WSL shell, no PowerShell
+
+- **Never use PowerShell** for commands, automation, or one-liners. **Never create or edit `.ps1` files.**
+- The Cursor Shell tool on this machine is PowerShell: use it only as a **thin `wsl` launcher** — no PowerShell pipes/operators (`|`, `&&`, `||`, `>`, `$(...)`, `&`, quoted `$vars`).
+- **All real work runs under WSL** (`bash`, `.sh` scripts). Inside WSL you may call **Windows native executables** directly: `git.exe`, `cmake.exe`, `python.exe`, `docker`, and built tools such as `host_tool.exe`.
+- **Arguments to Windows `.exe` processes** must use **Windows paths with forward slashes** (resolve clone root via `wslpath -w "$(git rev-parse --show-toplevel)"` inside `.sh` — never hard-code drive letters or `/mnt/…` in committed docs or `.cursor/skills`).
+- Pipes, redirection, or `$()` belong in a **committed `.sh` file** — run `wsl bash path/to/script.sh`.
+
+# Source layout (athena75_rgb_advanced and same pattern)
+
+- **`src/`** holds product source: `src/firmware/`, `src/host/`, `src/app/`.
+- **`tools/`** holds **build entrypoints only** (`.sh` wrappers, shared `build.py`, helpers) — **no C/host_tool trees under `tools/`.**
+- **`artifacts/`** holds committed or archived binaries (UF2, `host_tool`, `.app`).
+
+# Build script style
+
+- Keep **cross-platform logic in Python**; **`.sh` is only the outer launcher**.
+- Prefer existing `tools/build_wsl.sh`, `tools/build_mac.sh`, and `tools/build.py`.
+- **host_tool**: CMake at `keyboards/ydkb/athena75_rgb_advanced/src/host/` (see `build-athena75` skill).
+
+# Cursor skills
+
+- `.cursor/skills/**` must use **repo-relative paths** only (`keyboards/ydkb/…`). No personal clone paths, usernames, or drive letters.

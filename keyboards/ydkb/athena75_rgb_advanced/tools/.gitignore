@@ -3,3 +3,6 @@
 *.uf2
 penta_kill*.uf2
 emojis/
+
+# host_tool: sources in src/host/, binaries in artifacts/host/ — not under tools/
+host/
