@@ -40,7 +40,7 @@ static void input_cb(void *ctx, IOReturn res, void *sender, IOHIDReportType type
     CFRunLoopStop(CFRunLoopGetCurrent());
 }
 
-hid_dev *hid_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage) {
+hid_dev *hid_native_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage) {
     IOHIDManagerRef mgr = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     if (!mgr) return NULL;
 
@@ -92,14 +92,14 @@ hid_dev *hid_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usag
     return out;
 }
 
-int hid_write(hid_dev *d, const uint8_t *data) {
+int hid_native_write(hid_dev *d, const uint8_t *data) {
     if (!d) return -1;
     IOReturn r = IOHIDDeviceSetReport(d->dev, kIOHIDReportTypeOutput, 0 /*report id*/,
                                       data, ATHENA_REPORT_LEN);
     return (r == kIOReturnSuccess) ? 0 : -1;
 }
 
-int hid_read(hid_dev *d, uint8_t *data, int timeout_ms) {
+int hid_native_read(hid_dev *d, uint8_t *data, int timeout_ms) {
     if (!d) return -1;
     d->got = 0;
     CFTimeInterval t = (timeout_ms < 0) ? 3600.0 : (timeout_ms / 1000.0);
@@ -112,7 +112,7 @@ int hid_read(hid_dev *d, uint8_t *data, int timeout_ms) {
     return 0;
 }
 
-void hid_close(hid_dev *d) {
+void hid_native_close(hid_dev *d) {
     if (!d) return;
     if (d->dev) {
         IOHIDDeviceUnscheduleFromRunLoop(d->dev, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);

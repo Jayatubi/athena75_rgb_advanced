@@ -21,7 +21,7 @@ struct hid_dev {
     USHORT out_len;  // OutputReportByteLength (incl. leading report id)
 };
 
-hid_dev *hid_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage) {
+hid_dev *hid_native_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage) {
     GUID guid;
     HidD_GetHidGuid(&guid);
     HDEVINFO info = SetupDiGetClassDevsA(&guid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -69,7 +69,7 @@ hid_dev *hid_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usag
     return dev;
 }
 
-int hid_write(hid_dev *d, const uint8_t *data) {
+int hid_native_write(hid_dev *d, const uint8_t *data) {
     if (!d) return -1;
     USHORT n = d->out_len ? d->out_len : (ATHENA_REPORT_LEN + 1);
     uint8_t buf[256] = {0};
@@ -98,7 +98,7 @@ int hid_write(hid_dev *d, const uint8_t *data) {
     return rc;
 }
 
-int hid_read(hid_dev *d, uint8_t *data, int timeout_ms) {
+int hid_native_read(hid_dev *d, uint8_t *data, int timeout_ms) {
     if (!d) return -1;
     USHORT n = d->in_len ? d->in_len : (ATHENA_REPORT_LEN + 1);
     uint8_t buf[256] = {0};
@@ -131,7 +131,7 @@ int hid_read(hid_dev *d, uint8_t *data, int timeout_ms) {
     return rc;
 }
 
-void hid_close(hid_dev *d) {
+void hid_native_close(hid_dev *d) {
     if (!d) return;
     if (d->h && d->h != INVALID_HANDLE_VALUE) CloseHandle(d->h);
     free(d);

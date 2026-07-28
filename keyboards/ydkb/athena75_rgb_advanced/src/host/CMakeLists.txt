@@ -32,6 +32,7 @@ set(COMMON_SRC
     common/png.c
     common/paths.c
     common/app_pkg.c
+    common/hid_sim.c   # athena_sim bridge + the hid_open/write/read/close dispatcher
 )
 
 if(WIN32)
