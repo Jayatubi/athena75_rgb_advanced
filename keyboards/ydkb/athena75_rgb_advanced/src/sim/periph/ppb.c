@@ -31,8 +31,8 @@ static uint32_t ppb_read(sim_t *s, void *ctx, uint32_t off, unsigned size) {
         case 0xED00: return 0x410CC601u; // CPUID: Cortex-M0+ r0p1
         case 0xED04: {                   // ICSR
             uint32_t v = c->ipsr & 0x1FFu;
-            if (c->pend_sv) v |= 1u << 28;
-            if (c->pend_systick) v |= 1u << 26;
+            if (c->pend & PEND_PENDSV) v |= 1u << 28;
+            if (c->pend & PEND_SYSTICK) v |= 1u << 26;
             uint32_t pend = (s->irq_lines | c->nvic_sw_pend) & c->nvic_enable;
             if (pend) {
                 v |= 1u << 22; // ISRPENDING
@@ -100,16 +100,16 @@ static void ppb_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigned 
             // trampoline (CORTEX_ALTERNATE_SWITCH == FALSE), so this fires on
             // every preemption and must stay cheap.
             if (val & (1u << 31)) {
-                c->pend_nmi = true;
+                c->pend |= PEND_NMI;
                 LOG_T(LOG_D_EXC, "core%u NMI set", c->id);
             }
             if (val & (1u << 28)) {
-                c->pend_sv = true;
+                c->pend |= PEND_PENDSV;
                 LOG_T(LOG_D_EXC, "core%u PendSV set", c->id);
             }
-            if (val & (1u << 27)) c->pend_sv = false;
-            if (val & (1u << 26)) c->pend_systick = true;
-            if (val & (1u << 25)) c->pend_systick = false;
+            if (val & (1u << 27)) c->pend &= ~PEND_PENDSV;
+            if (val & (1u << 26)) c->pend |= PEND_SYSTICK;
+            if (val & (1u << 25)) c->pend &= ~PEND_SYSTICK;
             return;
         case 0xED08:
             c->vtor = val & 0xFFFFFF80u;
@@ -162,7 +162,7 @@ static void systick_poll(sim_t *s, void *ctx) {
             uint64_t ticks       = elapsed / period;
             c->syst_last_cycles += ticks * period;
             c->syst_csr |= 1u << 16; // COUNTFLAG
-            if (c->syst_csr & 2u) c->pend_systick = true;
+            if (c->syst_csr & 2u) c->pend |= PEND_SYSTICK;
         }
         c->syst_cvr = (uint32_t)(period - 1u - (c->cycles - c->syst_last_cycles) % period);
     }

@@ -242,6 +242,13 @@ int main(int argc, char **argv) {
     uint32_t t_prev  = SDL_GetTicks();
     uint32_t t_step  = t_prev;
     float    speed   = 0.0f; // measured virtual/real ratio
+    // Where the wall clock actually goes, averaged over a second. Simulation and
+    // drawing compete for the same thread, so knowing the split is the only way
+    // to tell "the interpreter is slow" apart from "we are drawing too much".
+    double   perf_hz  = (double)SDL_GetPerformanceFrequency();
+    uint64_t sim_ticks = 0, ren_ticks = 0;
+    float    sim_pct = 0.0f, ren_pct = 0.0f;
+    float    fps     = 0.0f;
 
     // stop_requested covers the machine asking to stop (a control-socket quit, a
     // gdb kill) as well as the window being closed.
@@ -346,6 +353,7 @@ int main(int argc, char **argv) {
             board_set_key(s, keys[k].row, keys[k].col, want);
         }
 
+        uint64_t t_sim0 = SDL_GetPerformanceCounter();
         if (!paused && !s->stop_requested) {
             // Pace on measured wall time rather than assuming a 60 Hz render, and
             // cap the catch-up so a stalled frame cannot make the machine sprint.
@@ -362,6 +370,9 @@ int main(int argc, char **argv) {
                 budget -= chunk;
             } while (budget && SDL_GetTicks() < deadline && !s->stop_requested);
         }
+
+        uint64_t t_ren0 = SDL_GetPerformanceCounter();
+        sim_ticks += t_ren0 - t_sim0;
 
         SDL_SetRenderDrawColor(ren, 22, 22, 26, 255);
         SDL_RenderClear(ren);
@@ -388,6 +399,7 @@ int main(int argc, char **argv) {
         }
 
         SDL_RenderPresent(ren);
+        ren_ticks += SDL_GetPerformanceCounter() - t_ren0;
 
         // Measure the achieved speed over a second so the number is stable.
         frames++;
@@ -395,9 +407,17 @@ int main(int argc, char **argv) {
         if (now - t_prev >= 1000u) {
             static uint64_t us_prev;
             uint64_t        us = sim_now_us(s);
+            double          wall_s = (now - t_prev) / 1000.0;
             speed              = (float)((double)(us - us_prev) / ((now - t_prev) * 1000.0));
             us_prev            = us;
-            t_prev             = now;
+            sim_pct            = (float)(sim_ticks / perf_hz / wall_s * 100.0);
+            ren_pct            = (float)(ren_ticks / perf_hz / wall_s * 100.0);
+            fps                = (float)(frames / wall_s);
+            LOG_D(LOG_D_GUI, "%.2fx real time, %.0f fps: %.0f%% simulating, %.0f%% drawing",
+                  (double)speed, (double)fps, (double)sim_pct, (double)ren_pct);
+            sim_ticks = ren_ticks = 0;
+            frames    = 0;
+            t_prev    = now;
         }
         if (!turbo) SDL_Delay(1);
     }

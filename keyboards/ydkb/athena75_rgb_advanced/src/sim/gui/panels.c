@@ -69,7 +69,7 @@ static void draw_state(panels_t *p, SDL_Renderer *r, SDL_Texture *atlas, sim_t *
     draw_text(r, atlas, x, y, 1, C_HEAD, "TIME");
     y += ROW_H + 2;
     draw_text(r, atlas, x, y, 1, C_TEXT, "virtual %.3f s   %llu instr", sim_now_us(s) / 1e6,
-              (unsigned long long)s->instr_total);
+              (unsigned long long)sim_instr_total(s));
     y += ROW_H + 6;
 
     draw_text(r, atlas, x, y, 1, C_HEAD, "DISPLAY");

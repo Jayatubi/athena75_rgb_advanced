@@ -309,7 +309,7 @@ bool ctl_start(sim_t *s, uint16_t port) {
     t->sim  = s;
     set_nonblocking(t->listen_fd);
 
-    sim_add_poll(s, ctl_poll, t);
+    sim_add_poll_every(s, ctl_poll, t, SIM_NET_POLL_CYCLES);
     LOG_I(LOG_D_GUI, "control socket listening on 127.0.0.1:%u", port);
     return true;
 }

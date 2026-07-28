@@ -218,7 +218,7 @@ bool hid_bridge_start(sim_t *s, uint16_t port) {
     set_nonblocking(b->listen_fd);
 
     usb_set_in_sink(s, in_sink, b);
-    sim_add_poll(s, bridge_poll, b);
+    sim_add_poll_every(s, bridge_poll, b, SIM_NET_POLL_CYCLES);
 
     LOG_I(LOG_D_BRIDGE, "Raw HID bridge listening on 127.0.0.1:%u "
                         "(export ATHENA_HID_SIM=127.0.0.1:%u)", port, port);

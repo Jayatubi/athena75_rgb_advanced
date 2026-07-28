@@ -334,7 +334,7 @@ int main(int argc, char **argv) {
 
     char sym0[96], sym1[96];
     LOG_I(LOG_D_SIM, "stopped after %llu ms of virtual time, %llu instructions",
-          (unsigned long long)ms, (unsigned long long)s->instr_total);
+          (unsigned long long)ms, (unsigned long long)sim_instr_total(s));
     LOG_I(LOG_D_SIM, "  core0 pc=%s%s", symbols_format(s->cpu[0].r[15], sym0, sizeof(sym0)),
           s->cpu[0].sleeping ? " (sleeping)" : "");
     LOG_I(LOG_D_SIM, "  core1 %s pc=%s%s", s->cpu[1].running ? "running" : "halted",

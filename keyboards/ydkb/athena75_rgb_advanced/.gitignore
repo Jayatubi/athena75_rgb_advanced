@@ -8,3 +8,8 @@ src/sim/third_party/
 # The root .gitignore drops every *.png; the regression goldens have to be
 # tracked or tools/sim_regress.py has nothing to compare against.
 !tests/golden/*.png
+
+# Likewise it drops every CMakeLists.txt (an upstream QMK rule aimed at the ones
+# CLion generates). This one is the simulator's build definition -- without it a
+# fresh clone cannot build athena_sim at all.
+!src/sim/CMakeLists.txt

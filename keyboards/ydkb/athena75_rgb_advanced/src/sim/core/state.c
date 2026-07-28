@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STATE_MAGIC   "ATHSNAP1"
+#define STATE_MAGIC   "ATHSNAP2"
 #define TAG_LEN       15
 #define MAX_BLOBS     32
 #define FLASH_SECTOR  4096u
@@ -51,7 +51,7 @@ static bool put_record(FILE *f, const char *tag, const void *data, uint32_t len)
 // ---- machine-level scalars --------------------------------------------------
 
 typedef struct {
-    uint64_t cycles, instr_total, progress, last_progress;
+    uint64_t cycles;
     uint32_t cur_core, irq_lines;
     uint8_t  bootsel_requested;
     uint8_t  pad[3];
@@ -59,9 +59,6 @@ typedef struct {
 
 static void pack_machine(const sim_t *s, machine_rec_t *m) {
     m->cycles            = s->cycles;
-    m->instr_total       = s->instr_total;
-    m->progress          = s->progress;
-    m->last_progress     = s->last_progress;
     m->cur_core          = s->cur_core;
     m->irq_lines         = s->irq_lines;
     m->bootsel_requested = s->bootsel_requested;
@@ -70,9 +67,6 @@ static void pack_machine(const sim_t *s, machine_rec_t *m) {
 
 static void unpack_machine(sim_t *s, const machine_rec_t *m) {
     s->cycles            = m->cycles;
-    s->instr_total       = m->instr_total;
-    s->progress          = m->progress;
-    s->last_progress     = m->last_progress;
     s->cur_core          = m->cur_core;
     s->irq_lines         = m->irq_lines;
     s->bootsel_requested = m->bootsel_requested != 0;

@@ -61,9 +61,18 @@ void mmio_attach(sim_t *s, uint32_t base, uint32_t size, const char *name, void 
 }
 
 static mmio_region_t *mmio_find(sim_t *s, uint32_t addr) {
+    // There are ~40 regions and the firmware spends most of its MMIO traffic
+    // polling a handful of registers, so re-checking whoever answered last turns
+    // the scan below into a single compare almost every time.
+    mmio_region_t *last = &s->mmio[s->mmio_last];
+    if (s->mmio_last < s->mmio_count && addr - last->base < last->size) return last;
+
     for (unsigned i = 0; i < s->mmio_count; i++) {
         mmio_region_t *r = &s->mmio[i];
-        if (addr - r->base < r->size) return r;
+        if (addr - r->base < r->size) {
+            s->mmio_last = i;
+            return r;
+        }
     }
     return NULL;
 }

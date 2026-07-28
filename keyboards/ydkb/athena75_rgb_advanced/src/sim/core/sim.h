@@ -98,16 +98,14 @@ typedef struct cpu {
     uint8_t  nvic_prio[SIM_NUM_IRQS];
     uint32_t vtor;
     uint8_t  shpr[16];       // system handler priorities, indexed by exception #
-    bool     pend_sv;
-    bool     pend_systick;
+    // One word rather than a flag per source: the interpreter has to ask "is an
+    // exception waiting?" before every single instruction, and the answer is
+    // almost always no, so it wants to be a single load and test.
+    uint32_t pend;
     // Debug aid: report the first instruction that leaves SP outside RAM. A
     // corrupted thread context shows up here long before it faults.
     bool     sp_watch;
     uint32_t sp_prev;
-
-    bool     pend_nmi;
-    bool     pend_hardfault;
-    bool     pend_svc_pending; // SVC executed, entry happens before the next insn
 
     // SysTick (present but unused by this firmware, which ticks off TIMER).
     uint32_t syst_csr, syst_rvr, syst_cvr;
@@ -120,8 +118,17 @@ typedef struct cpu {
     uint32_t stall_hits;
     uint32_t stall_last_mmio;
     uint32_t stall_last_mmio_val;
-    bool     stall_reported;
 } cpu_t;
+
+// Bits of cpu_t.pend. PEND_SVC means "SVC executed, entry happens before the
+// next instruction" rather than a latched pending bit.
+enum {
+    PEND_NMI       = 1u << 0,
+    PEND_HARDFAULT = 1u << 1,
+    PEND_SVC       = 1u << 2,
+    PEND_PENDSV    = 1u << 3,
+    PEND_SYSTICK   = 1u << 4,
+};
 
 // ---- machine ----------------------------------------------------------------
 
@@ -150,9 +157,9 @@ struct sim {
     unsigned cur_core;           // core currently executing (for log stamping)
 
     uint64_t cycles;             // machine scheduling reference
-    uint64_t instr_total;
 
     mmio_region_t mmio[SIM_MAX_MMIO];
+    unsigned      mmio_last; // index that answered the previous lookup (a cache)
     unsigned      mmio_count;
 
     // Level-triggered peripheral IRQ lines, shared by both cores' NVICs.
@@ -177,6 +184,8 @@ struct sim {
     struct {
         sim_poll_fn fn;
         void       *ctx;
+        uint64_t    period; // 0 = every slice; otherwise a minimum cycle gap
+        uint64_t    next;   // cycle count at which this one is due again
     } polls[16];
     unsigned poll_count;
 
@@ -198,10 +207,6 @@ struct sim {
     bool     bootsel_requested; // reset_usb_boot() called
     uint64_t stop_after_instr;   // 0 = unlimited
 
-    // Deadlock detection: bumped whenever a core retires an instruction.
-    uint64_t progress;
-    uint64_t last_progress;
-    unsigned no_progress_slices;
 };
 
 // ---- lifecycle --------------------------------------------------------------
@@ -222,6 +227,14 @@ void sim_run_us(sim_t *s, uint64_t us);
 
 static inline uint64_t sim_now_us(const sim_t *s) {
     return s->cycles / SIM_CLK_MHZ;
+}
+
+// Summed on demand rather than kept as a third counter the interpreter has to
+// bump for every instruction it retires. Only ever read by logging and stats.
+static inline uint64_t sim_instr_total(const sim_t *s) {
+    uint64_t n = 0;
+    for (unsigned i = 0; i < SIM_NUM_CORES; i++) n += s->cpu[i].instr;
+    return n;
 }
 
 // ---- MMIO / bus -------------------------------------------------------------
@@ -318,7 +331,15 @@ void misc_attach(sim_t *s);
 void board_attach(sim_t *s);
 
 void sim_add_poll(sim_t *s, sim_poll_fn fn, void *ctx);
+// For pollers whose work is a syscall rather than a few loads and stores. The
+// scheduling slice is 64 cycles, so an unconditional poll runs ~2 million times
+// per virtual second, which no socket needs and a socket cannot afford.
+void sim_add_poll_every(sim_t *s, sim_poll_fn fn, void *ctx, uint64_t period_cycles);
 void sim_periph_poll(sim_t *s);
+
+// A millisecond of virtual time: often enough for anything driven by a host
+// socket, rare enough that the syscall does not show up in a profile.
+#define SIM_NET_POLL_CYCLES ((uint64_t)SIM_CLK_MHZ * 1000u)
 
 // Bootrom HLE hook: returns true when `pc` hit a ROM stub and it was handled
 // natively (the CPU then just advances). Only called for pc inside the ROM.

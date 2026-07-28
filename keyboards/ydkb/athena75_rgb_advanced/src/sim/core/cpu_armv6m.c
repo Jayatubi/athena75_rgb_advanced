@@ -89,6 +89,31 @@ static void mem_fault(cpu_t *c, uint32_t addr, const char *what) {
     cpu_raise_hardfault(c, what);
 }
 
+// Instruction fetch is the single hottest memory access in the program: at least
+// one per instruction, and always 2-byte aligned. Going through bus_read for it
+// costs a call, the full window walk and the MMIO fallback, to end up doing one
+// halfword load out of an array we could have indexed directly. Code only ever
+// lives in XIP flash or SRAM here, so those two get a direct path and everything
+// else (the bootrom, anything odd) falls back.
+//
+// The fallback also covers "a watchpoint is armed", so arming one still reports
+// fetches exactly as before rather than silently missing them.
+static inline uint16_t fetch16(sim_t *s, uint32_t addr) {
+    if (!s->cfg.watch_len) {
+        if (addr - SIM_XIP_BASE < 4u * SIM_FLASH_SIZE) {
+            uint32_t off = addr & (SIM_FLASH_SIZE - 1u);
+            if (off <= SIM_FLASH_SIZE - 2u) {
+                const uint8_t *p = s->flash + off;
+                return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+            }
+        } else if (addr - SIM_SRAM_BASE < SIM_SRAM_SIZE - 1u) {
+            const uint8_t *p = s->sram + (addr - SIM_SRAM_BASE);
+            return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+        }
+    }
+    return (uint16_t)bus_read(s, addr, 2, NULL);
+}
+
 static inline uint32_t ld32(cpu_t *c, uint32_t addr) {
     if (addr & 3u) {
         mem_fault(c, addr, "unaligned load32");
@@ -154,29 +179,29 @@ static unsigned pending_exception(const cpu_t *c, int *out_prio) {
     unsigned best      = 0;
     int      best_prio = 5;
 
-    if (c->pend_nmi) {
+    if (c->pend & PEND_NMI) {
         best      = EXC_NMI;
         best_prio = -2;
     }
-    if (c->pend_hardfault && -1 < best_prio) {
+    if ((c->pend & PEND_HARDFAULT) && -1 < best_prio) {
         best      = EXC_HARDFAULT;
         best_prio = -1;
     }
-    if (c->pend_svc_pending) {
+    if (c->pend & PEND_SVC) {
         int p = exc_priority(c, EXC_SVCALL);
         if (p < best_prio) {
             best      = EXC_SVCALL;
             best_prio = p;
         }
     }
-    if (c->pend_sv) {
+    if (c->pend & PEND_PENDSV) {
         int p = exc_priority(c, EXC_PENDSV);
         if (p < best_prio) {
             best      = EXC_PENDSV;
             best_prio = p;
         }
     }
-    if (c->pend_systick) {
+    if (c->pend & PEND_SYSTICK) {
         int p = exc_priority(c, EXC_SYSTICK);
         if (p < best_prio) {
             best      = EXC_SYSTICK;
@@ -313,7 +338,7 @@ void cpu_raise_hardfault(cpu_t *c, const char *why) {
     LOG_E(cpu_log_domain(c), "core%u HardFault: %s", c->id, why);
     cpu_dump(c, why);
     trace_dump_core(why, 256, (int)c->id);
-    c->pend_hardfault = true;
+    c->pend |= PEND_HARDFAULT;
 }
 
 void cpu_send_event(cpu_t *c) {
@@ -386,19 +411,19 @@ void cpu_dump(cpu_t *c, const char *why) {
 #define STALL_REPORT_AT 2000000u
 
 static void stall_check(cpu_t *c, uint32_t pc) {
-    if (pc == c->stall_pc) {
-        if (++c->stall_hits == STALL_REPORT_AT && !c->stall_reported) {
-            char sym[96];
-            c->stall_reported = true;
-            LOG_W(cpu_log_domain(c),
-                  "core%u appears to spin at %s (%u iterations); last MMIO read %08x = %08x",
-                  c->id, symbols_format(pc, sym, sizeof(sym)), c->stall_hits,
-                  c->stall_last_mmio, c->stall_last_mmio_val);
-        }
-    } else {
-        c->stall_pc       = pc;
-        c->stall_hits     = 0;
-        c->stall_reported = false;
+    if (pc != c->stall_pc) {
+        c->stall_pc   = pc;
+        c->stall_hits = 0;
+        return;
+    }
+    // The count only ever climbs while the PC sits still, so testing for equality
+    // reports exactly once; no separate "already reported" flag needed.
+    if (++c->stall_hits == STALL_REPORT_AT) {
+        char sym[96];
+        LOG_W(cpu_log_domain(c),
+              "core%u appears to spin at %s (%u iterations); last MMIO read %08x = %08x", c->id,
+              symbols_format(pc, sym, sizeof(sym)), c->stall_hits, c->stall_last_mmio,
+              c->stall_last_mmio_val);
     }
 }
 
@@ -562,18 +587,16 @@ uint64_t cpu_run(cpu_t *c, uint64_t target) {
 
     while (c->cycles < target && !s->stop_requested) {
         // --- pending exception?
-        if (c->pend_nmi || c->pend_hardfault || c->pend_sv || c->pend_systick ||
-            c->pend_svc_pending ||
-            ((s->irq_lines | c->nvic_sw_pend) & c->nvic_enable)) {
+        if (c->pend || ((s->irq_lines | c->nvic_sw_pend) & c->nvic_enable)) {
             int      prio = 0;
             unsigned exc  = pending_exception(c, &prio);
             if (exc && prio < current_priority(c)) {
                 // Clear the latch for edge-like sources; level IRQ lines stay.
-                if (exc == EXC_NMI) c->pend_nmi = false;
-                else if (exc == EXC_HARDFAULT) c->pend_hardfault = false;
-                else if (exc == EXC_PENDSV) c->pend_sv = false;
-                else if (exc == EXC_SYSTICK) c->pend_systick = false;
-                else if (exc == EXC_SVCALL) c->pend_svc_pending = false;
+                if (exc == EXC_NMI) c->pend &= ~PEND_NMI;
+                else if (exc == EXC_HARDFAULT) c->pend &= ~PEND_HARDFAULT;
+                else if (exc == EXC_PENDSV) c->pend &= ~PEND_PENDSV;
+                else if (exc == EXC_SYSTICK) c->pend &= ~PEND_SYSTICK;
+                else if (exc == EXC_SVCALL) c->pend &= ~PEND_SVC;
                 else if (exc >= EXC_IRQ0) c->nvic_sw_pend &= ~(1u << (exc - EXC_IRQ0));
                 c->sleeping = false;
                 exc_entry(c, exc);
@@ -593,39 +616,42 @@ uint64_t cpu_run(cpu_t *c, uint64_t target) {
         if (ipc < SIM_ROM_SIZE && bootrom_hle_dispatch(c, ipc)) {
             c->cycles++;
             c->instr++;
-            s->instr_total++;
-            s->progress++;
             continue;
         }
 
-        uint16_t op = (uint16_t)bus_read(s, ipc, 2, NULL);
+        uint16_t op = fetch16(s, ipc);
 
         c->cur_pc = ipc;
-        if (s->cfg.break_pc && ipc == s->cfg.break_pc) cpu_dump(c, "breakpoint");
-        if (s->bp_count) {
-            if (s->bp_skip_core == c->id + 1u && s->bp_skip_pc == ipc) {
-                s->bp_skip_core = 0; // one instruction of grace, then armed again
-            } else {
-                // Stop *before* the instruction, with PC still on it, which is
-                // what a debugger expects to see.
-                for (unsigned i = 0; i < s->bp_count; i++) {
-                    if (s->bp[i] != ipc) continue;
-                    c->r[15]       = ipc;
-                    s->halted      = true;
-                    s->halt_core   = c->id;
-                    s->halt_signal = 5; // SIGTRAP
-                    return c->cycles;
+        // Nothing here is armed in an ordinary run, so pay for one test rather
+        // than one branch per feature. Bitwise on purpose: all three are cheap
+        // loads and short-circuiting them just buys extra branches.
+        if (s->cfg.break_pc | s->bp_count | (unsigned)trace_enabled()) {
+            if (s->cfg.break_pc && ipc == s->cfg.break_pc) cpu_dump(c, "breakpoint");
+            if (s->bp_count) {
+                if (s->bp_skip_core == c->id + 1u && s->bp_skip_pc == ipc) {
+                    s->bp_skip_core = 0; // one instruction of grace, then armed again
+                } else {
+                    // Stop *before* the instruction, with PC still on it, which is
+                    // what a debugger expects to see.
+                    for (unsigned i = 0; i < s->bp_count; i++) {
+                        if (s->bp[i] != ipc) continue;
+                        c->r[15]       = ipc;
+                        s->halted      = true;
+                        s->halt_core   = c->id;
+                        s->halt_signal = 5; // SIGTRAP
+                        return c->cycles;
+                    }
                 }
             }
+            if (trace_enabled()) trace_record(c->id, ipc, op);
         }
-        if (trace_enabled()) trace_record(c->id, ipc, op);
         stall_check(c, ipc);
 
         c->r[15] = ipc + 2u;
 
         if ((op & 0xF800u) >= 0xE800u) {
             // 32-bit encodings live in 0xE800..0xFFFF (11101/11110/11111).
-            uint16_t hw2 = (uint16_t)bus_read(s, ipc + 2u, 2, NULL);
+            uint16_t hw2 = fetch16(s, ipc + 2u);
             c->r[15]     = ipc + 4u;
             if ((op & 0xF800u) == 0xF000u || (op & 0xF800u) == 0xF800u) {
                 exec_thumb32(c, ipc, op, hw2);
@@ -650,8 +676,6 @@ uint64_t cpu_run(cpu_t *c, uint64_t target) {
 
         c->cycles++;
         c->instr++;
-        s->instr_total++;
-        s->progress++;
     }
 
     if (c->cycles < target && s->stop_requested) c->cycles = target;
@@ -1093,7 +1117,7 @@ static void exec16(cpu_t *c, uint32_t pc, uint16_t op) {
                 unsigned cond = (op >> 8) & 0xFu;
                 if (cond == 0xFu) { // SVC
                     LOG_D(LOG_D_EXC, "core%u SVC #%u at %08x", c->id, op & 0xFFu, pc);
-                    c->pend_svc_pending = true;
+                    c->pend |= PEND_SVC;
                     return;
                 }
                 if (cond == 0xEu) {

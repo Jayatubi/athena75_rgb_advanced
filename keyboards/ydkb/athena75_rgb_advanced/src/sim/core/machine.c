@@ -18,21 +18,36 @@ static void log_clock(void *ctx, int *core, uint64_t *us, uint64_t *instr) {
     sim_t *s = ctx;
     *core    = (int)s->cur_core;
     *us      = sim_now_us(s);
-    *instr   = s->instr_total;
+    *instr   = sim_instr_total(s);
 }
 
-void sim_add_poll(sim_t *s, sim_poll_fn fn, void *ctx) {
+void sim_add_poll_every(sim_t *s, sim_poll_fn fn, void *ctx, uint64_t period_cycles) {
     if (s->poll_count >= 16) {
         LOG_E(LOG_D_SIM, "poll table full");
         return;
     }
-    s->polls[s->poll_count].fn  = fn;
-    s->polls[s->poll_count].ctx = ctx;
+    s->polls[s->poll_count].fn     = fn;
+    s->polls[s->poll_count].ctx    = ctx;
+    s->polls[s->poll_count].period = period_cycles;
+    s->polls[s->poll_count].next   = s->cycles;
     s->poll_count++;
 }
 
+void sim_add_poll(sim_t *s, sim_poll_fn fn, void *ctx) {
+    sim_add_poll_every(s, fn, ctx, 0);
+}
+
 void sim_periph_poll(sim_t *s) {
-    for (unsigned i = 0; i < s->poll_count; i++) s->polls[i].fn(s, s->polls[i].ctx);
+    for (unsigned i = 0; i < s->poll_count; i++) {
+        // While halted the cycle count is frozen, so a periodic poller would
+        // never come due again -- and the debugger socket that put us here is
+        // exactly one of those. Run everything instead.
+        if (s->polls[i].period && !s->halted) {
+            if (s->cycles < s->polls[i].next) continue;
+            s->polls[i].next = s->cycles + s->polls[i].period;
+        }
+        s->polls[i].fn(s, s->polls[i].ctx);
+    }
 }
 
 void sim_irq_set(sim_t *s, unsigned irq, bool level) {
@@ -234,7 +249,7 @@ uint64_t sim_run_cycles(sim_t *s, uint64_t max_cycles) {
         deadlock_check(s);
         profile_sample(s);
 
-        if (s->stop_after_instr && s->instr_total >= s->stop_after_instr) {
+        if (s->stop_after_instr && sim_instr_total(s) >= s->stop_after_instr) {
             LOG_I(LOG_D_SIM, "instruction budget %llu reached",
                   (unsigned long long)s->stop_after_instr);
             s->stop_requested = true;

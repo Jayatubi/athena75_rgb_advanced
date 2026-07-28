@@ -596,7 +596,7 @@ bool gdb_start(sim_t *s, uint16_t port, bool wait) {
 
     int fl = fcntl(g->listen_fd, F_GETFL, 0);
     if (fl >= 0) fcntl(g->listen_fd, F_SETFL, fl | O_NONBLOCK);
-    sim_add_poll(s, gdb_poll, g);
+    sim_add_poll_every(s, gdb_poll, g, SIM_NET_POLL_CYCLES);
     return true;
 }
 
