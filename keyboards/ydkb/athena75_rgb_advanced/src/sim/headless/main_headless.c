@@ -304,7 +304,15 @@ int main(int argc, char **argv) {
     while ((run_ms == 0 || ms < run_ms) && !s->stop_requested) {
         for (unsigned k = 0; k < key_count; k++) {
             // Held for 40 ms, which comfortably clears the debounce filter.
-            bool want = ms >= keys[k].at_ms && ms < keys[k].at_ms + 40u;
+            // Tapping one position several times in a run means several entries
+            // naming it, so the state is the union of their windows: deciding
+            // per entry lets a later one release what an earlier one is holding,
+            // and the position just chatters at the step rate.
+            bool want = false;
+            for (unsigned j = 0; j < key_count && !want; j++) {
+                if (keys[j].row != keys[k].row || keys[j].col != keys[k].col) continue;
+                want = ms >= keys[j].at_ms && ms < keys[j].at_ms + 40u;
+            }
             if (want != board_get_key(s, keys[k].row, keys[k].col)) {
                 LOG_I(LOG_D_MATRIX, "scripted %s of (%u,%u) at %llu ms",
                       want ? "press" : "release", keys[k].row, keys[k].col,

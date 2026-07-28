@@ -49,6 +49,12 @@ CASES = [
                  "--key", "8,2,300", "--run-ms", "2500"]),
 ]
 
+# Not covered yet, and worth adding once it can be made reliable: launching an
+# app and opening its menu. That path crosses cores -- the app asks on core1,
+# core0 acts on it in housekeeping -- and it broke once with every screen these
+# cases do check still pixel-identical. Scripting it runs into the LCD idle
+# timeout and core1 parking, so it needs its own look rather than a flaky case.
+
 
 def png_pixels(path):
     data = open(path, "rb").read()

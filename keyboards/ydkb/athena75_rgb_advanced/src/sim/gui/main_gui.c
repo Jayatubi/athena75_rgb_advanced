@@ -235,8 +235,9 @@ int main(int argc, char **argv) {
     // window should already exist by then.
     if (gdb_port_arg >= 0 && !gdb_start(s, (uint16_t)gdb_port_arg, gdb_wait)) return 1;
 
-    bool     running = true;
-    bool     paused  = false;
+    bool     running  = true;
+    bool     paused   = false;
+    bool     gif_held = false;
     uint64_t frames  = 0;
     uint32_t t_prev  = SDL_GetTicks();
     uint32_t t_step  = t_prev;
@@ -272,6 +273,17 @@ int main(int argc, char **argv) {
                             LOG_W(LOG_D_GUI, "no --flash path to save to");
                         }
                         continue;
+                    case SDL_SCANCODE_G:
+                        // The GIF key is what switches the firmware out of
+                        // plain-keyboard mode into the OS, and the board puts
+                        // it on F13, which most keyboards do not have. Without
+                        // an alias the launcher is only reachable by mouse.
+                        if (e.key.keysym.mod & (KMOD_CTRL | KMOD_GUI)) {
+                            board_set_key(s, 8, 2, true);
+                            gif_held = true;
+                            continue;
+                        }
+                        break;
                     case SDL_SCANCODE_F2:
                         kbd.show_leds = !kbd.show_leds;
                         continue;
@@ -303,6 +315,14 @@ int main(int argc, char **argv) {
             if (panels_event(&panels, s, &e)) continue;
             if (kbd_view_event(&kbd, s, &e)) continue;
 
+            // Ctrl+G is a tap: release on the G keyup, whether or not Ctrl is
+            // still down by then.
+            if (e.type == SDL_KEYUP && e.key.keysym.scancode == SDL_SCANCODE_G && gif_held) {
+                board_set_key(s, 8, 2, false);
+                gif_held = false;
+                continue;
+            }
+
             // Anything left that maps onto the matrix drives the board directly.
             if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
                 unsigned row, col;
@@ -316,11 +336,14 @@ int main(int argc, char **argv) {
         // the firmware's debounce filter.
         const uint64_t now_ms = sim_now_us(s) / 1000u;
         for (unsigned k = 0; k < key_count; k++) {
-            if (now_ms >= keys[k].at_ms && now_ms < keys[k].at_ms + 40u) {
-                board_set_key(s, keys[k].row, keys[k].col, true);
-            } else if (now_ms >= keys[k].at_ms + 40u) {
-                board_set_key(s, keys[k].row, keys[k].col, false);
+            // The union of every window naming this position, so that two taps
+            // of the same key do not cancel each other out.
+            bool want = false;
+            for (unsigned j = 0; j < key_count && !want; j++) {
+                if (keys[j].row != keys[k].row || keys[j].col != keys[k].col) continue;
+                want = now_ms >= keys[j].at_ms && now_ms < keys[j].at_ms + 40u;
             }
+            board_set_key(s, keys[k].row, keys[k].col, want);
         }
 
         if (!paused && !s->stop_requested) {
@@ -351,8 +374,8 @@ int main(int argc, char **argv) {
         (void)sym;
         SDL_Color dim = {120, 120, 132, 255};
         draw_text(ren, atlas, 16, WIN_H - 22, 1, paused ? (SDL_Color){235, 190, 90, 255} : dim,
-                  "%s%s%s  %.2f s virtual  %.2fx real time  |  Ctrl+Space pause  Ctrl+Tab turbo  "
-                  "F2 leds  F3 scan  F5 flash  F6/F7 state  F9 shot",
+                  "%s%s%s  %.2f s virtual  %.2fx real time  |  Ctrl+G enter OS  Ctrl+Space pause  "
+                  "Ctrl+Tab turbo  F2 leds  F3 scan  F5 flash  F6/F7 state  F9 shot",
                   paused ? "PAUSED  " : "", turbo ? "TURBO  " : "", s->halted ? "GDB HALT  " : "",
                   sim_now_us(s) / 1e6, (double)speed);
 
