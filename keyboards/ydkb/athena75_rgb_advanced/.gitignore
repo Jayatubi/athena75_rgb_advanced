@@ -1,0 +1,10 @@
+# athena_sim build output and scratch state. The simulator's 16 MiB flash image
+# and its save-states are per-developer working data, never committed.
+build/
+*.bin
+*.state
+src/sim/third_party/
+
+# The root .gitignore drops every *.png; the regression goldens have to be
+# tracked or tools/sim_regress.py has nothing to compare against.
+!tests/golden/*.png

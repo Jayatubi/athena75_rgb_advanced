@@ -1,0 +1,123 @@
+# athena_sim — full-system emulator for athena75_rgb_advanced
+
+Runs the **shipped firmware and apps unmodified**: no `#ifdef SIMULATOR`, no
+special build. `artifacts/firmware/*.uf2` is loaded into a 16 MiB flash image and
+executed from reset by an ARMv6-M interpreter, through the real bootrom entry
+points, the real ChibiOS scheduler, the real USB enumeration, and out to a
+modelled GC9107 panel and WS2812 chain.
+
+    bash tools/build_sim.sh          # -> artifacts/sim/<os>/athena_sim{,_cli}
+    bash tools/build_sim.sh --test   # ... and run the pixel regression
+
+Objects stay in `build/sim/`; only the executables are archived. They are not
+committed — see `artifacts/sim/readme.txt`. Paths below say `macos`; substitute
+your own.
+
+## The two front ends
+
+`athena_sim` is one SDL2 window: the 128x128 panel on the left, the virtual
+keyboard below it, and a state/log panel on the right. Click a key or type on
+your real keyboard — either way it closes a matrix intersection and the firmware
+finds it by walking the GP6/GP7 shift chain, exactly as on hardware. Keycaps are
+tinted with the live WS2812 colour under them.
+
+    artifacts/sim/macos/athena_sim --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 \
+                         --flash flash.bin
+
+| Key | |
+|-----|---|
+| `Ctrl+Space` | pause (plain Space is a matrix key) |
+| `Ctrl+Tab` | turbo — stop pacing to real time |
+| `F5` | write the flash image back to `--flash` |
+| `F6` / `F7` | save / reload the whole machine |
+| `F9` | PNG of the panel alone |
+
+The window also takes `--hid-port`, `--ctl-port` and `--gdb`, so host_tool, a
+script and a debugger can all be attached to the machine you are watching.
+
+`athena_sim_cli` is the same machine with no window, for scripting and CI:
+
+    artifacts/sim/macos/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin \
+        --install-app artifacts/apps/maze.app --run-ms 4000 --png screen.png
+
+## What is modelled
+
+| Area | Notes |
+|------|-------|
+| CPU | Two ARMv6-M cores, interleaved in one thread; exceptions, PendSV/SVC, `EXC_RETURN`, MSP/PSP banking |
+| Boot | Synthetic bootrom (HLE flash routines), real boot2 executed out of SRAM |
+| Flash | W25Q128 at command level (JEDEC `EF 40 18`), 4 KiB erase, 256 B page program, all four XIP alias windows |
+| Clocks | RESETS/XOSC/PLL/CLOCKS/WATCHDOG — every ready and lock bit asserts immediately |
+| Timing | TIMER with four alarms drives the ChibiOS tick; per-core NVIC |
+| SIO | Inter-core FIFO (including the core1 launch handshake), spinlocks, and the **per-core** divider and interpolators |
+| USB | Device controller + DPSRAM + a virtual host that completes standard enumeration |
+| LCD | PL022 SPI1 into a GC9107 slave: CASET/RASET/RAMWR, the +2/+1 viewport offset, INVON, a real 128x128 GRAM |
+| Matrix | The 88-stage GP6/GP7 shift chain, GP8/9/10 direct inputs, and GP7's double duty as the backlight |
+| RGB | DMA-paced PIO0 TX FIFO decoded into 86 WS2812 LEDs |
+
+Not modelled: cycle accuracy, the USB physical layer, and PIO as an instruction
+set (the FIFO words are decoded directly, which is all the WS2812 program does).
+
+## Talking to it with the real host_tool
+
+The emulated Raw HID interface can be published on a TCP port, and `host_tool`
+has a matching backend, so every command works against the emulator unchanged:
+
+    artifacts/sim/macos/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin --realtime --hid-port 4711
+    export ATHENA_HID_SIM=127.0.0.1:4711
+    host_tool diag / probe jedec / snapshot -o s.png / backup -o ee.bin / app install maze.app
+
+`--realtime` matters here: the emulator runs at roughly a fifth of real speed, so
+without it `host_tool`'s wall-clock timeouts are effectively five times tighter.
+
+Commands that need an on-screen confirmation (`app install`, `restore`) want a
+keypress. The GUI takes `--hid-port` too, and there the nicer answer is to watch
+the firmware draw its `LOAD APP` box and click INSTALL with the mouse. Headless,
+use the control socket.
+
+## Control socket
+
+`--ctl-port N` accepts one command per line, one reply per line:
+
+| Command | Effect |
+|---------|--------|
+| `key 9,0[,MS]` | tap a matrix position for MS *virtual* ms (default 40) |
+| `down 9,0` / `up 9,0` | press and hold / release |
+| `shot out.png` | dump the panel GRAM |
+| `leds` | WS2812 chain summary |
+| `state` | one line of machine state |
+| `log usb=debug` | retune logging while it runs |
+| `save f.state` / `load f.state` | whole-machine save and restore |
+| `quit` | stop, flushing the flash image |
+
+Enter is `9,0`, which is what confirms an install dialog.
+
+## Debugging
+
+- **Logging** is per-domain and per-level: `--log 'usb=debug,lcd=trace,*=info'`,
+  or `ATHENA_SIM_LOG`, or the checkboxes in the GUI panel. `--log-file` writes
+  JSONL. Scheduling is deterministic, so two runs of the same input produce
+  logs that diff line for line.
+- **Symbols**: pass `--elf .build/*.elf` and PCs are reported as
+  `matrix_scan+0x1a` in logs, traces, breakpoints, and the profiler.
+- **GDB**: `--gdb 3333` (add `--gdb-wait` to halt at reset), then
+  `arm-none-eabi-gdb .build/*.elf -ex 'target remote :3333'`. The two cores show
+  up as threads 1 and 2.
+- **Save states** capture the whole machine including flash, and restore
+  bit-exactly: resuming a state and running further lands on the same
+  instruction count as an uninterrupted run.
+- Also available: `--trace-file` instruction traces, `--watch ADDR[,LEN]`
+  memory watchpoints, `--break SYM|ADDR`, `--strict-mmio`, and a sampling
+  profiler printed at the end of every run.
+
+## Regression tests
+
+`tools/sim_regress.py` boots each case from a blank flash, drives keys, and
+compares the panel dump against `tests/golden/`. Matches are byte-exact rather
+than approximate, so any difference is a real behaviour change. The emulator's
+RGB565→RGB888 conversion is identical to `src/host/common/`'s, which means a
+golden can also be recorded from real hardware with `host_tool snapshot`.
+
+    tools/sim_regress.py                    # check
+    tools/sim_regress.py --bless            # re-record
+    tools/sim_regress.py --case launcher    # one case
