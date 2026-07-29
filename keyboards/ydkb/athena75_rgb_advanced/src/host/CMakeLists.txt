@@ -47,7 +47,8 @@ add_library(athena_host STATIC ${COMMON_SRC})
 target_include_directories(athena_host PUBLIC common)
 
 if(WIN32)
-    target_link_libraries(athena_host PUBLIC setupapi hid)
+    # ws2_32: hid_sim.c reaches athena_sim over a TCP socket.
+    target_link_libraries(athena_host PUBLIC setupapi hid ws2_32)
 elseif(APPLE)
     target_link_libraries(athena_host PUBLIC "-framework IOKit" "-framework CoreFoundation")
 endif()
