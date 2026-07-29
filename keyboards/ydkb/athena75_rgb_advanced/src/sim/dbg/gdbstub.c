@@ -17,6 +17,8 @@
 #include "../core/log.h"
 #include "../core/sim.h"
 
+#include "../jit/jit.h"
+
 #include "../core/os.h"
 
 #include <stdio.h>
@@ -276,6 +278,10 @@ static void cmd_write_mem(gdb_t *g, char *args) {
         uint8_t *p = bus_mem_ptr(g->sim, addr + i, 1);
         if (p) *p = (uint8_t)((hi << 4) | lo);
     }
+    // Writing straight through bus_mem_ptr is the point of this packet -- a
+    // debugger patching code must not trip watchpoints or MMIO -- but it also
+    // means the store path never saw it.
+    jit_invalidate_range(g->sim, addr, len);
     send_packet(g, "OK");
 }
 

@@ -8,6 +8,8 @@
 
 #include "../core/sim.h"
 
+#include "../jit/jit.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -78,6 +80,9 @@ void flash_erase_range(sim_t *s, uint32_t off, uint32_t len, const char *via) {
           flash_partition_name(off, part, sizeof(part)), via);
     dump_writer(s, "flash erase");
     memset(s->flash + off, 0xFF, len);
+    // The documented single choke point for flash modification, which makes it the
+    // one place a translated block living in flash can stop being true.
+    jit_invalidate_range(s, SIM_XIP_BASE + off, len);
     s_erase_ops++;
     s_bytes += len;
     s_dirty = true;
@@ -107,6 +112,7 @@ void flash_program_range(sim_t *s, uint32_t off, const uint8_t *data, uint32_t l
         LOG_W(LOG_D_FLASH, "program at %08x tried to set bits without erase (NOR AND applied)",
               off);
     }
+    jit_invalidate_range(s, SIM_XIP_BASE + off, len);
     s_program_ops++;
     s_bytes += len;
     s_dirty = true;
@@ -123,6 +129,7 @@ int flash_image_load(sim_t *s, const char *path) {
     fclose(f);
     if (n < SIM_FLASH_SIZE) memset(s->flash + n, 0xFF, SIM_FLASH_SIZE - n);
     LOG_I(LOG_D_FLASH, "loaded backing store %s (%zu bytes)", path, n);
+    jit_flush_all(s); // every byte of flash just changed
     s_dirty = false;
     return (int)n;
 }

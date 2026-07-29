@@ -71,14 +71,23 @@ static void usage(const char *argv0) {
             "  --load-state PATH     resume a saved machine\n"
             "  --save-state PATH     where F6 writes and F7 reads back\n"
             "  --skip-boot2          jump straight to the vector table\n"
-            "  --strict-mmio         abort on the first unmapped MMIO access\n",
+            "  --strict-mmio         abort on the first unmapped MMIO access\n"
+            "  --jit                 execute a block at a time, interpreted\n"
+            "  --jit-native          and as host machine code where possible (default)\n"
+            "  --no-jit              force the plain interpreter\n",
             argv0);
 }
 
 int main(int argc, char **argv) {
     log_init();
 
+    // Blocks, and machine code for them where there is a backend. --no-jit is the
+    // reference implementation and stays one instruction at a time; anything that
+    // wants to see instructions individually -- a breakpoint, a watchpoint, a trace --
+    // falls back to it on its own.
     sim_config_t cfg = {0};
+    cfg.jit          = true;
+    cfg.jit_native   = true;
     const char  *uf2[8];
     unsigned     uf2_count = 0;
     const char  *install_app[16];
@@ -157,6 +166,15 @@ int main(int argc, char **argv) {
             cfg.skip_boot2 = true;
         } else if (!strcmp(a, "--strict-mmio")) {
             cfg.strict_mmio = true;
+        } else if (!strcmp(a, "--jit")) {
+            cfg.jit        = true;
+            cfg.jit_native = false;
+        } else if (!strcmp(a, "--jit-native")) {
+            cfg.jit        = true;
+            cfg.jit_native = true;
+        } else if (!strcmp(a, "--no-jit")) {
+            cfg.jit        = false;
+            cfg.jit_native = false;
         } else if (!strcmp(a, "--hid-port")) {
             const char *v;
             NEED(v);

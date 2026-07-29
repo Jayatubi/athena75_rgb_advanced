@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef _WIN32
@@ -45,3 +46,34 @@ const char *sock_lasterror(void);
 
 uint64_t os_now_us(void);
 void     os_sleep_us(uint64_t us);
+
+// ---- executable memory ------------------------------------------------------
+//
+// For the native block backends in jit/. Emit into a region, then call
+// os_code_commit() over what was written before jumping to it.
+//
+// The pair looks redundant on x86, where the pages can simply stay writable and
+// executable and the caches are coherent, and that is exactly what happens there:
+// os_code_writable() is a no-op and os_code_commit() only flushes. It is not
+// redundant on Apple silicon, where the kernel refuses a page that is writable and
+// executable at the same time -- the region is mapped MAP_JIT and these two toggle
+// per-thread write protection around the emission. Callers therefore have to
+// bracket every emission, even though on most platforms it costs nothing.
+//
+// Both are per-block operations, so neither may be a system call on a path that
+// runs hundreds of thousands of times a second. That is why the region is mapped
+// once with its final permissions rather than mprotect()ed per block.
+//
+// The size is rounded up to whole pages internally. NULL means the platform would
+// not give us executable memory, which is not fatal -- the caller falls back to the
+// portable block executor.
+void *os_code_alloc(size_t size);
+void  os_code_free(void *p, size_t size);
+
+bool os_code_writable(void *p, size_t size);
+
+// Make written bytes runnable: drop write permission where the platform demands it
+// and tell the instruction cache. The cache step is the reason this cannot be
+// skipped on arm64, where instruction and data caches are not coherent and freshly
+// written code is otherwise not guaranteed to be what executes.
+bool os_code_commit(void *p, size_t size);

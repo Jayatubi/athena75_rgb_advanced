@@ -6,6 +6,18 @@
 // Nothing OS-related lives here; sockets and time are in os.h.
 #pragma once
 
+// Placing a function relative to its callers, where leaving it to the inliner is
+// not good enough. Both of these are load-bearing for the interpreter's speed --
+// see the comments around cpu_run_interp -- and a link-time optimiser that changes
+// its mind between builds swings it by nearly a third, so neither is advisory.
+#ifdef _MSC_VER
+#    define SIM_NOINLINE    __declspec(noinline)
+#    define SIM_FORCEINLINE __forceinline
+#else
+#    define SIM_NOINLINE    __attribute__((noinline))
+#    define SIM_FORCEINLINE inline __attribute__((always_inline))
+#endif
+
 #ifdef _MSC_VER
 #    include <intrin.h>
 #    include <string.h>

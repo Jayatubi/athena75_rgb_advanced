@@ -145,6 +145,9 @@ typedef struct {
     uint32_t    watch_len;
     uint64_t    watch_after_us; // ignore watch hits before this virtual time
     uint32_t    break_pc;     // dump registers whenever a core reaches this PC
+    bool        jit;          // execute a block at a time instead of an instruction
+    bool        jit_verify;   // run every block both ways and compare
+    bool        jit_native;   // emit host machine code for blocks, where there is a backend
 } sim_config_t;
 
 struct sim {
@@ -156,6 +159,11 @@ struct sim {
 
     cpu_t    cpu[SIM_NUM_CORES];
     unsigned cur_core;           // core currently executing (for log stamping)
+
+    // Set by any store or MMIO access, cleared by the scheduler before each
+    // core's slice. A core that gets through a whole slice without setting it
+    // cannot have changed anything the rest of the machine can observe.
+    bool side_effects[SIM_NUM_CORES];
 
     uint64_t cycles;             // machine scheduling reference
 
@@ -181,6 +189,9 @@ struct sim {
     void *dma;
     void *matrix;
     void *rgb;
+
+    // Block translation cache (jit/*.c), NULL unless cfg.jit is set.
+    void *jit;
 
     struct {
         sim_poll_fn fn;
@@ -208,6 +219,12 @@ struct sim {
     bool     bootsel_requested; // reset_usb_boot() called
     uint64_t stop_after_instr;   // 0 = unlimited
 
+    // One byte per 256-byte granule of SRAM, non-zero while a translated block
+    // lives there, so a store can rule itself out with a single indexed load.
+    // Last on purpose: a kilobyte in the middle of this struct would push the
+    // fields the instruction loop reads onto different cache lines, which costs
+    // more than the whole invalidation scheme saves.
+    uint8_t sram_code[SIM_SRAM_SIZE >> 8];
 };
 
 // ---- lifecycle --------------------------------------------------------------
@@ -222,6 +239,27 @@ uint64_t sim_run_cycles(sim_t *s, uint64_t max_cycles);
 
 // Report the `top` hottest sampled PCs. Cheap answer to "where is it stuck".
 void sim_profile_report(sim_t *s, unsigned top);
+
+// ---- basic block census -----------------------------------------------------
+//
+// Executing a block at a time only pays off if the guest's blocks are long
+// enough to amortise entering one, and the PC sampler above cannot answer that:
+// it samples where time goes, not what shape the code has. This counts how many
+// instructions run between one non-sequential PC and the next.
+
+extern bool g_prof_blocks; // hot-path guard, folded into the interpreter's debug gate
+
+static inline bool prof_blocks_enabled(void) {
+    return g_prof_blocks;
+}
+
+void prof_blocks_enable(bool on);
+
+// Called for each instruction while enabled. `seq_next` is the address that
+// follows this instruction in memory, so a `pc` that is not the previous
+// instruction's `seq_next` is the start of a new block.
+void prof_block_step(unsigned core, uint32_t pc, uint32_t seq_next);
+void prof_blocks_report(unsigned top);
 
 // Advance by roughly `us` of virtual time.
 void sim_run_us(sim_t *s, uint64_t us);

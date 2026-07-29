@@ -84,8 +84,10 @@ A real keyboard and several emulators can be up together: `host_tool devices`
 lists them all and `--device sim:127.0.0.1:4711` picks this one for a single
 command, which is the same thing without the exported environment variable.
 
-`--realtime` matters here: the emulator runs at roughly a fifth of real speed, so
-without it `host_tool`'s wall-clock timeouts are effectively five times tighter.
+`--realtime` matters here: the emulator runs at roughly three quarters of real
+speed, so without it `host_tool`'s wall-clock timeouts are correspondingly
+tighter. `--host-mhz` reports what that costs per guest instruction, and
+`--prof-blocks` reports the shape of the code it is spending it on.
 
 Commands that need an on-screen confirmation (`app install`, `restore`) want a
 keypress. The GUI takes `--hid-port` too, and there the nicer answer is to watch
@@ -126,6 +128,36 @@ Enter is `9,0`, which is what confirms an install dialog.
 - Also available: `--trace-file` instruction traces, `--watch ADDR[,LEN]`
   memory watchpoints, `--break SYM|ADDR`, `--strict-mmio`, and a sampling
   profiler printed at the end of every run.
+
+## How it runs guest code
+
+Three ways, from the slowest and simplest to the fastest, all of which retire the
+same instructions in the same order:
+
+| | |
+|---|---|
+| `--no-jit` | one instruction at a time; the reference implementation |
+| `--jit` | a basic block at a time, decoded once and cached |
+| `--jit-native` | those blocks as host machine code — **the default** |
+
+There is a backend for x86-64 and one for arm64 (`jit/jit_x64.c`, `jit/jit_a64.c`);
+anywhere else, `--jit-native` quietly means `--jit`. On an M4 a fourteen-second run
+of the firmware goes 0.79x realtime interpreted, 0.93x in blocks, and 1.46x with
+machine code — 32 host cycles per guest instruction down to 17.
+
+Emitted code covers the common encodings and hands the rest — PUSH/POP, LDM/STM, the
+high-register forms, shifts by a register — to the interpreter one instruction at a
+time from inside the block, which is why about 95% of retired instructions are native
+even though the covered set is smaller than that. Loads inline the SRAM case; stores
+always go through the bus, so a store to MMIO, to a granule holding translated code,
+or to flash behaves exactly as it does interpreted.
+
+Anything that wants to see instructions individually turns machine code off by
+itself: a breakpoint, a watchpoint, `--trace`, `--prof-blocks`, and GDB single-step
+all fall back for as long as they are armed. Two ways to check the rest:
+
+    athena_sim_cli ... --jit-verify      # re-read the guest bytes under every block
+    tools/sim_regress.py --extra=--no-jit && tools/sim_regress.py --extra=--jit-native
 
 ## Regression tests
 

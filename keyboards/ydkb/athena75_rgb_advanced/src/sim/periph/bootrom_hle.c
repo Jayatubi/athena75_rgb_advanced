@@ -8,6 +8,8 @@
 // reset_usb_boot behave exactly like the ROM without emulating its code.
 
 #include "../core/sim.h"
+
+#include "../jit/jit.h"
 #include "../core/symbols.h"
 
 #include <stdlib.h>
@@ -214,6 +216,9 @@ bool bootrom_hle_dispatch(cpu_t *c, uint32_t pc) {
             uint8_t *p = bus_mem_ptr(s, ptr, n);
             if (p) {
                 memset(p, (int)val, n);
+                // The direct write skipped the store path, and the firmware does
+                // use these stubs to move code into RAM.
+                jit_invalidate_range(s, ptr, n);
             } else {
                 for (uint32_t i = 0; i < n; i++) bus_write(s, ptr + i, val, 1, NULL);
             }
@@ -237,6 +242,7 @@ bool bootrom_hle_dispatch(cpu_t *c, uint32_t pc) {
             uint8_t *sp = bus_mem_ptr(s, src, n);
             if (dp && sp) {
                 memmove(dp, sp, n);
+                jit_invalidate_range(s, dst, n);
             } else {
                 for (uint32_t i = 0; i < n; i++) {
                     bus_write(s, dst + i, bus_read(s, src + i, 1, NULL), 1, NULL);

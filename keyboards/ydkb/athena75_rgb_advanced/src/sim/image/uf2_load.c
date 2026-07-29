@@ -6,6 +6,8 @@
 
 #include "../core/sim.h"
 
+#include "../jit/jit.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -71,6 +73,7 @@ int uf2_load(sim_t *s, const char *path) {
         LOG_E(LOG_D_SIM, "UF2 %s contained no usable blocks", path);
         return -1;
     }
+    jit_invalidate_range(s, SIM_XIP_BASE + lo, hi - lo);
 
     char part_lo[48], part_hi[48];
     LOG_I(LOG_D_SIM, "loaded %s: %d blocks, flash %06x..%06x (%s..%s), %u bytes", path, applied,

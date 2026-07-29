@@ -58,6 +58,11 @@ add_library(athena_sim_core STATIC
   ${SIM_ROOT}/core/cpu_armv6m.c
   ${SIM_ROOT}/core/machine.c
   ${SIM_ROOT}/core/state.c
+  ${SIM_ROOT}/jit/jit_a64.c
+  ${SIM_ROOT}/jit/jit_cache.c
+  ${SIM_ROOT}/jit/jit_code.c
+  ${SIM_ROOT}/jit/jit_frontend.c
+  ${SIM_ROOT}/jit/jit_x64.c
   ${SIM_ROOT}/dbg/gdbstub.c
   ${SIM_ROOT}/periph/resets.c
   ${SIM_ROOT}/periph/clocks.c

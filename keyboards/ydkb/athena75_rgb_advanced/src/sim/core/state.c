@@ -6,6 +6,8 @@
 #include "log.h"
 #include "sim.h"
 
+#include "../jit/jit.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -254,6 +256,10 @@ int sim_state_load(sim_t *s, const char *path) {
     }
     fclose(f);
     if (!ok) return -1;
+
+    // Flash, SRAM and both cores were all just replaced wholesale. Nothing about a
+    // block translated for the machine that was here a moment ago is still true.
+    jit_flush_all(s);
 
     LOG_I(LOG_D_SIM, "restored machine state from %s at %.3f ms, core0 pc=%08x core1 %s", path,
           sim_now_us(s) / 1000.0, s->cpu[0].r[15], s->cpu[1].running ? "running" : "halted");

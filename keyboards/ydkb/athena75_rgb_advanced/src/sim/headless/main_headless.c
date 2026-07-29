@@ -10,6 +10,7 @@
 #include "../core/symbols.h"
 #include "../core/state.h"
 #include "../dbg/gdbstub.h"
+#include "../jit/jit.h"
 #include "../net/ctl_server.h"
 #include "../net/hid_bridge.h"
 
@@ -57,7 +58,13 @@ static void usage(const char *argv0) {
             "                        uses larger slices, so this reproduces its schedule)\n"
             "  --stop-after N        stop after N retired instructions\n"
             "  --break SYMBOL        stop when a symbol is reached\n"
-            "  --prof-top N          how many hot PCs to report (default 8)\n",
+            "  --prof-top N          how many hot PCs to report (default 8)\n"
+            "  --prof-blocks         report how long the guest's basic blocks are\n"
+            "  --host-mhz F          host clock, to report host cycles per guest instruction\n"
+            "  --jit                 execute a block at a time, interpreted\n"
+            "  --jit-native          and as host machine code where possible (default)\n"
+            "  --no-jit              force the plain interpreter\n"
+            "  --jit-verify          re-read the guest bytes under every block it runs\n",
             argv0);
 }
 
@@ -71,7 +78,13 @@ typedef struct {
 int main(int argc, char **argv) {
     log_init();
 
+    // Blocks, and machine code for them where there is a backend. --no-jit is the
+    // reference implementation and stays one instruction at a time; anything that
+    // wants to see instructions individually -- a breakpoint, a watchpoint, a trace --
+    // falls back to it on its own.
     sim_config_t cfg = {0};
+    cfg.jit          = true;
+    cfg.jit_native   = true;
     cfg.quantum      = 64;
 
     const char *uf2[MAX_UF2];
@@ -98,6 +111,8 @@ int main(int argc, char **argv) {
     unsigned    dump_flash_writes = 0;
     uint64_t    slice_us    = 1000;
     unsigned    prof_top    = 8;
+    bool        prof_blocks = false;
+    double      host_mhz    = 0.0;
     const char *whatis      = NULL;
     keypress_t  keys[MAX_KEYS];
     unsigned    key_count = 0;
@@ -204,6 +219,24 @@ int main(int argc, char **argv) {
             const char *p;
             NEED(p);
             slice_us = strtoull(p, NULL, 0);
+        } else if (!strcmp(a, "--prof-blocks")) {
+            prof_blocks = true;
+        } else if (!strcmp(a, "--jit")) {
+            cfg.jit        = true;
+            cfg.jit_native = false;
+        } else if (!strcmp(a, "--no-jit")) {
+            cfg.jit        = false;
+            cfg.jit_native = false;
+        } else if (!strcmp(a, "--jit-native")) {
+            cfg.jit        = true;
+            cfg.jit_native = true;
+        } else if (!strcmp(a, "--jit-verify")) {
+            cfg.jit        = true;
+            cfg.jit_verify = true;
+        } else if (!strcmp(a, "--host-mhz")) {
+            const char *p;
+            NEED(p);
+            host_mhz = atof(p);
         } else if (!strcmp(a, "--prof-top")) {
             const char *p;
             NEED(p);
@@ -293,9 +326,13 @@ int main(int argc, char **argv) {
     // Everything the run schedules is relative to where the machine starts, so
     // --run-ms and --key mean the same thing whether this is a cold boot or a
     // state restored from halfway through one.
-    const uint64_t ms0 = sim_now_us(s) / 1000u;
+    if (prof_blocks) prof_blocks_enable(true);
+
+    const uint64_t ms0    = sim_now_us(s) / 1000u;
+    const uint64_t instr0 = sim_instr_total(s);
+    const uint64_t wall_start_us = os_now_us();
     uint64_t       ms  = 0;
-    uint64_t wall0_us = cfg.realtime ? os_now_us() : 0;
+    uint64_t wall0_us = cfg.realtime ? wall_start_us : 0;
     while ((run_ms == 0 || ms < run_ms) && !s->stop_requested) {
         for (unsigned k = 0; k < key_count; k++) {
             // Held for 40 ms, which comfortably clears the debounce filter.
@@ -356,7 +393,29 @@ int main(int argc, char **argv) {
     LOG_I(LOG_D_SIM, "  flash: %llu erase, %llu program ops (%llu bytes)",
           (unsigned long long)erases, (unsigned long long)programs, (unsigned long long)bytes);
 
+    // How fast the simulation itself ran, which is a different question from how
+    // fast the guest thinks it is. Reported unconditionally because it costs one
+    // subtraction, and with --host-mhz also as host cycles per guest instruction --
+    // the number to compare against a budget, since it does not move when the guest
+    // spends a run idling.
+    {
+        uint64_t wall_us = os_now_us() - wall_start_us;
+        uint64_t instr   = sim_instr_total(s) - instr0;
+        if (wall_us) {
+            LOG_I(LOG_D_SIM, "  speed: %.3fx realtime (%llu ms virtual in %llu ms wall)",
+                  (double)ms * 1000.0 / (double)wall_us, (unsigned long long)ms,
+                  (unsigned long long)(wall_us / 1000u));
+            if (host_mhz > 0.0 && instr) {
+                LOG_I(LOG_D_SIM, "  %.1f host cycles per guest instruction (%llu retired)",
+                      host_mhz * (double)wall_us / (double)instr, (unsigned long long)instr);
+            }
+        }
+    }
+
     sim_profile_report(s, prof_top);
+    if (prof_blocks) prof_blocks_report(prof_top);
+    jit_stats_report(s);
+
     if (dump_regs) {
         cpu_dump(&s->cpu[0], "end of run");
         if (s->cpu[1].running) cpu_dump(&s->cpu[1], "end of run");

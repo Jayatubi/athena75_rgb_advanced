@@ -8,6 +8,8 @@
 #include "sim.h"
 #include "symbols.h"
 
+#include "../jit/jit.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -127,6 +129,10 @@ uint32_t bus_read(sim_t *s, uint32_t addr, unsigned size, bool *fault) {
         return v;
     }
 
+    // Not a plain-memory read: a register read can pop a FIFO or clear a latch,
+    // so it counts as having touched the machine even though it is a read.
+    s->side_effects[s->cur_core] = true;
+
     mmio_region_t *r = mmio_find(s, addr);
     if (!r) {
         log_once(LOG_D_MMIO, LOG_WARN, addr & ~0xFFFu,
@@ -167,6 +173,7 @@ uint32_t bus_read(sim_t *s, uint32_t addr, unsigned size, bool *fault) {
 
 void bus_write(sim_t *s, uint32_t addr, uint32_t val, unsigned size, bool *fault) {
     if (fault) *fault = false;
+    s->side_effects[s->cur_core] = true;
 
     if (addr < SIM_ROM_SIZE) {
         log_once(LOG_D_BUS, LOG_WARN, addr, "write %08x to bootrom ignored", addr);
@@ -192,6 +199,11 @@ void bus_write(sim_t *s, uint32_t addr, uint32_t val, unsigned size, bool *fault
             }
         }
         mem_store(p, val, size);
+        // Anything that reaches here rather than the interpreter's fast path can
+        // still have landed on code: through the non-striped alias of the same
+        // bytes, or because an armed watchpoint sent every store this way.
+        uint32_t alias = addr - 0x21000000u;
+        jit_note_store(s, alias < 0x40000u ? SIM_SRAM_BASE + alias : addr, size);
         return;
     }
 
@@ -270,6 +282,9 @@ void bus_poke32(sim_t *s, uint32_t addr, uint32_t val) {
     uint8_t *p = bus_mem_ptr(s, addr, 4);
     if (p) {
         mem_store(p, val, 4);
+        // Host-side pokes are how a debugger patches code, so they invalidate
+        // unconditionally rather than through the store path's presence test.
+        jit_invalidate_range(s, addr, 4);
         return;
     }
     mmio_region_t *r = mmio_find(s, addr);
@@ -291,6 +306,7 @@ bool bus_write_block(sim_t *s, uint32_t addr, const void *src, uint32_t len) {
     uint8_t *p = bus_mem_ptr(s, addr, len);
     if (p) {
         memcpy(p, src, len);
+        jit_invalidate_range(s, addr, len);
         return true;
     }
     const uint8_t *sp = src;
