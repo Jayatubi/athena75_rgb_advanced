@@ -15,6 +15,11 @@ reason these are committed. athena_sim_cli needs nothing beyond libc.
 
     bash tools/build_sim.sh          # both targets, or just the CLI without SDL2
     bash tools/build_sim.sh --test   # ... and run the pixel regression
+    bash tools/build_sim.sh --windows   # MSVC build from WSL -> sim/windows/*.exe
+
+The Windows window build is the exception to the static rule: SDL2's MSVC package
+ships no static library, so athena_sim.exe needs SDL2.dll next to it and neither
+is committed (see ../.gitignore). athena_sim_cli.exe is self-contained.
 
 Configure with -DATHENA_SIM_STATIC_SDL=OFF to link the shared SDL2 instead;
 that build is fine for local work but must not be what gets committed here.

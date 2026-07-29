@@ -6,6 +6,7 @@
 // other without circular includes.
 #pragma once
 
+#include "compat.h"
 #include "log.h"
 
 #include <stdbool.h>

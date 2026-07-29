@@ -5,6 +5,7 @@
 // while and dumps the panel to PNG. This is what CI uses and what you reach for
 // when a bring-up problem needs a clean, scriptable log.
 
+#include "../core/os.h"
 #include "../core/sim.h"
 #include "../core/symbols.h"
 #include "../core/state.h"
@@ -16,18 +17,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-static uint64_t now_us(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)ts.tv_nsec / 1000ull;
-}
-
-static void sleep_us(uint64_t us) {
-    struct timespec ts = {.tv_sec = (time_t)(us / 1000000ull),
-                          .tv_nsec = (long)((us % 1000000ull) * 1000ull)};
-    nanosleep(&ts, NULL);
-}
 
 static void usage(const char *argv0) {
     fprintf(stderr,
@@ -300,7 +289,7 @@ int main(int argc, char **argv) {
     // state restored from halfway through one.
     const uint64_t ms0 = sim_now_us(s) / 1000u;
     uint64_t       ms  = 0;
-    uint64_t wall0_us = cfg.realtime ? now_us() : 0;
+    uint64_t wall0_us = cfg.realtime ? os_now_us() : 0;
     while ((run_ms == 0 || ms < run_ms) && !s->stop_requested) {
         for (unsigned k = 0; k < key_count; k++) {
             // Held for 40 ms, which comfortably clears the debounce filter.
@@ -327,8 +316,8 @@ int main(int argc, char **argv) {
             // Hold virtual time back to the wall clock so host_tool's response
             // timeouts mean the same thing on both sides of the bridge. Running
             // behind is left alone: catching up would only make it worse.
-            int64_t ahead_us = (int64_t)(sim_now_us(s) - ms0 * 1000u) - (int64_t)(now_us() - wall0_us);
-            if (ahead_us > 0) sleep_us((uint64_t)ahead_us);
+            int64_t ahead_us = (int64_t)(sim_now_us(s) - ms0 * 1000u) - (int64_t)(os_now_us() - wall0_us);
+            if (ahead_us > 0) os_sleep_us((uint64_t)ahead_us);
         }
     }
 

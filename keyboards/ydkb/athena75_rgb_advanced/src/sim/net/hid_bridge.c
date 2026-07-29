@@ -12,22 +12,17 @@
 #include "hid_bridge.h"
 
 #include "../core/log.h"
+#include "../core/os.h"
 #include "../core/sim.h"
 
-#include <errno.h>
-#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #define REPORT_LEN 32
-#define IN_QUEUE   64 // reports buffered while no client is attached
+// Deep enough for a whole screenshot burst (1214 reports): the firmware streams
+// them back to back in simulated time, far faster than the poll loop gets round
+// to pushing them into the socket, and a dropped one stalls the client.
+#define IN_QUEUE   2048
 
 typedef struct {
     sim_t   *sim;
@@ -49,15 +44,10 @@ typedef struct {
 
 static bridge_t g_bridge = {.listen_fd = -1, .client_fd = -1};
 
-static void set_nonblocking(int fd) {
-    int fl = fcntl(fd, F_GETFL, 0);
-    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
-}
-
 static void drop_client(bridge_t *b, const char *why) {
     if (b->client_fd < 0) return;
     LOG_I(LOG_D_BRIDGE, "client disconnected (%s)", why);
-    close(b->client_fd);
+    sock_close(b->client_fd);
     b->client_fd = -1;
     b->rx_len    = 0;
     b->in_count  = 0;
@@ -99,15 +89,15 @@ static void in_sink(void *ctx, unsigned ep, const uint8_t *data, unsigned len) {
 static void flush_to_client(bridge_t *b) {
     while (b->in_count && b->client_fd >= 0) {
         const uint8_t *rep = b->in_buf[b->in_head];
-        ssize_t        n   = send(b->client_fd, rep, REPORT_LEN, 0);
+        ssize_t        n   = send(b->client_fd, (const char *)rep, REPORT_LEN, 0);
         if (n == REPORT_LEN) {
             b->in_head = (b->in_head + 1) % IN_QUEUE;
             b->in_count--;
             b->reports_to_host++;
             continue;
         }
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return; // try later
-        drop_client(b, n < 0 ? strerror(errno) : "short write");
+        if (n < 0 && sock_would_block()) return; // try later
+        drop_client(b, n < 0 ? sock_lasterror() : "short write");
         return;
     }
 }
@@ -116,14 +106,14 @@ static void flush_to_client(bridge_t *b) {
 
 static void pump_from_client(sim_t *s, bridge_t *b) {
     while (b->client_fd >= 0) {
-        ssize_t n = recv(b->client_fd, b->rx + b->rx_len, REPORT_LEN - b->rx_len, 0);
+        ssize_t n = recv(b->client_fd, (char *)b->rx + b->rx_len, (int)(REPORT_LEN - b->rx_len), 0);
         if (n == 0) {
             drop_client(b, "eof");
             return;
         }
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-            drop_client(b, strerror(errno));
+            if (sock_would_block()) return;
+            drop_client(b, sock_lasterror());
             return;
         }
         b->rx_len += (unsigned)n;
@@ -156,15 +146,15 @@ static void bridge_poll(sim_t *s, void *ctx) {
     if (b->listen_fd < 0) return;
 
     if (b->client_fd < 0) {
-        int fd = accept(b->listen_fd, NULL, NULL);
+        int fd = sock_accept(b->listen_fd);
         if (fd >= 0) {
-            set_nonblocking(fd);
+            sock_set_nonblocking(fd);
             int one = 1;
-            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
 #ifdef SO_NOSIGPIPE
             // host_tool closes as soon as it has its reply, so a write racing
             // the close is normal; it must return EPIPE, not kill the machine.
-            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char *)&one, sizeof one);
 #endif
             b->client_fd = fd;
             LOG_I(LOG_D_BRIDGE, "client connected on port %u", b->port);
@@ -181,29 +171,27 @@ bool hid_bridge_start(sim_t *s, uint16_t port) {
     bridge_t *b = &g_bridge;
     if (b->listen_fd >= 0) return true;
 
-    signal(SIGPIPE, SIG_IGN); // belt and braces for platforms without SO_NOSIGPIPE
-
-    b->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    b->listen_fd = sock_open_tcp();
     if (b->listen_fd < 0) {
-        LOG_E(LOG_D_BRIDGE, "socket: %s", strerror(errno));
+        LOG_E(LOG_D_BRIDGE, "socket: %s", sock_lasterror());
         return false;
     }
     int one = 1;
-    setsockopt(b->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(b->listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
 
     struct sockaddr_in addr = {0};
     addr.sin_family         = AF_INET;
     addr.sin_addr.s_addr    = htonl(INADDR_LOOPBACK);
     addr.sin_port           = htons(port);
     if (bind(b->listen_fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
-        LOG_E(LOG_D_BRIDGE, "bind 127.0.0.1:%u: %s", port, strerror(errno));
-        close(b->listen_fd);
+        LOG_E(LOG_D_BRIDGE, "bind 127.0.0.1:%u: %s", port, sock_lasterror());
+        sock_close(b->listen_fd);
         b->listen_fd = -1;
         return false;
     }
     if (listen(b->listen_fd, 1) < 0) {
-        LOG_E(LOG_D_BRIDGE, "listen: %s", strerror(errno));
-        close(b->listen_fd);
+        LOG_E(LOG_D_BRIDGE, "listen: %s", sock_lasterror());
+        sock_close(b->listen_fd);
         b->listen_fd = -1;
         return false;
     }
@@ -215,7 +203,7 @@ bool hid_bridge_start(sim_t *s, uint16_t port) {
     }
     b->port = port;
     b->sim  = s;
-    set_nonblocking(b->listen_fd);
+    sock_set_nonblocking(b->listen_fd);
 
     usb_set_in_sink(s, in_sink, b);
     sim_add_poll_every(s, bridge_poll, b, SIM_NET_POLL_CYCLES);
@@ -235,7 +223,7 @@ void hid_bridge_stop(void) {
     if (b->listen_fd >= 0) {
         LOG_I(LOG_D_BRIDGE, "bridge stats: %llu reports to host, %llu to device",
               (unsigned long long)b->reports_to_host, (unsigned long long)b->reports_to_device);
-        close(b->listen_fd);
+        sock_close(b->listen_fd);
         b->listen_fd = -1;
     }
 }

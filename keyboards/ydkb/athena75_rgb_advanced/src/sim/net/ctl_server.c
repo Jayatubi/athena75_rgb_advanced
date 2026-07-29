@@ -25,19 +25,12 @@
 #include "../core/sim.h"
 #include "../core/state.h"
 
-#include <errno.h>
-#include <signal.h>
+#include "../core/os.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #define MAX_CLIENTS 4
 #define LINE_MAX    256
@@ -66,11 +59,6 @@ typedef struct {
 
 static ctl_t g_ctl = {.listen_fd = -1};
 
-static void set_nonblocking(int fd) {
-    int fl = fcntl(fd, F_GETFL, 0);
-    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
-}
-
 static void reply(client_t *c, const char *fmt, ...) {
     char    buf[512];
     va_list ap;
@@ -80,7 +68,7 @@ static void reply(client_t *c, const char *fmt, ...) {
     if (n < 0) return;
     if (n > (int)sizeof buf - 2) n = (int)sizeof buf - 2;
     buf[n++] = '\n';
-    ssize_t unused = send(c->fd, buf, (size_t)n, 0);
+    ssize_t unused = send(c->fd, buf, n, 0);
     (void)unused; // a client that hangs up mid-reply is its own business
 }
 
@@ -218,7 +206,7 @@ static void handle_line(ctl_t *t, client_t *c, char *line) {
 // ---- polling ----------------------------------------------------------------
 
 static void drop(client_t *c) {
-    close(c->fd);
+    sock_close(c->fd);
     c->fd  = -1;
     c->len = 0;
 }
@@ -232,7 +220,7 @@ static void pump(ctl_t *t, client_t *c) {
             return;
         }
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            if (sock_would_block()) return;
             drop(c);
             return;
         }
@@ -257,13 +245,13 @@ static void ctl_poll(sim_t *s, void *ctx) {
 
     for (unsigned i = 0; i < MAX_CLIENTS; i++) {
         if (t->cl[i].fd >= 0) continue;
-        int fd = accept(t->listen_fd, NULL, NULL);
+        int fd = sock_accept(t->listen_fd);
         if (fd < 0) break;
-        set_nonblocking(fd);
+        sock_set_nonblocking(fd);
         int one = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
 #ifdef SO_NOSIGPIPE
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char *)&one, sizeof one);
 #endif
         t->cl[i].fd  = fd;
         t->cl[i].len = 0;
@@ -281,24 +269,23 @@ bool ctl_start(sim_t *s, uint16_t port) {
     ctl_t *t = &g_ctl;
     if (t->listen_fd >= 0) return true;
 
-    signal(SIGPIPE, SIG_IGN);
     for (unsigned i = 0; i < MAX_CLIENTS; i++) t->cl[i].fd = -1;
 
-    t->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    t->listen_fd = sock_open_tcp();
     if (t->listen_fd < 0) {
-        LOG_E(LOG_D_GUI, "ctl socket: %s", strerror(errno));
+        LOG_E(LOG_D_GUI, "ctl socket: %s", sock_lasterror());
         return false;
     }
     int one = 1;
-    setsockopt(t->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(t->listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
 
     struct sockaddr_in addr = {0};
     addr.sin_family         = AF_INET;
     addr.sin_addr.s_addr    = htonl(INADDR_LOOPBACK);
     addr.sin_port           = htons(port);
     if (bind(t->listen_fd, (struct sockaddr *)&addr, sizeof addr) < 0 || listen(t->listen_fd, MAX_CLIENTS) < 0) {
-        LOG_E(LOG_D_GUI, "ctl bind/listen 127.0.0.1:%u: %s", port, strerror(errno));
-        close(t->listen_fd);
+        LOG_E(LOG_D_GUI, "ctl bind/listen 127.0.0.1:%u: %s", port, sock_lasterror());
+        sock_close(t->listen_fd);
         t->listen_fd = -1;
         return false;
     }
@@ -307,7 +294,7 @@ bool ctl_start(sim_t *s, uint16_t port) {
     if (getsockname(t->listen_fd, (struct sockaddr *)&addr, &alen) == 0) port = ntohs(addr.sin_port);
     t->port = port;
     t->sim  = s;
-    set_nonblocking(t->listen_fd);
+    sock_set_nonblocking(t->listen_fd);
 
     sim_add_poll_every(s, ctl_poll, t, SIM_NET_POLL_CYCLES);
     LOG_I(LOG_D_GUI, "control socket listening on 127.0.0.1:%u", port);
@@ -325,7 +312,7 @@ void ctl_stop(void) {
     }
     if (t->listen_fd >= 0) {
         LOG_I(LOG_D_GUI, "control socket closed after %llu commands", (unsigned long long)t->commands);
-        close(t->listen_fd);
+        sock_close(t->listen_fd);
         t->listen_fd = -1;
     }
 }

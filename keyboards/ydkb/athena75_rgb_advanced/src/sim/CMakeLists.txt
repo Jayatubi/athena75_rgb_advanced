@@ -50,6 +50,7 @@ foreach(cfg ${CMAKE_CONFIGURATION_TYPES} Debug Release RelWithDebInfo MinSizeRel
 endforeach()
 
 add_library(athena_sim_core STATIC
+  ${SIM_ROOT}/core/os.c
   ${SIM_ROOT}/core/log.c
   ${SIM_ROOT}/core/symbols.c
   ${SIM_ROOT}/core/trace.c
@@ -93,6 +94,12 @@ else()
   target_compile_options(athena_sim_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
 
+# The Raw HID bridge, control socket and gdb stub are Winsock ones on Windows
+# (core/os.c), which is not in the default link set the way libc's sockets are.
+if(WIN32)
+  target_link_libraries(athena_sim_core PUBLIC ws2_32)
+endif()
+
 # ---- headless runner --------------------------------------------------------
 
 add_executable(athena_sim_cli ${SIM_ROOT}/headless/main_headless.c)
@@ -130,6 +137,12 @@ if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/main_gui.c)
     ${SIM_ROOT}/gui/panels.c
   )
   target_link_libraries(athena_sim PRIVATE athena_sim_core)
+
+  # On Windows SDL renames main() to SDL_main; SDL2main.lib carries the real
+  # entry point that sets up argv and calls it.
+  if(TARGET SDL2::SDL2main)
+    target_link_libraries(athena_sim PRIVATE SDL2::SDL2main)
+  endif()
 
   set(SIM_SDL_KIND "shared")
   if(ATHENA_SIM_STATIC_SDL AND TARGET SDL2::SDL2-static)

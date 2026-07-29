@@ -21,3 +21,7 @@ apps/hidden/
 !sim/*/athena_sim_cli
 !sim/*/athena_sim_cli.exe
 !sim/readme.txt
+
+# SDL2 ships no static library in its MSVC package, so a Windows window build
+# needs this DLL beside the exe. Third-party binary: keep it local.
+sim/*/SDL2.dll

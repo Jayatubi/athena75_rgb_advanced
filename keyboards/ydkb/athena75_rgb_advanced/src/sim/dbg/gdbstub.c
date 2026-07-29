@@ -17,19 +17,11 @@
 #include "../core/log.h"
 #include "../core/sim.h"
 
-#include <errno.h>
-#include <signal.h>
+#include "../core/os.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #define PKT_MAX 4096
 
@@ -83,9 +75,9 @@ static char hexdigit(unsigned v) {
 }
 
 static void put_byte(gdb_t *g, uint8_t b) {
-    ssize_t n = send(g->fd, &b, 1, 0);
+    ssize_t n = send(g->fd, (const char *)&b, 1, 0);
     if (n != 1) {
-        close(g->fd);
+        sock_close(g->fd);
         g->fd       = -1;
         g->attached = false;
     }
@@ -107,9 +99,9 @@ static void send_packet(gdb_t *g, const char *body) {
     size_t total = len + 4;
 
     for (size_t off = 0; off < total;) {
-        ssize_t n = send(g->fd, buf + off, total - off, 0);
+        ssize_t n = send(g->fd, buf + off, (int)(total - off), 0);
         if (n <= 0) {
-            close(g->fd);
+            sock_close(g->fd);
             g->fd       = -1;
             g->attached = false;
             break;
@@ -143,8 +135,8 @@ static int recv_packet(gdb_t *g, bool blocking) {
             return -1;
         }
         if (n < 0) {
-            if (errno == EINTR) continue;
-            LOG_D(LOG_D_SIM, "gdb: recv failed: %s", strerror(errno));
+            if (sock_interrupted()) continue;
+            LOG_D(LOG_D_SIM, "gdb: recv failed: %s", sock_lasterror());
             return -1;
         }
         if (c == 0x03) return 2;
@@ -443,7 +435,7 @@ static bool handle_packet(gdb_t *g) {
             g->attached    = false;
             g->sim->halted = false;
             g->sim->bp_count = 0;
-            close(g->fd);
+            sock_close(g->fd);
             g->fd = -1;
             return true;
 
@@ -481,7 +473,7 @@ static void service_halted(gdb_t *g) {
         int r = recv_packet(g, true);
         if (r < 0) {
             LOG_I(LOG_D_SIM, "gdb detached");
-            close(g->fd);
+            sock_close(g->fd);
             g->fd            = -1;
             g->attached      = false;
             g->sim->halted   = false;
@@ -499,16 +491,15 @@ static void gdb_poll(sim_t *s, void *ctx) {
     gdb_t *g = ctx;
 
     if (!g->attached) {
-        int fd = accept(g->listen_fd, NULL, NULL);
+        int fd = sock_accept(g->listen_fd);
         if (fd < 0) return;
         // macOS hands down the listener's O_NONBLOCK; the packet loop wants a
         // blocking socket.
-        int fl = fcntl(fd, F_GETFL, 0);
-        if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+        sock_set_blocking(fd);
         int one = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
 #ifdef SO_NOSIGPIPE
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char *)&one, sizeof one);
 #endif
         g->fd       = fd;
         g->attached = true;
@@ -540,7 +531,7 @@ static void gdb_poll(sim_t *s, void *ctx) {
     if (g->fd >= 0) {
         int r = recv_packet(g, false);
         if (r < 0) {
-            close(g->fd);
+            sock_close(g->fd);
             g->fd            = -1;
             g->attached      = false;
             s->bp_count      = 0;
@@ -562,23 +553,21 @@ bool gdb_start(sim_t *s, uint16_t port, bool wait) {
     gdb_t *g = &g_gdb;
     if (g->listen_fd >= 0) return true;
 
-    signal(SIGPIPE, SIG_IGN);
-
-    g->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    g->listen_fd = sock_open_tcp();
     if (g->listen_fd < 0) {
-        LOG_E(LOG_D_SIM, "gdb socket: %s", strerror(errno));
+        LOG_E(LOG_D_SIM, "gdb socket: %s", sock_lasterror());
         return false;
     }
     int one = 1;
-    setsockopt(g->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(g->listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
 
     struct sockaddr_in addr = {0};
     addr.sin_family         = AF_INET;
     addr.sin_addr.s_addr    = htonl(INADDR_LOOPBACK);
     addr.sin_port           = htons(port);
     if (bind(g->listen_fd, (struct sockaddr *)&addr, sizeof addr) < 0 || listen(g->listen_fd, 1) < 0) {
-        LOG_E(LOG_D_SIM, "gdb bind/listen 127.0.0.1:%u: %s", port, strerror(errno));
-        close(g->listen_fd);
+        LOG_E(LOG_D_SIM, "gdb bind/listen 127.0.0.1:%u: %s", port, sock_lasterror());
+        sock_close(g->listen_fd);
         g->listen_fd = -1;
         return false;
     }
@@ -594,8 +583,7 @@ bool gdb_start(sim_t *s, uint16_t port, bool wait) {
         gdb_poll(s, g); // blocking accept, then straight into the halted loop
     }
 
-    int fl = fcntl(g->listen_fd, F_GETFL, 0);
-    if (fl >= 0) fcntl(g->listen_fd, F_SETFL, fl | O_NONBLOCK);
+    sock_set_nonblocking(g->listen_fd);
     sim_add_poll_every(s, gdb_poll, g, SIM_NET_POLL_CYCLES);
     return true;
 }
@@ -606,8 +594,8 @@ uint16_t gdb_port(void) {
 
 void gdb_stop(void) {
     gdb_t *g = &g_gdb;
-    if (g->fd >= 0) close(g->fd);
-    if (g->listen_fd >= 0) close(g->listen_fd);
+    sock_close(g->fd);
+    sock_close(g->listen_fd);
     g->fd = g->listen_fd = -1;
     g->attached          = false;
 }

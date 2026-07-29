@@ -31,19 +31,19 @@ typedef struct {
     uint32_t wdt_scratch[8];
     uint32_t wdt_tick;
     uint64_t wdt_deadline_us;
-} timer_t;
+} rp_timer_t;   // not `timer_t`: that is a POSIX type on glibc (sys/types.h)
 
-static uint64_t counter_us(sim_t *s, timer_t *t) {
+static uint64_t counter_us(sim_t *s, rp_timer_t *t) {
     return sim_now_us(s) + t->offset_us;
 }
 
-static void update_irqs(sim_t *s, timer_t *t) {
+static void update_irqs(sim_t *s, rp_timer_t *t) {
     uint32_t active = (t->intr | t->intf) & t->inte;
     for (unsigned i = 0; i < 4; i++) sim_irq_set(s, i, (active >> i) & 1u);
 }
 
 static void timer_poll(sim_t *s, void *ctx) {
-    timer_t *t = ctx;
+    rp_timer_t *t = ctx;
     if (t->pause) return;
 
     uint32_t now_lo = (uint32_t)counter_us(s, t);
@@ -80,7 +80,7 @@ static void timer_poll(sim_t *s, void *ctx) {
 
 static uint32_t timer_read(sim_t *s, void *ctx, uint32_t off, unsigned size) {
     (void)size;
-    timer_t *t = ctx;
+    rp_timer_t *t = ctx;
     uint64_t v = counter_us(s, t);
     switch (off) {
         case 0x00: return (uint32_t)(v >> 32);      // TIMEHW (write-only in hw)
@@ -110,7 +110,7 @@ static uint32_t timer_read(sim_t *s, void *ctx, uint32_t off, unsigned size) {
 
 static void timer_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigned size) {
     (void)size;
-    timer_t *t = ctx;
+    rp_timer_t *t = ctx;
     switch (off) {
         case 0x00: { // TIMEHW: latched, applied when TIMELW is written
             uint64_t cur = counter_us(s, t);
@@ -166,7 +166,7 @@ static void timer_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigne
 static uint32_t wdt_read(sim_t *s, void *ctx, uint32_t off, unsigned size) {
     (void)s;
     (void)size;
-    timer_t *t = ctx;
+    rp_timer_t *t = ctx;
     switch (off) {
         case 0x00: return t->wdt_ctrl;
         case 0x04: return t->wdt_load;
@@ -190,7 +190,7 @@ static uint32_t wdt_read(sim_t *s, void *ctx, uint32_t off, unsigned size) {
 
 static void wdt_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigned size) {
     (void)size;
-    timer_t *t = ctx;
+    rp_timer_t *t = ctx;
     switch (off) {
         case 0x00:
             t->wdt_ctrl = val;
@@ -234,7 +234,7 @@ static void wdt_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigned 
 }
 
 void timer_attach(sim_t *s) {
-    timer_t *t = calloc(1, sizeof(*t));
+    rp_timer_t *t = calloc(1, sizeof(*t));
     s->timer   = t;
     sim_state_register(s, "timer", t, sizeof(*t), NULL);
     mmio_attach(s, TIMER_BASE, 0x4000u, "TIMER", t, timer_read, timer_write, MMIO_ATOMIC_ALIAS);

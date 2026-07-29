@@ -13,6 +13,19 @@ Objects stay in `build/sim/`; only the executables are archived. They are not
 committed — see `artifacts/sim/readme.txt`. Paths below say `macos`; substitute
 your own.
 
+macOS, Linux and Windows all build from the same sources; `core/os.h` is where
+the sockets and the monotonic clock stop being POSIX. On Windows the build is
+MSVC, driven from WSL, and SDL2 has to be fetched because the toolchain has none:
+
+    bash tools/build_sim.sh --windows          # -> artifacts/sim/windows/*.exe
+    bash tools/build_sim.sh --windows --no-sdl # headless only, no download
+    bash tools/run_sim.sh   --windows          # the native window, from WSL
+
+The SDL2 MSVC development package lands in `build/sdl2/` once (override with
+`ATHENA_SDL2_DIR`). It carries no static library, so `athena_sim.exe` needs the
+`SDL2.dll` the script copies beside it, and that pair is deliberately not
+committed.
+
 ## The two front ends
 
 `athena_sim` is one SDL2 window: the 128x128 panel on the left, the virtual
@@ -66,6 +79,10 @@ has a matching backend, so every command works against the emulator unchanged:
     artifacts/sim/macos/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin --realtime --hid-port 4711
     export ATHENA_HID_SIM=127.0.0.1:4711
     host_tool diag / probe jedec / snapshot -o s.png / backup -o ee.bin / app install maze.app
+
+A real keyboard and several emulators can be up together: `host_tool devices`
+lists them all and `--device sim:127.0.0.1:4711` picks this one for a single
+command, which is the same thing without the exported environment variable.
 
 `--realtime` matters here: the emulator runs at roughly a fifth of real speed, so
 without it `host_tool`'s wall-clock timeouts are effectively five times tighter.
