@@ -28,6 +28,24 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
 
 - Pipes/redirection → committed `.sh` only. Firmware builds → **build-athena75**.
 
+## Choosing a device (several boards / emulators up at once)
+
+```
+wsl keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe devices
+```
+
+lists every target: plugged-in keyboards (`usb1`, `usb2`, …) and running
+`athena_sim` bridges (`sim:127.0.0.1:47801`), with each one's firmware build.
+
+- `--device <#|id>` (or `-d`) picks one and may sit **anywhere** in the command
+  line: `--device 2`, `--device usb1`, `--device sim`, `--device sim:47802`,
+  or any substring of the name/path.
+- With no `--device`: `ATHENA_HID_SIM` wins if it is set, else the single
+  connected keyboard. **Two keyboards without `--device` is an error**, never a
+  guess.
+- `devices` only probes the default sim ports (47801–47804); an emulator on any
+  other port needs `--device sim:HOST:PORT`.
+
 ## Running on macOS (native, no WSL)
 
 ```
@@ -53,13 +71,14 @@ wsl keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe up
 
 Same `wsl` + `${KB}/…` paths:
 
+- `devices`
 - `snapshot [-o shot.png]`
 - `synctime [--utc] [--loop SEC]`
 - `daemon …`
-- `diag`
+- `diag` / `fw`
 - `backup [-o file.bin]` / `restore file.bin`
 - `probe …` — **flash-write-budget** rule
-- `app pack|info|relocate|install|update`
+- `app pack|info|relocate|install|update|launch`
 
 ## Rebuilding host_tool
 

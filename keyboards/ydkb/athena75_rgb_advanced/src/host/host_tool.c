@@ -14,13 +14,20 @@
 #include "app_cmds.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int usage(const char *argv0) {
     printf(
-        "usage: %s <command> [args]\n"
+        "usage: %s [--device <id>] <command> [args]\n"
+        "\n"
+        "global options:\n"
+        "  -d, --device <id>                        which target to talk to when several are\n"
+        "                                           up: a `devices` id/number, `usb`, `sim`,\n"
+        "                                           or sim:HOST:PORT (may sit anywhere)\n"
         "\n"
         "commands:\n"
+        "  devices                                  list every keyboard / athena_sim target\n"
         "  upload   [uf2] [--no-hid] [--timeout N]   reboot to BOOTSEL and copy a UF2\n"
         "                                            (default: the firmware image)\n"
         "  snapshot [-o shot.png]                    screenshot the LCD over USB -> PNG\n"
@@ -43,7 +50,7 @@ static int usage(const char *argv0) {
     return 2;
 }
 
-int main(int argc, char **argv) {
+static int dispatch(int argc, char **argv) {
     const char *prog = "host_tool";
     if (argc < 2) return usage(prog);
 
@@ -57,6 +64,7 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "snapshot")) return cmd_snapshot(subargc, subargv);
     if (!strcmp(cmd, "synctime")) return cmd_synctime(subargc, subargv);
     if (!strcmp(cmd, "daemon"))   return cmd_daemon(subargc, subargv);
+    if (!strcmp(cmd, "devices"))  return cmd_devices(subargc, subargv);
     if (!strcmp(cmd, "diag"))     return cmd_diag(subargc, subargv);
     if (!strcmp(cmd, "fw"))       return cmd_fw(subargc, subargv);
     if (!strcmp(cmd, "backup"))   return cmd_eeprom_backup(subargc, subargv);
@@ -67,4 +75,31 @@ int main(int argc, char **argv) {
 
     printf("unknown command: %s\n\n", cmd);
     return usage(prog);
+}
+
+int main(int argc, char **argv) {
+    // Keep progress lines and the transport's own stderr notes in order when the
+    // output is a pipe or a log file.
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    // --device is global, so pull it out wherever it appears and hand the rest to
+    // the subcommand untouched.
+    char **av = (char **)malloc((size_t)argc * sizeof *av);
+    if (!av) return 1;
+    int ac = 0;
+    for (int i = 0; i < argc; i++) {
+        if (i > 0 && (!strcmp(argv[i], "--device") || !strcmp(argv[i], "-d")) && i + 1 < argc) {
+            hid_select(argv[++i]);
+            continue;
+        }
+        if (i > 0 && !strncmp(argv[i], "--device=", 9)) {
+            hid_select(argv[i] + 9);
+            continue;
+        }
+        av[ac++] = argv[i];
+    }
+
+    int rc = dispatch(ac, av);
+    free(av);
+    return rc;
 }

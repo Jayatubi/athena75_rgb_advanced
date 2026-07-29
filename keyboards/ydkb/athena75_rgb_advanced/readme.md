@@ -200,16 +200,23 @@ python3 tools/png_to_uf2.py boot path/to/splash.png   # -> boot UF2，烧到 boo
 
 | 命令 | 作用 |
 |------|------|
+| `devices` | 列出当前所有可操作对象：插着的键盘（`usb1`…）+ 在跑的 `athena_sim`（`sim:127.0.0.1:47801`），并显示各自固件 build |
 | `upload [uf2] [--force] [--no-hid] [--timeout N]` | 默认 LCD 询问「Update firmware?」→ Enter 进 BOOTSEL → 拷贝 UF2；`--force` 跳过询问 |
 | `snapshot [-o shot.png]` | Raw HID 抓 LCD RGB565 → PNG |
 | `synctime [--utc] [--loop SEC]` | 推送 PC 时间（MATRIX 时钟） |
 | `daemon …` | 常驻对时 + 重连 |
-| `diag` | 打印 flash/EEPROM 布局常量 |
+| `diag` / `fw` | 打印 flash/EEPROM 布局常量 / 固件 build 与 ABI |
 | `backup [-o file.bin]` / `restore file.bin` | Vial/VIA EEPROM 备份与恢复 |
 | `probe read ADDR [len]` / `erase` / `prog` | JEDEC + 探针读写（**遵守 flash 写预算**，禁写固件/EEPROM 区） |
-| `app pack …` / `info` / `relocate` / `install` / `update` | 打包、检查、安装、升级 slot app |
+| `app pack …` / `info` / `relocate` / `install` / `update` / `launch` | 打包、检查、安装、升级、直接启动 slot app |
 
 默认 UF2 路径由 `src/host/common/paths.c` 解析（优先 `artifacts/firmware/`）。
+
+全局选项 `-d, --device <#|id>`（可放在命令行任意位置）指定操作对象：`devices`
+里的序号或 id、`usb`、`sim`、`sim:HOST:PORT`，或名字/路径的任意子串。不带
+`--device` 时：`ATHENA_HID_SIM` 优先，否则用唯一插着的键盘；**同时插了两把键盘会
+直接报错并列出候选**，不猜。`devices` 只探测默认仿真端口 47801–47804，其他端口用
+`--device sim:HOST:PORT` 显式指定。
 
 ---
 

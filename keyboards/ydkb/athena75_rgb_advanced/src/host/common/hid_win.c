@@ -8,6 +8,7 @@
 #include "hid.h"
 #include "proto.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,16 +22,56 @@ struct hid_dev {
     USHORT out_len;  // OutputReportByteLength (incl. leading report id)
 };
 
-hid_dev *hid_native_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage) {
+// Wrap an already-open handle whose caps have been checked.
+static hid_dev *wrap(HANDLE h, const HIDP_CAPS *caps) {
+    hid_dev *dev = (hid_dev *)calloc(1, sizeof(*dev));
+    if (!dev) return NULL;
+    dev->h       = h;
+    dev->in_len  = caps->InputReportByteLength;
+    dev->out_len = caps->OutputReportByteLength;
+    // Deep input queue so a streamed burst (screenshot) doesn't overflow the
+    // driver's default 32-report ring and drop chunks.
+    HidD_SetNumInputBuffers(h, 512);
+    return dev;
+}
+
+// True when this interface is the vid/pid + usage one we are after; `caps` and
+// the product string come back filled so callers need not reopen it.
+static int match(HANDLE h, uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage,
+                 HIDP_CAPS *caps, char *label, size_t label_len) {
+    HIDD_ATTRIBUTES attr;
+    attr.Size = sizeof(attr);
+    if (!HidD_GetAttributes(h, &attr) || attr.VendorID != vid || attr.ProductID != pid) return 0;
+
+    PHIDP_PREPARSED_DATA ppd = NULL;
+    if (!HidD_GetPreparsedData(h, &ppd)) return 0;
+    int ok = HidP_GetCaps(ppd, caps) == HIDP_STATUS_SUCCESS && caps->UsagePage == usage_page &&
+             caps->Usage == usage;
+    HidD_FreePreparsedData(ppd);
+    if (!ok) return 0;
+
+    if (label && label_len) {
+        WCHAR wide[128] = {0};
+        label[0] = '\0';
+        if (HidD_GetProductString(h, wide, sizeof wide)) {
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, label, (int)label_len, NULL, NULL);
+        }
+        if (!label[0]) snprintf(label, label_len, "athena75");
+    }
+    return 1;
+}
+
+int hid_native_list(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage,
+                    hid_target *out, int max) {
     GUID guid;
     HidD_GetHidGuid(&guid);
     HDEVINFO info = SetupDiGetClassDevsA(&guid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if (info == INVALID_HANDLE_VALUE) return NULL;
+    if (info == INVALID_HANDLE_VALUE) return 0;
 
-    hid_dev *dev = NULL;
+    int n = 0;
     SP_DEVICE_INTERFACE_DATA ifd;
     ifd.cbSize = sizeof(ifd);
-    for (DWORD i = 0; !dev && SetupDiEnumDeviceInterfaces(info, NULL, &guid, i, &ifd); i++) {
+    for (DWORD i = 0; n < max && SetupDiEnumDeviceInterfaces(info, NULL, &guid, i, &ifd); i++) {
         DWORD need = 0;
         SetupDiGetDeviceInterfaceDetailA(info, &ifd, NULL, 0, &need, NULL);
         if (!need) continue;
@@ -38,35 +79,53 @@ hid_dev *hid_native_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16
         if (!det) continue;
         det->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
         if (SetupDiGetDeviceInterfaceDetailA(info, &ifd, det, need, NULL, NULL)) {
+            // Shared read/write and no data transfer, so probing never disturbs
+            // whatever else has the device open.
             HANDLE h = CreateFileA(det->DevicePath, GENERIC_READ | GENERIC_WRITE,
                                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                    OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
             if (h != INVALID_HANDLE_VALUE) {
-                HIDD_ATTRIBUTES attr;
-                attr.Size = sizeof(attr);
-                PHIDP_PREPARSED_DATA ppd = NULL;
                 HIDP_CAPS caps;
-                if (HidD_GetAttributes(h, &attr) && attr.VendorID == vid && attr.ProductID == pid &&
-                    HidD_GetPreparsedData(h, &ppd) && HidP_GetCaps(ppd, &caps) == HIDP_STATUS_SUCCESS &&
-                    caps.UsagePage == usage_page && caps.Usage == usage) {
-                    dev = (hid_dev *)calloc(1, sizeof(*dev));
-                    if (dev) {
-                        dev->h = h;
-                        dev->in_len = caps.InputReportByteLength;
-                        dev->out_len = caps.OutputReportByteLength;
-                        // Deep input queue so a streamed burst (screenshot) doesn't
-                        // overflow the driver's default 32-report ring and drop chunks.
-                        HidD_SetNumInputBuffers(h, 512);
-                    }
+                char      label[64];
+                if (match(h, vid, pid, usage_page, usage, &caps, label, sizeof label)) {
+                    hid_target *t = &out[n++];
+                    memset(t, 0, sizeof *t);
+                    snprintf(t->kind, sizeof t->kind, "usb");
+                    snprintf(t->id, sizeof t->id, "usb%d", n);
+                    snprintf(t->label, sizeof t->label, "%s", label);
+                    snprintf(t->detail, sizeof t->detail, "%s", det->DevicePath);
                 }
-                if (ppd) HidD_FreePreparsedData(ppd);
-                if (!dev) CloseHandle(h);
+                CloseHandle(h);
             }
         }
         free(det);
     }
     SetupDiDestroyDeviceInfoList(info);
+    return n;
+}
+
+hid_dev *hid_native_open_target(const hid_target *t) {
+    if (!t || !t->detail[0]) return NULL;
+    HANDLE h = CreateFileA(t->detail, GENERIC_READ | GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+
+    PHIDP_PREPARSED_DATA ppd = NULL;
+    HIDP_CAPS            caps;
+    hid_dev             *dev = NULL;
+    if (HidD_GetPreparsedData(h, &ppd) && HidP_GetCaps(ppd, &caps) == HIDP_STATUS_SUCCESS) {
+        dev = wrap(h, &caps);
+    }
+    if (ppd) HidD_FreePreparsedData(ppd);
+    if (!dev) CloseHandle(h);
     return dev;
+}
+
+hid_dev *hid_native_open(uint16_t vid, uint16_t pid, uint16_t usage_page, uint16_t usage) {
+    hid_target t[HID_TARGET_MAX];
+    int        n = hid_native_list(vid, pid, usage_page, usage, t, HID_TARGET_MAX);
+    return n ? hid_native_open_target(&t[0]) : NULL;
 }
 
 int hid_native_write(hid_dev *d, const uint8_t *data) {

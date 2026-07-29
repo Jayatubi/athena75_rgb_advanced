@@ -44,7 +44,7 @@ int cmd_synctime(int argc, char **argv) {
     }
 
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
-    if (!d) { printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID); return 1; }
+    if (!d) { printf("error: cannot open a device; `host_tool devices` lists the targets\n"); return 1; }
 
     char hms[9];
     int  rc = synctime_push(d, use_utc, hms);

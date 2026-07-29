@@ -32,7 +32,7 @@ int cmd_diag(int argc, char **argv) {
     (void)argv;
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         return 1;
     }
     uint8_t req[] = {ATHENA_CMD, ATHENA_DIAG_CMD, 0x00};
@@ -66,7 +66,7 @@ int cmd_fw(int argc, char **argv) {
     (void)argv;
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         return 1;
     }
     uint8_t req[] = {ATHENA_CMD, ATHENA_DIAG_CMD, 0x00};
@@ -87,6 +87,47 @@ int cmd_fw(int argc, char **argv) {
     printf("app_abi: %u\n", rep[19]);
     printf("host_api_abi: %u\n", rep[20]);
     hid_close(d);
+    return 0;
+}
+
+// Firmware build number of an already-open device, 0 when it does not answer.
+static uint32_t query_build(hid_dev *d) {
+    uint8_t req[] = {ATHENA_CMD, ATHENA_DIAG_CMD, 0x00};
+    uint8_t rep[ATHENA_REPORT_LEN];
+    if (xfer(d, req, sizeof req, rep, 1000) != 0 || rep[0] != ATHENA_CMD ||
+        rep[1] != ATHENA_DIAG_CMD || rep[21] < ATHENA_DIAG_FW_FIELDS) {
+        return 0;
+    }
+    return ((uint32_t)rep[15] << 24) | ((uint32_t)rep[16] << 16) | ((uint32_t)rep[17] << 8) |
+           rep[18];
+}
+
+int cmd_devices(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    hid_target t[HID_TARGET_MAX];
+    int        n = hid_list(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE, t,
+                            HID_TARGET_MAX);
+    if (!n) {
+        printf("no device found (no %04x:%04x keyboard plugged in, no athena_sim listening)\n",
+               ATHENA_VID, ATHENA_PID);
+        return 1;
+    }
+
+    printf("%-3s %-24s %-4s %-9s %s\n", "#", "ID", "KIND", "BUILD", "NAME");
+    for (int i = 0; i < n; i++) {
+        char     build[16] = "-";
+        hid_dev *d         = hid_open_target(&t[i]);
+        if (d) {
+            uint32_t b = query_build(d);
+            if (b) snprintf(build, sizeof build, "b%u", b);
+            hid_close(d);
+        } else {
+            snprintf(build, sizeof build, "busy?");
+        }
+        printf("%-3d %-24s %-4s %-9s %s\n", i + 1, t[i].id, t[i].kind, build, t[i].label);
+    }
+    printf("\nuse --device <#|ID> to pick one, e.g. `host_tool --device %s fw`\n", t[0].id);
     return 0;
 }
 
@@ -117,7 +158,7 @@ static int all_same(const uint8_t *b, int n, uint8_t v) {
 int cmd_probe(int argc, char **argv) {
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         return 1;
     }
 
@@ -251,7 +292,7 @@ int cmd_eeprom_backup(int argc, char **argv) {
     }
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         return 1;
     }
     uint32_t size = ee_query_size(d);
@@ -325,7 +366,7 @@ int cmd_eeprom_restore(int argc, char **argv) {
     }
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         fclose(f);
         return 1;
     }
@@ -697,7 +738,7 @@ static int app_upload(int argc, char **argv) {
 
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         free(pkg); return 1;
     }
 
@@ -924,7 +965,7 @@ static int app_launch(int argc, char **argv) {
 
     hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
     if (!d) {
-        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
         return 1;
     }
 
