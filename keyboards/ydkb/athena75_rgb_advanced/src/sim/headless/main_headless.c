@@ -56,7 +56,8 @@ static void usage(const char *argv0) {
             "  --slice-us N          virtual us per outer step (default 1000; the GUI\n"
             "                        uses larger slices, so this reproduces its schedule)\n"
             "  --stop-after N        stop after N retired instructions\n"
-            "  --break SYMBOL        stop when a symbol is reached\n",
+            "  --break SYMBOL        stop when a symbol is reached\n"
+            "  --prof-top N          how many hot PCs to report (default 8)\n",
             argv0);
 }
 
@@ -96,6 +97,7 @@ int main(int argc, char **argv) {
     bool        dump_regs   = false;
     unsigned    dump_flash_writes = 0;
     uint64_t    slice_us    = 1000;
+    unsigned    prof_top    = 8;
     const char *whatis      = NULL;
     keypress_t  keys[MAX_KEYS];
     unsigned    key_count = 0;
@@ -202,6 +204,10 @@ int main(int argc, char **argv) {
             const char *p;
             NEED(p);
             slice_us = strtoull(p, NULL, 0);
+        } else if (!strcmp(a, "--prof-top")) {
+            const char *p;
+            NEED(p);
+            prof_top = (unsigned)atoi(p);
         } else if (!strcmp(a, "--stop-after")) {
             const char *p;
             NEED(p);
@@ -350,7 +356,7 @@ int main(int argc, char **argv) {
     LOG_I(LOG_D_SIM, "  flash: %llu erase, %llu program ops (%llu bytes)",
           (unsigned long long)erases, (unsigned long long)programs, (unsigned long long)bytes);
 
-    sim_profile_report(s, 8);
+    sim_profile_report(s, prof_top);
     if (dump_regs) {
         cpu_dump(&s->cpu[0], "end of run");
         if (s->cpu[1].running) cpu_dump(&s->cpu[1], "end of run");
