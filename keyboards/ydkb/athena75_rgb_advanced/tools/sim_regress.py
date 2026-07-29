@@ -37,23 +37,27 @@ APPS = os.path.join(KB, "artifacts", "apps")
 # launcher is not up until that settles. Every case pays that once, up front.
 WARMUP_MS = 6000
 
-CASES = [
-    # name, extra args after the common ones
-    ("boot", ["--run-ms", "1500"]),
-    ("launcher", ["--install-app", os.path.join(APPS, "maze.app"),
-                  "--install-app", os.path.join(APPS, "life.app"),
-                  "--run-ms", "2000"]),
-    # (8,2) is the gif key: it toggles OS input mode, so this proves the matrix
-    # shift chain reaches the firmware and the UI reacts.
-    ("os-mode", ["--install-app", os.path.join(APPS, "maze.app"),
-                 "--key", "8,2,300", "--run-ms", "2500"]),
-]
+# Reaching the launcher is not the same as reaching an interactive keyboard:
+# matrix_scan() only comes up around nine virtual seconds in, long after the
+# warm-up above. A case that presses keys therefore has to resume from a machine
+# that already got there, which is what settle_ms buys -- boot that far once,
+# snapshot the whole machine, and drive the keys into the restored copy.
+SETTLE_MS = 14000
 
-# Not covered yet, and worth adding once it can be made reliable: launching an
-# app and opening its menu. That path crosses cores -- the app asks on core1,
-# core0 acts on it in housekeeping -- and it broke once with every screen these
-# cases do check still pixel-identical. Scripting it runs into the LCD idle
-# timeout and core1 parking, so it needs its own look rather than a flaky case.
+CASES = [
+    # apps to install, virtual ms to settle into an interactive machine first,
+    # keys to press as row,col,ms, and how long the measured pass runs.
+    {"name": "boot", "run_ms": 1500},
+    {"name": "launcher", "apps": ["maze.app", "life.app"], "run_ms": 2000},
+    # (8,2) is the gif key, which toggles OS input mode.
+    {"name": "os-mode", "apps": ["maze.app"], "keys": ["8,2,300"], "run_ms": 2500},
+    # Enter on the launcher starts the app, Enter inside it opens the app's menu.
+    # That path crosses cores -- the app asks on core1, core0 acts on it in
+    # housekeeping -- and it is the one that broke once with every other screen
+    # here still pixel-identical, so it is worth the extra boot.
+    {"name": "app-menu", "apps": ["maze.app"], "settle_ms": SETTLE_MS,
+     "keys": ["8,2,200", "9,0,700", "9,0,1400"], "run_ms": 2200},
+]
 
 
 def png_pixels(path):
@@ -91,10 +95,12 @@ def diff_report(golden, got):
         (bad, gw * gh) + first)
 
 
-def run_case(sim, name, args, outdir, bless, keep_log):
+def run_case(sim, case, outdir, bless, keep_log, extra=()):
+    name = case["name"]
     flash = os.path.join(outdir, name + ".bin")
     png = os.path.join(outdir, name + ".png")
     log = os.path.join(outdir, name + ".log")
+    state = os.path.join(outdir, name + ".state")
 
     # A fresh 16 MiB image per case, so cases cannot leak state into each other.
     with open(flash, "wb") as f:
@@ -104,16 +110,34 @@ def run_case(sim, name, args, outdir, bless, keep_log):
     with open(flash, "r+b") as f:
         f.write(b"\xff" * (16 * 1024 * 1024))
 
-    common = [sim, "--uf2", FIRMWARE, "--flash", flash, "--log", "*=warn"]
+    common = [sim, "--uf2", FIRMWARE, "--flash", flash, "--log", "*=warn"] + list(extra)
+    setup = []
+    for app in case.get("apps", []):
+        setup += ["--install-app", os.path.join(APPS, app)]
+    drive = []
+    for key in case.get("keys", []):
+        drive += ["--key", key]
+    drive += ["--run-ms", str(case["run_ms"])]
 
-    # Warm-up pass: get the first-boot EEPROM churn out of the way and persist
-    # the result, so the measured pass starts from a settled machine.
-    warm = subprocess.run(common + ["--run-ms", str(WARMUP_MS)],
-                          capture_output=True, text=True)
-    if warm.returncode != 0:
-        return "warm-up exited %d\n%s" % (warm.returncode, warm.stderr[-800:])
+    if case.get("settle_ms"):
+        # The installs shape the machine and so belong in the settling pass; the
+        # keys need the machine it leaves behind.
+        settle = subprocess.run(common + setup +
+                                ["--run-ms", str(case["settle_ms"]), "--save-state", state],
+                                capture_output=True, text=True)
+        if settle.returncode != 0:
+            return "settling exited %d\n%s" % (settle.returncode, settle.stderr[-800:])
+        measured = common + ["--load-state", state] + drive
+    else:
+        # Warm-up pass: get the first-boot EEPROM churn out of the way and persist
+        # the result, so the measured pass starts from a settled machine.
+        warm = subprocess.run(common + ["--run-ms", str(WARMUP_MS)],
+                              capture_output=True, text=True)
+        if warm.returncode != 0:
+            return "warm-up exited %d\n%s" % (warm.returncode, warm.stderr[-800:])
+        measured = common + setup + drive
 
-    proc = subprocess.run(common + args + ["--png", png],
+    proc = subprocess.run(measured + ["--png", png],
                           capture_output=True, text=True)
     if keep_log:
         open(log, "w").write(proc.stderr)
@@ -147,6 +171,8 @@ def main():
     ap.add_argument("--bless", action="store_true", help="record goldens instead of checking")
     ap.add_argument("--case", action="append", help="run only these cases")
     ap.add_argument("--keep", metavar="DIR", help="keep the run artifacts here")
+    ap.add_argument("--extra", action="append", default=[], metavar="ARG",
+                    help="extra athena_sim_cli argument, e.g. --extra=--jit")
     args = ap.parse_args()
 
     sim = shutil.which(args.sim) or args.sim
@@ -160,16 +186,16 @@ def main():
     outdir = args.keep or tempfile.mkdtemp(prefix="athena_regress_")
     os.makedirs(outdir, exist_ok=True)
 
-    cases = [c for c in CASES if not args.case or c[0] in args.case]
+    cases = [c for c in CASES if not args.case or c["name"] in args.case]
     if not cases:
         print("no matching cases")
         return 2
 
     failures = 0
-    for name, extra in cases:
-        sys.stdout.write("%-12s " % name)
+    for case in cases:
+        sys.stdout.write("%-12s " % case["name"])
         sys.stdout.flush()
-        why = run_case(sim, name, extra, outdir, args.bless, bool(args.keep))
+        why = run_case(sim, case, outdir, args.bless, bool(args.keep), args.extra)
         if why:
             failures += 1
             print("FAIL  %s" % why)
