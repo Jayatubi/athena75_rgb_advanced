@@ -272,9 +272,14 @@ static void sio_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigned 
             return;
         }
 
+        // Writing *either* operand starts a division from the two registers as
+        // they stand (RP2040 datasheet 2.3.1.5.1), and the pico-sdk's 64-bit
+        // helpers do write the divisor first -- so computing only on the divisor
+        // write would answer with the previous dividend's quotient.
         case 0x060:
             sio->div[self].dividend  = val;
             sio->div[self].is_signed = false;
+            div_compute(&sio->div[self]);
             return;
         case 0x064:
             sio->div[self].divisor   = val;
@@ -284,6 +289,7 @@ static void sio_write(sim_t *s, void *ctx, uint32_t off, uint32_t val, unsigned 
         case 0x068:
             sio->div[self].dividend  = val;
             sio->div[self].is_signed = true;
+            div_compute(&sio->div[self]);
             return;
         case 0x06C:
             sio->div[self].divisor   = val;
