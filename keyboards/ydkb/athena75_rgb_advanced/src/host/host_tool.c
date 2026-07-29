@@ -37,6 +37,7 @@ static int usage(const char *argv0) {
         "           info <file.app>                 inspect a packaged app\n"
         "           relocate <file.app> <slot>      patch an app for a target slot (preview)\n"
         "           install <file.app> [--method put|uf2] confirm + install into a free slot\n"
+        "           launch <NAME|0xADDR> [--no-input]     run an installed app now\n"
         "           update <file.app> [--slot ADDR]      PUT code/icon; preserve app data/save\n",
         argv0);
     return 2;

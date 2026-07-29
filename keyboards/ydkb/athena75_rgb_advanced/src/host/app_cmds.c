@@ -894,9 +894,68 @@ fail:
     return 1;
 }
 
+// Run an installed app without touching the keyboard: the firmware resolves the
+// name against its own scan table (or takes an explicit slot address) and hands
+// it to the launcher. OS input is grabbed too, so the app answers to keys right
+// away; --no-input leaves the keyboard in normal typing mode.
+static int app_launch(int argc, char **argv) {
+    const char *what = NULL;
+    int grab = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--no-input")) grab = 0;
+        else if (argv[i][0] != '-') what = argv[i];
+        else { printf("usage: app launch <NAME|0xADDR> [--no-input]\n"); return 2; }
+    }
+    if (!what) { printf("usage: app launch <NAME|0xADDR> [--no-input]\n"); return 2; }
+
+    uint32_t base = 0;
+    if (what[0] == '0' && (what[1] == 'x' || what[1] == 'X')) {
+        base = (uint32_t)strtoul(what, NULL, 0);
+        if (base < ATHENA_APP_AREA_BEGIN || base >= ATHENA_APP_AREA_END ||
+            (base & (ATHENA_APP_SLOT_SIZE - 1u))) {
+            printf("error: slot 0x%08X must be 256K-aligned and in the app area 0x%08X..0x%08X\n",
+                   base, ATHENA_APP_AREA_BEGIN, ATHENA_APP_AREA_END);
+            return 1;
+        }
+    } else if (strlen(what) > ATHENA_APP_NAME_LEN) {
+        printf("error: app name '%s' is longer than %d chars\n", what, ATHENA_APP_NAME_LEN);
+        return 1;
+    }
+
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) {
+        printf("error: device %04x:%04x not found\n", ATHENA_VID, ATHENA_PID);
+        return 1;
+    }
+
+    uint8_t req[ATHENA_REPORT_LEN], rep[ATHENA_REPORT_LEN];
+    memset(req, 0, sizeof req);
+    req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_LAUNCH;
+    put_be32(&req[3], base);
+    req[7] = grab ? ATHENA_APP_LAUNCH_GRAB : 0u;
+    if (!base) {
+        size_t n = strlen(what);
+        memcpy(&req[ATHENA_APP_NAME_OFF], what, n);   // zero-padded to name[16]
+    }
+    if (xfer(d, req, 32, rep, 1000) != 0) {
+        printf("error: no launch reply\n");
+        hid_close(d); return 1;
+    }
+    hid_close(d);
+
+    if (rep[3] != 1) {
+        if (base) printf("error: no installed app at slot 0x%08X\n", base);
+        else      printf("error: no installed app named '%s'\n", what);
+        return 1;
+    }
+    printf(">> launched %s at slot 0x%08X%s\n", what, get_be32(&rep[4]),
+           grab ? " (OS input grabbed)" : "");
+    return 0;
+}
+
 int cmd_app(int argc, char **argv) {
     if (argc < 2) {
-        printf("usage: app <pack|info|relocate|install|update|upload> ...\n"
+        printf("usage: app <pack|info|relocate|install|update|launch> ...\n"
                "  app pack     <elf> --icon icon.rgb565 [--data data.bin]\n"
                "               [-o out.app] [--name NAME]              build one complete package\n"
                "  app info     <file.app>                         inspect a .app\n"
@@ -907,6 +966,7 @@ int cmd_app(int argc, char **argv) {
                "               explicit occupied slots are never overwritten\n");
         printf("  app update   <file.app> [--slot ADDR]             PUT code+icon only;\n"
                "                                                    preserve data + save sector\n");
+        printf("  app launch   <NAME|0xADDR> [--no-input]           run an installed app now\n");
         return 2;
     }
     const char *sub = argv[1];
@@ -915,6 +975,7 @@ int cmd_app(int argc, char **argv) {
     if (!strcmp(sub, "pack"))     return app_pack(subargc, subargv);
     if (!strcmp(sub, "info"))     return app_info(subargc, subargv);
     if (!strcmp(sub, "relocate")) return app_relocate(subargc, subargv);
+    if (!strcmp(sub, "launch"))   return app_launch(subargc, subargv);
     if (!strcmp(sub, "update"))   return app_upload(subargc, subargv);
     if (!strcmp(sub, "install") || !strcmp(sub, "upload"))
         return app_upload(subargc, subargv);

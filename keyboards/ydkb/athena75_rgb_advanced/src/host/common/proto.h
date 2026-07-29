@@ -81,6 +81,10 @@
 #define ATHENA_APP_END     0x04 // -> data[3]=1 ok (finish, keep the loaded slot)
 #define ATHENA_APP_ABORT   0x05 // -> data[3]=1 ok (cancel, drop progress screen)
 #define ATHENA_APP_CHUNK   23   // data bytes per write report (9-byte header)
+#define ATHENA_APP_LAUNCH  0x06 // run an installed app: data[3..6]=base(BE32; 0=by name),
+                                // data[7]=flags, data[11..26]=name[16]
+                                // reply: data[3]=1 launched, data[4..7]=base(BE32)
+#define ATHENA_APP_LAUNCH_GRAB 0x01 // flags bit0: also switch to OS input mode
 
 // app-upload state machine (returned by BEGIN/STATUS).
 #define ATHENA_APPUP_IDLE    0

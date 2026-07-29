@@ -36,6 +36,12 @@ uint8_t app_scan_count(void);
 // next app_scan().
 const app_scan_entry_t *app_scan_get(uint8_t i);
 
+// Lookups into the same table (NULL when nothing matches). `name` is compared
+// case-insensitively against the header name; `base` must be a slot header, not
+// a continuation slot. Used by the host launch command (user_rawhid.c).
+const app_scan_entry_t *app_scan_find(const char *name);
+const app_scan_entry_t *app_scan_find_base(uint32_t base);
+
 #define APP_SLOT_TOTAL ATHENA_APP_SLOT_COUNT
 
 void app_slots_fill_states(uint8_t out[APP_SLOT_TOTAL]);

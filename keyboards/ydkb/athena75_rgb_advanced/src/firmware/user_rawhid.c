@@ -88,6 +88,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define APP_WRITE  0x03 // data[3..6]=page(BE32) data[7]=poff data[8]=len data[9..]=bytes -> data[3]=1/2/0
 #define APP_END    0x04 // -> data[3]=ok
 #define APP_ABORT  0x05 // -> data[3]=ok
+#define APP_LAUNCH 0x06 // data[3..6]=base(BE32; 0=look the name up) data[7]=flags
+                        //   data[11..26]=name[16] -> data[3]=1 launched, data[4..7]=base(BE32)
+#define APP_LAUNCH_GRAB 0x01 // flags bit0: also grab OS input so the app is usable
 
 // OS input-mode control (mirrors proto.h ATHENA_MODE_*): 0xFD 0x65 <sub>.
 #define MODE_CMD    0x65
@@ -99,6 +102,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "probe_flash.h"
 #include "app_upload.h"
 #include "app_input.h"
+#include "app_scan.h"
+#include "app/app.h"   // app_launch_slot
+#include "menu.h"
 #include "fw_info.h"
 #include "config.h"
 
@@ -313,6 +319,46 @@ static void ath_handle_app(uint8_t *data) {
             app_upload_finish(false);
             data[3] = 1;
             break;
+        case APP_LAUNCH: {
+            // Start an installed slot app straight from the host, the same way
+            // the launcher/menu does. Resolve by base address, or by name when
+            // the host sends 0 (it then needs no knowledge of the slot layout).
+            uint32_t base  = rawhid_be32(&data[3]);
+            uint8_t  flags = data[7];
+            const app_scan_entry_t *e;
+            if (base) {
+                e = app_scan_find_base(base);
+            } else {
+                char name[17];
+                memcpy(name, &data[11], 16);
+                name[16] = 0;
+                e = app_scan_find(name);
+            }
+            if (!e) {          // stale table (fresh install / erase)? re-scan once
+                app_scan();
+                e = base ? app_scan_find_base(base) : NULL;
+                if (!base) {
+                    char name[17];
+                    memcpy(name, &data[11], 16);
+                    name[16] = 0;
+                    e = app_scan_find(name);
+                }
+            }
+            uint32_t launched = 0;
+            if (e) {
+                if (menu_is_active()) menu_exit();
+                app_input_release_all();
+                if (flags & APP_LAUNCH_GRAB) app_input_set_mode(APP_INPUT_OS);
+                app_launch_slot(e->base);
+                launched = e->base;
+            }
+            data[3] = e ? 1u : 0u;
+            data[4] = (uint8_t)(launched >> 24);
+            data[5] = (uint8_t)(launched >> 16);
+            data[6] = (uint8_t)(launched >> 8);
+            data[7] = (uint8_t)(launched);
+            break;
+        }
         default:
             break;
     }

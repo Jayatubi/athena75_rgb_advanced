@@ -89,6 +89,27 @@ const app_scan_entry_t *app_scan_get(uint8_t i) {
     return &s_apps[i];
 }
 
+static char up(char c) {
+    return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+}
+
+const app_scan_entry_t *app_scan_find(const char *name) {
+    if (!name || !name[0]) return NULL;
+    for (uint8_t a = 0; a < s_count; a++) {
+        const char *n = s_apps[a].name;
+        uint8_t     i = 0;
+        while (i < 16 && name[i] && up(name[i]) == up(n[i])) i++;
+        if ((i == 16 || !name[i]) && !n[i]) return &s_apps[a];
+    }
+    return NULL;
+}
+
+const app_scan_entry_t *app_scan_find_base(uint32_t base) {
+    for (uint8_t a = 0; a < s_count; a++)
+        if (s_apps[a].base == base) return &s_apps[a];
+    return NULL;
+}
+
 static void slot_occupancy(bool used[APP_SCAN_MAX]) {
     memset(used, 0, APP_SCAN_MAX * sizeof(bool));
     for (uint8_t i = 0; i < APP_SCAN_MAX; i++) {
