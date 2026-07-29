@@ -102,6 +102,7 @@ static void cfg_flush_now(void) {
 #define MTX_GLYPHS   150
 #define MTX_RENDER_MS 16
 #define MTX_DT_MAX_MS 100
+#define MTX_MUT_MS    16 /* one extra tail glyph re-roll per column per ~16 ms */
 #define MTX_HEAD_FG  0xFFFF
 #define MTX_TAIL_FG  0x07E0
 #define MTX_CLOCK_FG 0xFEA0
@@ -313,6 +314,15 @@ static void matrix_tick(uint32_t dt_ms) {
         if ((rng_next() % (32u * mtx_step_ms())) < dt) {
             uint8_t rr = (uint8_t)(rng_next() % rows);
             mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
+        }
+
+        // Glyphs keep changing while they fade out: re-roll random cells inside
+        // this column's trail, at a rate tied to dt so it looks the same at any
+        // rain speed. Without this a tail is a frozen string sliding down.
+        uint8_t muts = (uint8_t)(1u + dt / MTX_MUT_MS);
+        for (uint8_t m = 0; m < muts; m++) {
+            int16_t rr = (int16_t)(mtx_head[c] - (int16_t)(rng_next() % (mtx_trail[c] + 1u)));
+            if (rr >= 0 && rr < rows) mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
         }
     }
 
