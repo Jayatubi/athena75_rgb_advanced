@@ -15,16 +15,23 @@ your own.
 
 macOS, Linux and Windows all build from the same sources; `core/os.h` is where
 the sockets and the monotonic clock stop being POSIX. On Windows the build is
-MSVC, driven from WSL, and SDL2 has to be fetched because the toolchain has none:
+MSVC, driven from WSL:
 
     bash tools/build_sim.sh --windows          # -> artifacts/sim/windows/*.exe
-    bash tools/build_sim.sh --windows --no-sdl # headless only, no download
+    bash tools/build_sim.sh --windows --no-sdl # headless only, no SDL2
     bash tools/run_sim.sh   --windows          # the native window, from WSL
 
-The SDL2 MSVC development package lands in `build/sdl2/` once (override with
-`ATHENA_SDL2_DIR`). It carries no static library, so `athena_sim.exe` needs the
-`SDL2.dll` the script copies beside it, and that pair is deliberately not
-committed.
+Every platform builds its own static SDL2 rather than link whatever the machine
+has installed: the sources are fetched and compiled once into `build/sdl2/`,
+which is a cache that outlives `--clean`. Delete it to force a rebuild, or point
+`ATHENA_SDL2_DIR` at an SDL2 install of your own to skip the whole step. On
+Windows the MSVC runtime is static too (`ATHENA_SIM_STATIC_VCRT`, paired with
+SDL's `SDL_FORCE_STATIC_VCRT`), so `athena_sim.exe` is one self-contained file.
+
+On Linux a static SDL2 still reaches the display through the system's X11 or
+Wayland libraries. Without their development headers SDL would fall back to a
+dummy video driver, so the script builds `athena_sim_cli` only and says so;
+`apt install libx11-dev libxext-dev` is enough to get the window back.
 
 ## The two front ends
 

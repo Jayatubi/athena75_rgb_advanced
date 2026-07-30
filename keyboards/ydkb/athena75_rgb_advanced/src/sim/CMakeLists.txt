@@ -18,6 +18,17 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# tools/build_sim.sh compiles SDL2 with SDL_FORCE_STATIC_VCRT, and the two sides
+# of a link have to agree on the runtime. Statically linked, the .exe also runs
+# on a machine with no Visual C++ redistributable. Turn this off when linking an
+# SDL2 of your own that was built against the DLL runtime.
+if(MSVC)
+  option(ATHENA_SIM_STATIC_VCRT "Link the MSVC runtime statically" ON)
+  if(ATHENA_SIM_STATIC_VCRT)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
+endif()
+
 set(SIM_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 set(HOST_COMMON ${SIM_ROOT}/../host/common)
 

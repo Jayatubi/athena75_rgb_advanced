@@ -13,8 +13,8 @@
 apps/hidden/
 
 # athena_sim binaries (tools/build_sim.sh writes sim/<os>/). Committed like
-# host_tool: SDL2 is linked statically, so the only remaining dependencies are
-# OS frameworks and the binary runs on a machine with no SDL2 installed.
+# host_tool: every platform links the static SDL2 the script builds from source,
+# so the only remaining dependencies are the ones the OS itself ships.
 !sim/
 !sim/*/athena_sim
 !sim/*/athena_sim.exe
@@ -22,6 +22,6 @@ apps/hidden/
 !sim/*/athena_sim_cli.exe
 !sim/readme.txt
 
-# SDL2 ships no static library in its MSVC package, so a Windows window build
-# needs this DLL beside the exe. Third-party binary: keep it local.
+# Only a build pointed at a shared SDL2 of your own (ATHENA_SDL2_DIR) leaves this
+# beside the exe. Third-party binary: keep it local.
 sim/*/SDL2.dll
