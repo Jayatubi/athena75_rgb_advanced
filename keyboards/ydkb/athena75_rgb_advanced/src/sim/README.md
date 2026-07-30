@@ -9,6 +9,9 @@ modelled GC9107 panel and WS2812 chain.
     bash tools/build_sim.sh          # -> artifacts/sim/<os>/athena_sim{,_cli}
     bash tools/build_sim.sh --test   # ... and run the pixel regression
 
+This file is how to use it. How it is built inside — the machine model, the
+scheduler, and the three ways it runs guest code — is `docs/simulator.md`.
+
 Objects stay in `build/sim/`; only the executables are archived. They are not
 committed — see `artifacts/sim/readme.txt`. Paths below say `macos`; substitute
 your own.
