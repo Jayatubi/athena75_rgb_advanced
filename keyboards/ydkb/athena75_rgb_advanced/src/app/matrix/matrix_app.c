@@ -6,11 +6,16 @@
 // This is app/matrix.c reworked as an independently compiled .app: it links no
 // firmware symbols and reaches the display/timer/rng only through host_api_t.
 // The core0-side bits of the built-in version (menu_bind_* setters and the raw
-// HID lcd_clock_set) are dropped — rain parameters are the defaults (index 0)
-// and the wall clock comes from host_api.clock_sec(). SPACE opens the firmware
-// menu engine with the original MATRIX menu content; settings persist through
-// host_api.save_* in the first slot's final 4K sector. Enter opens the menu
-// (Esc at root closes it; Left/Right and Esc/Enter navigate levels alike).
+// HID lcd_clock_set) are dropped — the rain parameters live in this app's own
+// save sector (host_api.save_*, the first slot's final 4K) and the wall clock
+// comes from host_api.clock_sec().
+//
+// Enter opens the firmware menu engine on the MATRIX menu content (Esc at root
+// closes it; Left/Right and Esc/Enter navigate levels alike). The same three
+// settings are also reachable without leaving the rain: Up/Down for speed,
+// Right/Left for density, =/- for how far the clock digits may fade. Those keys
+// auto-repeat and only stage the change, so holding one costs a single flash
+// write when the app exits; the menu still commits immediately.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -44,6 +49,18 @@ typedef struct {
 #define MATRIX_SAVE_MAGIC 0x3158544Du /* "MTX1" */
 static matrix_save_t cfg;
 static bool leave_pending;
+
+// One line naming whatever a key just changed, so the direct controls are not
+// blind. It is outlined when drawn, because it sits on top of the rain.
+#define MTX_HUD_MS       1400u
+#define MTX_RPT_DELAY_MS 320u
+#define MTX_RPT_RATE_MS  110u
+static char     hud_text[16];
+static bool     hud_active;
+static uint32_t hud_t0;
+static uint16_t rpt_kc;
+static uint32_t rpt_t0;
+static bool     rpt_armed;
 
 static uint32_t crc32(const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
@@ -102,14 +119,13 @@ static void cfg_flush_now(void) {
 #define MTX_GLYPHS   150
 #define MTX_RENDER_MS 16
 #define MTX_DT_MAX_MS 100
-#define MTX_MUT_MS    16 /* one extra tail glyph re-roll per column per ~16 ms */
 #define MTX_HEAD_FG  0xFFFF
 #define MTX_TAIL_FG  0x07E0
 #define MTX_CLOCK_FG 0xFEA0
 
-// rain parameters — the built-in app reads these live from eeconfig; a slot app
-// has no eeconfig binding yet, so use the index-0 defaults (fast/dense/75%).
-static const uint16_t mtx_speed_ms[4] = {24, 38, 55, 78};
+// Rain parameters, indexed by the saved settings. Index 0 is what cfg_defaults
+// falls back to when the save sector holds nothing valid: fast, dense, 75%.
+static const uint16_t mtx_speed_ms[4] = {16, 32, 64, 128};
 static const uint8_t  mtx_dens_gap[4]  = {4, 9, 15, 22};
 static const uint8_t  mtx_dens_tmin[4] = {7, 5, 4, 3};
 static const uint8_t  mtx_dens_tspan[4]= {6, 5, 4, 3};
@@ -170,6 +186,61 @@ static const app_menu_model_t menu_model = {
     .group_set = menu_set,
 };
 
+// -- direct controls (the menu's three settings, without opening the menu) ----
+// The row labels above are the only place these names live, so the overlay reads
+// them straight out of the menu model.
+
+static void hud_show(const char *label, const char *value) {
+    unsigned k = 0;
+    for (unsigned i = 0; label[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = label[i];
+    if (k + 1u < sizeof hud_text) hud_text[k++] = ' ';
+    for (unsigned i = 0; value[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = value[i];
+    hud_text[k] = 0;
+    hud_active  = true;
+    hud_t0      = g_api->now_ms();
+}
+
+// cfg_save stages the change and leaves the OS to write it once, on exit --
+// unlike the menu's cfg_flush, which would reach the flash on every repeat of a
+// held key.
+static void speed_nudge(int8_t delta) {
+    int v = (int)cfg.speed + (int)delta;
+    if (v < 0) v = 0;
+    else if (v > 3) v = 3;
+    if ((uint8_t)v != cfg.speed) {
+        cfg.speed = (uint8_t)v;
+        cfg_commit();
+    }
+    hud_show("SPEED", speed_items[cfg.speed].label);
+}
+
+static void density_nudge(int8_t delta) {
+    int v = (int)cfg.density + (int)delta;
+    if (v < 0) v = 0;
+    else if (v > 3) v = 3;
+    if ((uint8_t)v != cfg.density) {
+        cfg.density = (uint8_t)v;
+        cfg_commit();
+    }
+    hud_show("DENSITY", density_items[cfg.density].label);
+}
+
+// clock_items runs in ascending percentage while cfg.clock indexes mtx_floor_a,
+// where 0 has to stay the 75% default -- so step through the menu's order.
+static void clock_nudge(int8_t delta) {
+    uint8_t pos = 0;
+    for (uint8_t i = 0; i < 5; i++)
+        if (clock_items[i].value == cfg.clock) { pos = i; break; }
+    int v = (int)pos + (int)delta;
+    if (v < 0) v = 0;
+    else if (v > 4) v = 4;
+    if (clock_items[v].value != cfg.clock) {
+        cfg.clock = clock_items[v].value;
+        cfg_commit();
+    }
+    hud_show("CLOCK", clock_items[v].label);
+}
+
 static const uint8_t clock_font[10][5] = {
     {0b111,0b101,0b101,0b101,0b111},
     {0b010,0b110,0b010,0b010,0b111},
@@ -184,6 +255,9 @@ static const uint8_t clock_font[10][5] = {
 };
 
 static uint8_t  mtx_glyph[MTX_COLS_MAX][MTX_ROWS_MAX];
+// Alpha as of the last frame. It only moves when a column steps down a row, so
+// comparing against it is what keeps the glyph churn on the rain's own beat.
+static uint8_t  mtx_alpha[MTX_COLS_MAX][MTX_ROWS_MAX];
 static int32_t  mtx_headf[MTX_COLS_MAX];
 static int16_t  mtx_head[MTX_COLS_MAX];
 static uint8_t  mtx_trail[MTX_COLS_MAX];
@@ -191,8 +265,6 @@ static uint8_t  mtx_period[MTX_COLS_MAX];
 static uint32_t mtx_render_t = 0;
 static uint32_t mtx_frame_t  = 0;
 static bool     mtx_tmask[MTX_COLS_MAX][MTX_ROWS_MAX];
-static uint8_t  mtx_dep[MTX_COLS_MAX][MTX_ROWS_MAX];
-static uint16_t mtx_clock_hm = 0xFFFF;
 
 static uint32_t mtx_cp(uint8_t idx) {
     idx %= MTX_GLYPHS;
@@ -217,8 +289,7 @@ static void mtx_seed(void) {
         mtx_trail[c]  = (uint8_t)(mtx_tmin() + rng_next() % mtx_tspan());
         mtx_period[c] = (uint8_t)(1 + rng_next() % 3);
     }
-    memset(mtx_dep, 0, sizeof(mtx_dep));
-    mtx_clock_hm = 0xFFFF;
+    memset(mtx_alpha, 0, sizeof(mtx_alpha));
     mtx_render_t = timer_read32() - MTX_RENDER_MS;
     mtx_frame_t  = timer_read32();
 }
@@ -230,11 +301,6 @@ static bool clock_build_mask(uint8_t cols, uint8_t rows) {
     uint32_t sec = (g_api->clock_sec ? g_api->clock_sec() : 0u) % 86400u;
     uint8_t  hh  = (uint8_t)(sec / 3600u);
     uint8_t  mm  = (uint8_t)((sec % 3600u) / 60u);
-    uint16_t hm  = (uint16_t)(hh * 100u + mm);
-    if (hm != mtx_clock_hm) {
-        memset(mtx_dep, 0, sizeof(mtx_dep));
-        mtx_clock_hm = hm;
-    }
     uint8_t  d[4] = { (uint8_t)(hh / 10), (uint8_t)(hh % 10), (uint8_t)(mm / 10), (uint8_t)(mm % 10) };
     uint8_t  ox = (uint8_t)((cols - CW) / 2);
     uint8_t  oy = (uint8_t)((rows - CH) / 2);
@@ -253,22 +319,69 @@ static bool clock_build_mask(uint8_t cols, uint8_t rows) {
 
 static void matrix_enter(void) {
     leave_pending = false;
+    hud_active    = false;
+    rpt_kc        = 0;
     cfg_load();
     mtx_seed();
+}
+
+static bool key_repeatable(uint16_t kc) {
+    switch (kc) {
+        case APP_KEY_UP:
+        case APP_KEY_DOWN:
+        case APP_KEY_LEFT:
+        case APP_KEY_RIGHT:
+        case APP_KEY_MINUS:
+        case APP_KEY_EQUAL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void key_action(uint16_t kc) {
+    switch (kc) {
+        case APP_KEY_ESC:   leave_pending = true; break;
+        case APP_KEY_ENTER: g_api->menu_run(&menu_model); break;
+        // Both tables run fast-to-slow and dense-to-sparse, so up and right --
+        // "more" -- step towards index 0.
+        case APP_KEY_UP:    speed_nudge(-1); break;
+        case APP_KEY_DOWN:  speed_nudge(+1); break;
+        case APP_KEY_RIGHT: density_nudge(-1); break;
+        case APP_KEY_LEFT:  density_nudge(+1); break;
+        case APP_KEY_EQUAL: clock_nudge(+1); break;
+        case APP_KEY_MINUS: clock_nudge(-1); break;
+        default: break;
+    }
 }
 
 // Drain the OS input ring: Esc returns to the launcher (the app's own back
 // convention over the raw key stream; gif stays the OS input-mode toggle).
 static void matrix_input(void) {
     app_key_event_t ev;
+    uint32_t        now = timer_read32();
     while (g_api->poll_event(&ev)) {
-        if (!ev.pressed) continue;
-        if (ev.keycode == APP_KEY_ESC) {
-            leave_pending = true;
-        } else if (ev.keycode == APP_KEY_ENTER) {
-            g_api->menu_run(&menu_model);
+        if (ev.pressed) {
+            key_action(ev.keycode);
+            rpt_kc    = key_repeatable(ev.keycode) ? ev.keycode : 0;
+            rpt_t0    = now;
+            rpt_armed = false;
+        } else if (ev.keycode == rpt_kc) {
+            rpt_kc = 0;
         }
     }
+
+    // Hold to keep stepping. The menu is modal and owns input while it is up, so
+    // a key still down when it opened must not repeat behind it.
+    if (!rpt_kc || g_api->menu_active()) return;
+    if (!rpt_armed) {
+        if ((uint32_t)(now - rpt_t0) < MTX_RPT_DELAY_MS) return;
+        rpt_armed = true;
+    } else if ((uint32_t)(now - rpt_t0) < MTX_RPT_RATE_MS) {
+        return;
+    }
+    rpt_t0 = now;
+    key_action(rpt_kc);
 }
 
 static void matrix_tick(uint32_t dt_ms) {
@@ -296,33 +409,17 @@ static void matrix_tick(uint32_t dt_ms) {
 
     bool have_clock = clock_build_mask(cols, rows);
 
+    // Columns only advance here; nothing re-rolls a glyph on the frame clock, so
+    // the head position is the sole thing driving the animation forward.
     for (uint8_t c = 0; c < cols; c++) {
-        int16_t prev = (int16_t)(mtx_headf[c] >> 8);
-        int32_t adv  = ((int32_t)dt << 8) / ((int32_t)mtx_period[c] * mtx_step_ms());
-        mtx_headf[c] += adv;
-        int16_t now  = (int16_t)(mtx_headf[c] >> 8);
-        mtx_head[c]  = now;
-        for (int16_t r = (int16_t)(prev + 1); r <= now; r++)
-            if (r >= 0 && r < rows) mtx_glyph[c][r] = (uint8_t)(rng_next() % MTX_GLYPHS);
-        if (now - (int16_t)mtx_trail[c] > rows) {
+        mtx_headf[c] += ((int32_t)dt << 8) / ((int32_t)mtx_period[c] * mtx_step_ms());
+        mtx_head[c] = (int16_t)(mtx_headf[c] >> 8);
+        if (mtx_head[c] - (int16_t)mtx_trail[c] > rows) {
             int16_t nh    = (int16_t)(-(int16_t)(rng_next() % mtx_gap()));
             mtx_headf[c]  = (int32_t)nh << 8;
             mtx_head[c]   = nh;
             mtx_trail[c]  = (uint8_t)(mtx_tmin() + rng_next() % mtx_tspan());
             mtx_period[c] = (uint8_t)(1 + rng_next() % 3);
-        }
-        if ((rng_next() % (32u * mtx_step_ms())) < dt) {
-            uint8_t rr = (uint8_t)(rng_next() % rows);
-            mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
-        }
-
-        // Glyphs keep changing while they fade out: re-roll random cells inside
-        // this column's trail, at a rate tied to dt so it looks the same at any
-        // rain speed. Without this a tail is a frozen string sliding down.
-        uint8_t muts = (uint8_t)(1u + dt / MTX_MUT_MS);
-        for (uint8_t m = 0; m < muts; m++) {
-            int16_t rr = (int16_t)(mtx_head[c] - (int16_t)(rng_next() % (mtx_trail[c] + 1u)));
-            if (rr >= 0 && rr < rows) mtx_glyph[c][rr] = (uint8_t)(rng_next() % MTX_GLYPHS);
         }
     }
 
@@ -331,54 +428,56 @@ static void matrix_tick(uint32_t dt_ms) {
 
     const uint8_t clk_floor = mtx_clock_floor();
     for (uint8_t c = 0; c < cols; c++) {
-        uint32_t frac = (uint32_t)(mtx_headf[c] & 0xFF);
-        int16_t  head = mtx_head[c];
-        uint32_t span = (uint32_t)mtx_trail[c] * 256u;
+        int16_t head  = mtx_head[c];
+        uint8_t trail = mtx_trail[c];
         for (uint8_t r = 0; r < rows; r++) {
-            int16_t k       = (int16_t)(head - (int16_t)r);
-            bool    covered = (k >= 0 && k <= (int16_t)mtx_trail[c]);
-            bool    digit   = have_clock && mtx_tmask[c][r];
-            if (!covered && !digit) continue;
-
-            uint8_t ra = 0;
-            if (covered) {
-                if (k == 0) {
-                    ra = 255;
-                } else {
-                    uint32_t dist = (uint32_t)k * 256u + frac;
-                    ra = (dist >= span) ? 0 : (uint8_t)(((span - dist) * 255u) / span);
-                }
+            // The one rule every cell obeys: the head burns at full alpha and the
+            // trail behind it fades out one whole step per row the column falls.
+            // Quantising on k rather than the sub-row remainder is what puts the
+            // fade on the same beat as the fall.
+            int16_t k = (int16_t)(head - (int16_t)r);
+            uint8_t a = 0;
+            if (k == 0) {
+                a = 255;
+            } else if (k > 0 && k <= (int16_t)trail) {
+                a = (uint8_t)(((uint32_t)(trail - (uint8_t)k) * 255u) / trail);
             }
 
-            uint16_t fg;
-            uint8_t  a;
-            uint8_t  gi;
-            if (digit) {
-                if (covered && k == 0) {
-                    fg = MTX_HEAD_FG; /* rain head: full life is white like any other cell */
-                } else {
-                    fg = MTX_CLOCK_FG;
-                }
-                if (covered) {
-                    mtx_dep[c][r] = (uint8_t)(mtx_glyph[c][r] + 1);
-                    gi = mtx_glyph[c][r];
-                    a  = (ra > clk_floor) ? ra : clk_floor;
-                } else if (mtx_dep[c][r]) {
-                    gi = (uint8_t)(mtx_dep[c][r] - 1);
-                    a  = clk_floor;
-                } else {
-                    continue;
-                }
-            } else {
-                fg = (k == 0) ? MTX_HEAD_FG : MTX_TAIL_FG;
-                a  = ra;
-                gi = mtx_glyph[c][r];
+            // A clock digit is not a layer of its own, just that fade with two
+            // knobs turned: it bottoms out at clk_floor instead of reaching zero,
+            // so the glyph goes on living and changing but never goes dark, and
+            // what is left of it is yellow rather than green.
+            bool digit = have_clock && mtx_tmask[c][r];
+            if (digit && a < clk_floor) a = clk_floor;
+
+            // Alpha moved, so the cell is mid-fade and takes a new glyph -- which
+            // ties the churn to the fall too, and leaves a cell parked on the
+            // clock floor alone until rain reaches it again.
+            if (a != mtx_alpha[c][r]) {
+                mtx_alpha[c][r] = a;
+                if (a) mtx_glyph[c][r] = (uint8_t)(rng_next() % MTX_GLYPHS);
             }
             if (!a) continue;
 
-            mtx_utf8(gi, g);
+            mtx_utf8(mtx_glyph[c][r], g);
+            uint16_t fg = (k == 0) ? MTX_HEAD_FG : (digit ? MTX_CLOCK_FG : MTX_TAIL_FG);
             ui_text_alpha(fbShow, (int16_t)(c * MTX_CELL_W), (int16_t)(r * MTX_CELL_H),
                           g, fg, 0x0000, a);
+        }
+    }
+
+    if (hud_active) {
+        if (timer_elapsed32(hud_t0) < MTX_HUD_MS) {
+            // Outlined: white on the rain is otherwise hard to read.
+            for (uint8_t i = 0; i < 4; i++) {
+                static const int8_t ox[4] = {-1, 1, 0, 0};
+                static const int8_t oy[4] = {0, 0, -1, 1};
+                ui_text_alpha(fbShow, (int16_t)(2 + ox[i]), (int16_t)(1 + oy[i]),
+                              hud_text, 0x0000, 0x0000, 255);
+            }
+            ui_text_alpha(fbShow, 2, 1, hud_text, 0xFFFF, 0x0000, 255);
+        } else {
+            hud_active = false;
         }
     }
     ui_present(fbShow);
