@@ -62,11 +62,19 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 | **ACE** | 关键帧动画播放器；QGF 数据占 **13 个连续 slot**（1 代码 + 12 数据）；补间特效与旧版固件 ANIMATION 菜单相同 | Enter 打开 **ANIMATION** 菜单树；参数保存在 slot 末 4 KiB save 区 |
 | **MATRIX** | 数字雨 + 可选时钟水印；参数经 save 区持久化 | Enter/Space 打开 **MATRIX** 菜单（SPEED / DENSITY / CLOCK）；`host_tool synctime` 推时钟 |
 | **LIFE** | Conway + **环面**；屏保向图案与自动扰动 | 默认 **SAVER**（大格：枪+滑翔机群；小格：群）；无聊时自动注入滑翔机；**PATTERN**：SAVER/GUN/SWARM/MIX |
+| **MAZE** | 16×16 完美迷宫自动寻路演示（中心 32×32 为封闭区） | Enter 打开 **MAZE** 菜单（SPEED）；走完自动重开一局 |
+| **FISH** | 鱼群屏保：Q15.16 定点（`src/firmware/lib/fixed_math`）移植自 TS 参考实现——Reynolds 转向推力 + 线性阻力积分（无硬限速）、软化平方反比池壁力场（GLASS 法向朝内 + CURRENT 沿边顺时针）、限速转向与预测式避墙；鱼身为四节火车 + 行波摆尾，按参考的几何模式画成逐节收窄的三角 | Enter 打开 **FISH** 菜单，除 COLOR 外全是滑条（←→ 一步、`-`/`=` 五步、Shift 十步）：SPEED 8–100 px/s、SCHOOL 1–10 条、VISION 8–86 px、SEPARATE / ALIGN / COHERE 0–40、GLASS / CURRENT 0–150 %；Space 重新放鱼，↑↓ 速度、←→ 逐条增减鱼、`-`/`=` 水流强度（步长与滑条一致）。**VISION 是唯一的邻居半径**（与参考实现一致）：三条规则都只作用于半径内的同伴，分离按 1/d² 加权，所以它同时决定鱼群的松紧。滑条范围照搬参考的 UI：权重 0–4.0（这里 ×10 存整数，默认 30 / 10 / 10 即参考的 3 / 1 / 1），视野 2–20 世界单位；参考的池塘边长 30 单位对应这里 128 px，即 1 单位 ≈ 4.27 px，它默认的 3 单位视野落在 13 px。GLASS 是池壁法向（朝池内推）强度、CURRENT 是池壁切向（沿边顺时针）强度，两者按巡航速度的百分比给出，并按 `S·cruise·R²/(d²+R²)` 随离墙距离衰减（这两个默认 35 % / 25 % 高于参考的 10 %，是这块小屏上刻意的偏离） |
 
 构建并归档到 `artifacts/apps/`：
 
 ```bash
-bash src/app/tools/build_app.sh settings   # 或 ace | matrix | life
+bash src/app/tools/build_app.sh settings   # 或 ace | matrix | life | maze | fish
+```
+
+图标（`src/app/<app>/icon.png`，32×32）缺失时回落到 SDK 默认图标；FISH 的那张是脚本画的像素图，改完重跑即可：
+
+```bash
+python3 src/app/fish/make_icon.py --zoom 8   # --zoom 另存放大预览便于检查
 ```
 
 安装到键盘（需已构建 `src/host` 的 `host_tool`，见下）：

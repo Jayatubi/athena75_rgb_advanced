@@ -29,7 +29,7 @@ DEFAULT_ICON="${APPS_DIR}/sdk/default_app_icon_32.png"
 ICON_RGB="${BUILD}/${APP}_icon.rgb565"
 DATA_BLOB="${APP_DATA:-${BUILD}/data.bin}"
 EXTRA_SRC=""
-if [[ "${APP}" == "ace" ]]; then
+if [[ "${APP}" == "ace" || "${APP}" == "fish" ]]; then
     EXTRA_SRC="/kbd/src/firmware/lib/fixed_math/fixed_math.c"
 fi
 if [[ "${APP}" == "settings" ]]; then
