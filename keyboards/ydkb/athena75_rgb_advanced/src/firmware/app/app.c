@@ -106,7 +106,12 @@ void app_run(void) {
     } else if (reinit && cur) {                       // same app, but woke / asked: re-init
         // Slot apps must tear down loader state first: a code-only flash update can
         // leave g_desc pointing at the old image while XIP already holds the new one.
-        if (cur == &app_slot && cur->exit) cur->exit();
+        // A reload discards whatever the app had staged, so bank it first -- waking
+        // from sleep must not throw away a setting the user just changed.
+        if (cur == &app_slot) {
+            app_slot_flush_pending_save();
+            if (cur->exit) cur->exit();
+        }
         if (cur->enter) cur->enter();
     }
     wake_ack   = c1_wake_seq();

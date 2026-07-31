@@ -90,13 +90,12 @@ static void cfg_load(void) {
     }
     cfg = saved;
 }
+// Staged, never written here: the OS compares and programs the sector once, on
+// the way out of the app. Writing on every menu edit spends an erase/program
+// cycle per keypress, and a held key spends one per repeat.
 static void cfg_commit(void) {
     cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
     g_api->cfg_save(0, &cfg, sizeof cfg);
-}
-static void cfg_flush_now(void) {
-    cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(matrix_save_t, crc));
-    g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 // Shim the firmware names matrix.c uses onto the host_api table so the rain
@@ -177,7 +176,7 @@ static void menu_set(uint8_t group, uint8_t value) {
     else if (group == G_DENSITY && value < 4) cfg.density = value;
     else if (group == G_CLOCK && value < 5) cfg.clock = value;
     else return;
-    cfg_flush_now();
+    cfg_commit();
 }
 static const app_menu_model_t menu_model = {
     .nodes = menu_nodes,
@@ -200,9 +199,6 @@ static void hud_show(const char *label, const char *value) {
     hud_t0      = g_api->now_ms();
 }
 
-// cfg_save stages the change and leaves the OS to write it once, on exit --
-// unlike the menu's cfg_flush, which would reach the flash on every repeat of a
-// held key.
 static void speed_nudge(int8_t delta) {
     int v = (int)cfg.speed + (int)delta;
     if (v < 0) v = 0;

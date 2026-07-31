@@ -177,20 +177,15 @@ static void cfg_load(void) {
     cfg_defaults();
 }
 
+// Staged, never written here: the OS compares and programs the sector once, on
+// the way out of the app. Writing on every menu edit spends an erase/program
+// cycle per keypress, and a held key spends one per repeat.
 static void cfg_commit(void) {
     cfg.version = 4;
     cfg.size    = 0;
     cfg.pattern = pattern_normalize(cfg.pattern);
     cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
     g_api->cfg_save(0, &cfg, sizeof cfg);
-}
-
-static void cfg_flush_now(void) {
-    cfg.version = 4;
-    cfg.size    = 0;
-    cfg.pattern = pattern_normalize(cfg.pattern);
-    cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(life_save_t, crc));
-    g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 static inline uint32_t idx(int16_t x, int16_t y) {
@@ -562,10 +557,10 @@ static uint8_t menu_get(uint8_t group) {
 static void menu_set(uint8_t group, uint8_t value) {
     if (group == G_SPEED && value < 4) {
         cfg.speed = value;
-        cfg_flush_now();
+        cfg_commit();
     } else if (group == G_PATTERN && value < PATTERN_COUNT) {
         cfg.pattern = value;
-        cfg_flush_now();
+        cfg_commit();
         pending_reseed = true;
         hud_show_pattern();
     }
@@ -579,7 +574,7 @@ static uint16_t menu_color_get(uint8_t group) {
 static void menu_color_set(uint8_t group, uint16_t rgb565) {
     if (group != G_COLOR) return;
     cfg.cell_color = rgb565;
-    cfg_flush_now();
+    cfg_commit();
 }
 
 static const app_menu_model_t menu_model = {

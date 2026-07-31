@@ -54,10 +54,15 @@
 > 找到首 slot，固件核对名称与 slot_count 后仅擦写代码和 icon；后续数据 slots 以及
 > 首 slot `+0x3F000` 的 4 KiB save sector 均保持不动。
 >
-> Slot apps persist settings in the first slot's 4 KiB save sector via
-> `cfg_save` (stage; firmware flushes on app exit if changed) and `cfg_flush`
-> (write immediately when not `save_busy`). Low-level `save_write` remains for
-> legacy callers. MATRIX/ACE/LIFE/MAZE use the cfg helpers only.
+> Slot apps persist settings in the first slot's 4 KiB save sector, and every
+> app in tree stages with `cfg_save` only: the firmware compares and programs
+> the sector once, when the app exits (or before a reload, e.g. waking from
+> sleep). `cfg_flush` programs immediately and is what the menus used to call
+> on every edit — one erase/program per keypress, one per repeat of a held key
+> — so nothing uses it now. Low-level `save_write` remains for legacy callers.
+> Settings that live in QMK's own EEPROM (RGB, CapsLock colour, sleep timeout,
+> layout options — what SETTINGS edits) are unaffected: those go through
+> eeconfig as before.
 
 ---
 

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // MAZE — 16×16 perfect maze on 128×128 (8 px/cell). Center 32×32 px hub is
-// impassable (4×4 cells; seed overlay). Persistence: speed via cfg_save / cfg_flush.
+// impassable (4×4 cells; seed overlay). Persistence: speed staged with cfg_save,
+// written by the OS on app exit.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -155,15 +156,12 @@ static bool cfg_load(void) {
     return false;
 }
 
+// Staged, never written here: the OS compares and programs the sector once, on
+// the way out of the app. Writing on every menu edit spends an erase/program
+// cycle per keypress, and a held key spends one per repeat.
 static void cfg_commit(void) {
     cfg_rehash();
     g_api->cfg_save(0, &cfg, sizeof cfg);
-}
-
-static void cfg_flush_now(void) {
-    cfg_rehash();
-    if (g_api->save_busy()) return;
-    (void)g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 static void prng_seed(void) {
@@ -787,7 +785,6 @@ static void menu_set(uint8_t group, uint8_t value) {
     if (group == G_SPEED && value < 4u) {
         cfg.speed = value;
         cfg_commit();
-        cfg_flush_now();
         hud_show_speed();
     }
 }
