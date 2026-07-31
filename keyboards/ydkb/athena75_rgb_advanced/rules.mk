@@ -32,6 +32,10 @@ OPT_DEFS += -DFW_BUILD_NUM=$(FW_BUILD_NUM)
 
 ALLOW_WARNINGS = yes
 
+# Typing speed, for apps that react to it (host_api wpm()). quantum/wpm.c keeps
+# its own decaying average, so this is a counter core1 can just read.
+WPM_ENABLE = yes
+
 CUSTOM_MATRIX            = yes # Custom matrix file
 CONSOLE_ENABLE          ?= no	# Console for debug
 

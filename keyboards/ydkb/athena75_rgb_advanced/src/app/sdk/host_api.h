@@ -323,7 +323,19 @@ typedef struct host_api_t {
 
     // Firmware build stamp + ABI levels (for SETTINGS / diagnostics).
     void     (*fw_info)(app_fw_info_t *out);
+
+    // ---- typing speed -------------------------------------------------------
+    // QMK's decaying words-per-minute average, so an app left running in
+    // KEYBOARD input mode (a screen saver, say) can react to the user typing.
+    // 0 while OS input mode is on: menu keys are not typing.
+    // Appended to ABI v3, so v3 apps built before it keep every field offset --
+    // but an app that CALLS it needs firmware built >= FW_WPM_BUILD, which is
+    // what fw_info().build_num is for.
+    uint8_t  (*wpm)(void);
 } host_api_t;
+
+// First firmware build stamp carrying host_api_t::wpm.
+#define FW_WPM_BUILD 260731u
 
 // ---- What an app exposes back to the firmware -------------------------------
 // Mirrors the built-in app_t. All callbacks run on core1; any may be NULL.

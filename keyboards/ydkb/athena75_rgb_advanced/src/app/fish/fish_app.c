@@ -83,6 +83,11 @@ static const host_api_t *g_api;
 
 #define DRAG      FX(0.6)       // per second; top speed = thrust / drag
 #define MIN_FRAC  FX(0.2)       // minimum speed as a fraction of cruise
+
+// Body palette ends, as fractions of the cruise speed: below COL_LO a fish is
+// fully blue, above COL_HI fully red.
+#define COL_LO    FX(0.15)
+#define COL_HI    FX(0.60)
 #define TURN_STEP FX(0.0503)    // 180 deg/s x DT
 #define EDGE_R    FX(16.0)      // wall field falloff scale
 
@@ -131,12 +136,13 @@ typedef struct {
     uint8_t  ali;      // alignment weight x10
     uint8_t  coh;      // cohesion weight x10
     uint8_t  vision;   // neighbour radius, px
-    uint16_t color;
+    uint8_t  typing;   // how much the user's WPM speeds the school up, %
+    uint16_t reserved; // held the body colour up to v7; speed picks the hue now
     uint32_t crc;
 } fish_save_t;
 
 #define FISH_SAVE_MAGIC   0x31485346u /* "FSH1" */
-#define FISH_SAVE_VERSION 6u
+#define FISH_SAVE_VERSION 8u
 
 // Slider bounds: min, max, step, default. The wall strengths sit far above the
 // reference's 10%: its pool holds hundreds of fish and is wide enough that the
@@ -162,6 +168,21 @@ typedef struct {
 #define VIS_STEP  2u
 #define VISION_DEF 13u
 
+// Typing response. What the school reacts to is mostly "you started typing",
+// not how fast you are, so the curve steps straight to KICK on the first WPM
+// reading and only then climbs to KICK+SPAN at WPM_FULL. At TYPING 100% that
+// is +15% the moment you touch the keys and +40% at a brisk 80 WPM.
+#define TYPE_MAX   200u
+#define TYPE_STEP  10u
+#define TYPE_DEF   100u
+#define WPM_KICK   FX(0.15)
+#define WPM_SPAN   FX(0.25)
+#define WPM_FULL   80
+// Asymmetric one-pole on the boost itself: ~0.16 s to surge, ~1.2 s to settle
+// back, so the tank answers the first keystroke and then eases off.
+#define BOOST_UP   FX(0.10)
+#define BOOST_DOWN FX(0.013)
+
 static fish_save_t cfg;
 static bool leave_pending;
 static bool pending_restock;
@@ -170,7 +191,14 @@ static bool menu_shown;
 // Q16 forms of the settings above, refreshed once per step instead of per fish:
 // each is one divide, and the pair loop would otherwise redo them N² times.
 static fixed_point fx_cruise, fx_sep, fx_ali, fx_coh, fx_glass, fx_curr;
-static fixed_point fx_vision, fx_vision2;
+static fixed_point fx_vision, fx_vision2, fx_typing;
+static fixed_point fx_col_lo, fx_col_span;   // speeds the body palette spans
+
+// The typing boost, smoothed, and the cruise speed it produces this step.
+// wpm() is only there on firmware new enough to publish it.
+static bool        has_wpm;
+static fixed_point boost_s;
+static fixed_point fx_cruise_now;
 
 // v/10 and v/100 in Q16. fixed_div would take the whole-number fast path and
 // truncate v to an integer first, which is exactly the precision being asked for
@@ -188,6 +216,26 @@ static void cfg_derive(void) {
     fx_vision = fixed_itox(cfg.vision);
     // The square is what the pair loop compares against, so square it once here.
     fx_vision2 = fixed_itox((int32_t)cfg.vision * cfg.vision);
+    fx_typing  = percent(cfg.typing);
+    fx_col_lo   = fixed_mul(fx_cruise, COL_LO);
+    fx_col_span = fixed_mul(fx_cruise, COL_HI - COL_LO);
+    fx_cruise_now = fx_cruise;
+}
+
+// The school's speed this step. The wall fields deliberately stay on the base
+// cruise speed: typing should move the fish, not stiffen the tank.
+static void typing_step(void) {
+    fixed_point target = 0;
+    if (has_wpm && cfg.typing) {
+        uint8_t w = g_api->wpm();
+        if (w) {
+            fixed_point r = w >= WPM_FULL ? fixed_one
+                                          : (fixed_point)(((int32_t)w << 16) / WPM_FULL);
+            target = fixed_mul(fx_typing, WPM_KICK + fixed_mul(WPM_SPAN, r));
+        }
+    }
+    boost_s += fixed_mul(target - boost_s, target > boost_s ? BOOST_UP : BOOST_DOWN);
+    fx_cruise_now = fx_cruise + fixed_mul(fx_cruise, boost_s);
 }
 
 #define FISH_HUD_MS    1600u
@@ -225,20 +273,36 @@ static void cfg_defaults(void) {
     cfg.ali     = AC_DEF;
     cfg.coh     = AC_DEF;
     cfg.vision  = VISION_DEF;
-    cfg.color   = 0xFD20u; /* orange */
-    cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(fish_save_t, crc));
+    cfg.typing   = TYPE_DEF;
+    cfg.reserved = 0;
+    cfg.crc      = crc32(&cfg, (uint32_t)__builtin_offsetof(fish_save_t, crc));
 }
+
+// Every field an older tank set still sits at the same offset: `typing` took
+// the padding byte v6 carried, and `reserved` is where v7 and earlier kept the
+// body colour. Both were already covered by the CRC, so old saves upgrade in
+// place instead of throwing away a tuned tank.
+_Static_assert(sizeof(fish_save_t) == 20, "old blobs upgrade in place");
 
 static void cfg_load(void) {
     fish_save_t saved;
-    if (!g_api->save_read(0, &saved, sizeof saved) ||
-        saved.magic != FISH_SAVE_MAGIC || saved.version != FISH_SAVE_VERSION ||
+    bool read_ok = g_api->save_read(0, &saved, sizeof saved) &&
+                   saved.magic == FISH_SAVE_MAGIC &&
+                   saved.crc == crc32(&saved, (uint32_t)__builtin_offsetof(fish_save_t, crc));
+    if (read_ok && saved.version >= 6u && saved.version < FISH_SAVE_VERSION) {
+        if (saved.version < 7u) saved.typing = TYPE_DEF;
+        saved.reserved = 0;
+        saved.version  = FISH_SAVE_VERSION;
+        saved.crc      = crc32(&saved, (uint32_t)__builtin_offsetof(fish_save_t, crc));
+    }
+    if (!read_ok ||
+        saved.version != FISH_SAVE_VERSION ||
         saved.speed < SPEED_MIN || saved.speed > SPEED_MAX ||
         saved.glass > WALL_MAX || saved.current > WALL_MAX ||
         saved.sep > W_MAX || saved.ali > W_MAX || saved.coh > W_MAX ||
         saved.vision < VIS_MIN || saved.vision > VIS_MAX ||
-        saved.count < 1u || saved.count > FISH_MAX ||
-        saved.crc != crc32(&saved, (uint32_t)__builtin_offsetof(fish_save_t, crc))) {
+        saved.typing > TYPE_MAX ||
+        saved.count < 1u || saved.count > FISH_MAX) {
         cfg_defaults();
         cfg_derive();
         return;
@@ -252,11 +316,6 @@ static void cfg_load(void) {
 static void cfg_commit(void) {
     cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(fish_save_t, crc));
     g_api->cfg_save(0, &cfg, sizeof cfg);
-}
-
-static void cfg_flush_now(void) {
-    cfg.crc = crc32(&cfg, (uint32_t)__builtin_offsetof(fish_save_t, crc));
-    g_api->cfg_flush(0, &cfg, sizeof cfg);
 }
 
 // -- fixed point helpers ------------------------------------------------------
@@ -327,6 +386,8 @@ static void steer(fixed_point dx, fixed_point dy, fixed_point vx, fixed_point vy
 static inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
+
+static inline int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
 
 // -- the tank -----------------------------------------------------------------
 static inline fixed_point bound_x(void) { return fixed_itox(view_w - 1); }
@@ -573,7 +634,8 @@ static void refresh_pose(fish_t *f) {
 
 // -- one step -----------------------------------------------------------------
 static void school_step(void) {
-    const fixed_point cru  = fx_cruise;
+    typing_step();
+    const fixed_point cru  = fx_cruise_now;
     const fixed_point mins = fixed_mul(cru, MIN_FRAC);
     const fixed_point mx = bound_x(), my = bound_y();
 
@@ -620,13 +682,41 @@ static void school_step(void) {
 }
 
 // -- drawing ------------------------------------------------------------------
-// Channel scale, 256 == unchanged. The reference drops the body's HSL lightness
-// from 58% to 44% down the train; same ratio here, applied to the chosen colour.
-static uint16_t scale565(uint16_t c, uint16_t num) {
-    uint32_t r = (uint32_t)((c >> 11) & 0x1Fu) * num >> 8;
-    uint32_t g = (uint32_t)((c >> 5) & 0x3Fu) * num >> 8;
-    uint32_t b = (uint32_t)(c & 0x1Fu) * num >> 8;
-    return (uint16_t)((r << 11) | (g << 5) | b);
+// The reference paints the body in HSL at a fixed 78% saturation, so the only
+// two things that vary are the hue (speed) and the lightness (which segment).
+#define BODY_SAT 78
+static uint16_t hsl565(int32_t hue, int32_t light_pct) {
+    const int32_t l = light_pct * 255 / 100;                        // 0..255
+    const int32_t c = (255 - iabs(2 * l - 255)) * BODY_SAT / 100;   // chroma
+    const int32_t h = hue * 256 / 60;                               // sector.frac, 8.8
+    const int32_t x = c * (256 - iabs((h & 511) - 256)) >> 8;
+    const int32_t m = l - c / 2;
+
+    int32_t r, g, b;
+    switch (h >> 8) {
+        case 0:  r = c; g = x; b = 0; break;
+        case 1:  r = x; g = c; b = 0; break;
+        case 2:  r = 0; g = c; b = x; break;
+        case 3:  r = 0; g = x; b = c; break;
+        case 4:  r = x; g = 0; b = c; break;
+        default: r = c; g = 0; b = x; break;
+    }
+    return (uint16_t)(((r + m) >> 3 << 11) | ((g + m) >> 2 << 5) | ((b + m) >> 3));
+}
+
+// Slow fish are blue, fast ones red, hue quantised to 8 degrees so the school
+// reads as a few bands instead of a smear -- the reference's palette. Its span
+// is 0..2x cruise, which assumes fish that actually reach their cruise speed;
+// drag and the min-speed floor keep these between roughly 0.2x and 0.55x, so
+// the ends are calibrated to that instead and the whole range gets used. Both
+// ends follow the *base* cruise speed, which is what makes a typing burst warm
+// the tank up rather than just move it.
+static int32_t speed_hue(const fish_t *f) {
+    fixed_point sp = fx_hypot(f->vx, f->vy) - fx_col_lo;
+    if (sp <= 0) return 220;
+    if (sp >= fx_col_span) return 0;
+    int32_t hue = 220 - (int32_t)(((int64_t)sp * 220) / fx_col_span);
+    return (hue + 4) / 8 * 8;
 }
 
 static inline void px_put(uint8_t *fb, int16_t x, int16_t y, uint16_t c) {
@@ -667,10 +757,15 @@ static void tri_fill(uint8_t *fb, const fixed_point *vx, const fixed_point *vy, 
 static const fixed_point tri_fwd[SEG]  = { FX(3.491), FX(3.084), FX(2.677), FX(2.269) };
 static const fixed_point tri_back[SEG] = { FX(1.496), FX(1.322), FX(1.147), FX(0.973) };
 static const fixed_point tri_half[SEG] = { FX(2.750), FX(2.429), FX(2.108), FX(1.788) };
-static const uint16_t    tri_shade[SEG] = { 256, 235, 217, 194 };
+// HSL lightness down the train, the reference's 58% - 14%t.
+static const uint8_t     tri_light[SEG] = { 58, 53, 49, 44 };
 
-static void draw_one(uint8_t *fb, const fish_t *f, uint16_t c) {
+static void draw_one(uint8_t *fb, const fish_t *f) {
     fixed_point wx[SEG], wy[SEG];
+    uint16_t    col[SEG];
+
+    const int32_t hue = speed_hue(f);
+    for (uint8_t i = 0; i < SEG; i++) col[i] = hsl565(hue, tri_light[i]);
 
     for (uint8_t i = 0; i < SEG; i++) {
         fixed_point x = f->segx[i], y = f->segy[i];
@@ -707,7 +802,7 @@ static void draw_one(uint8_t *fb, const fish_t *f, uint16_t c) {
         fixed_point ny = fixed_mul(ux, tri_half[i]);
         const fixed_point tx[3] = { wx[i] + fixed_mul(ux, tri_fwd[i]), bx + nx, bx - nx };
         const fixed_point ty[3] = { wy[i] + fixed_mul(uy, tri_fwd[i]), by + ny, by - ny };
-        tri_fill(fb, tx, ty, scale565(c, tri_shade[i]));
+        tri_fill(fb, tx, ty, col[i]);
     }
 }
 
@@ -722,7 +817,7 @@ static void hud_text_outlined(uint8_t *fb, int16_t x, int16_t y, const char *s) 
 static void tank_draw(void) {
     uint8_t *fb = g_api->fb;
     g_api->clear(fb, 0x0000);
-    for (uint8_t i = 0; i < fish_n; i++) draw_one(fb, &fish[i], cfg.color);
+    for (uint8_t i = 0; i < fish_n; i++) draw_one(fb, &fish[i]);
 
     if (hud_active) {
         if ((uint32_t)(g_api->now_ms() - hud_t0) < FISH_HUD_MS) hud_text_outlined(fb, 2, 1, hud_text);
@@ -736,7 +831,7 @@ static void tank_draw(void) {
 // covers the lot. The engine's slider takes Left/Right for one step, -/= for
 // five and Shift for ten, which is what makes a 0..150 range workable.
 enum { U_SPEED = 1, U_COUNT, U_VISION, U_SEP, U_ALI, U_COH,
-       U_GLASS, U_CURRENT, G_COLOR };
+       U_GLASS, U_CURRENT, U_TYPING };
 enum { N_ROOT = 0 };
 
 #define SLIDER(label_, group_) \
@@ -752,7 +847,7 @@ static const app_menu_item_t root_items[] = {
     SLIDER("COHERE",   U_COH),
     SLIDER("GLASS",    U_GLASS),      // % of cruise
     SLIDER("CURRENT",  U_CURRENT),
-    { "COLOR", APP_MI_FOLDER, 0, G_COLOR, 0, APP_MENU_CHILD_COLOR },
+    SLIDER("TYPING",   U_TYPING),     // % of the WPM response
 };
 #undef SLIDER
 
@@ -771,6 +866,7 @@ static void menu_uint_spec(uint8_t group, uint32_t *min, uint32_t *max, uint32_t
         case U_COH:     *min = 0u;        *max = W_MAX;     *step = 1u;         break;
         case U_GLASS:
         case U_CURRENT: *min = 0u;        *max = WALL_MAX;  *step = WALL_STEP;  break;
+        case U_TYPING:  *min = 0u;        *max = TYPE_MAX;  *step = TYPE_STEP;  break;
         default: break;
     }
 }
@@ -785,6 +881,7 @@ static uint32_t menu_uint_get(uint8_t group) {
         case U_COH:     return cfg.coh;
         case U_GLASS:   return cfg.glass;
         case U_CURRENT: return cfg.current;
+        case U_TYPING:  return cfg.typing;
         default:        return 0u;
     }
 }
@@ -804,27 +901,16 @@ static void menu_uint_set(uint8_t group, uint32_t value) {
         case U_COH:     cfg.coh = v; break;
         case U_GLASS:   cfg.glass = v; break;
         case U_CURRENT: cfg.current = v; break;
+        case U_TYPING:  cfg.typing = v; break;
         default: return;
     }
     cfg_derive();
     cfg_commit();
 }
 
-static uint16_t menu_color_get(uint8_t group) {
-    return group == G_COLOR ? cfg.color : 0xFFFFu;
-}
-
-static void menu_color_set(uint8_t group, uint16_t rgb) {
-    if (group != G_COLOR) return;
-    cfg.color = rgb;
-    cfg_flush_now();
-}
-
 static const app_menu_model_t menu_model = {
     .nodes      = menu_nodes,
     .node_count = sizeof(menu_nodes) / sizeof(menu_nodes[0]),
-    .color_get  = menu_color_get,
-    .color_set  = menu_color_set,
     .uint_get   = menu_uint_get,
     .uint_set   = menu_uint_set,
     .uint_spec  = menu_uint_spec,
@@ -925,6 +1011,14 @@ static void fish_enter(void) {
     hud_active    = false;
     menu_shown    = false;
     rpt_kc        = 0;
+    boost_s       = 0;
+
+    // wpm() sits past the end of the table older firmware publishes, so ask the
+    // build stamp before ever calling it.
+    app_fw_info_t fw;
+    g_api->fw_info(&fw);
+    has_wpm = fw.build_num >= FW_WPM_BUILD;
+
     cfg_load();
     view_w = view_h = 0;
     sync_dims();

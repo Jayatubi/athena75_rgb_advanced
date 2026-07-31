@@ -163,6 +163,14 @@
 #define LCD_MENU_RADIO_FG     0x07E0 // green accent, focused row
 #define LCD_MENU_RADIO_FG_DIM 0x0360 // dim green,    unfocused row
 
+// WPM (read by apps through host_api::wpm). Out of the box the average has to
+// climb out of a five-second window full of zeros, so the first seconds of
+// typing read far below the real pace. LAUNCH_CONTROL restarts the window when
+// it hits zero, and the shorter window tightens both edges -- what an app wants
+// is "typing started / stopped", not a stable long-run average.
+#define WPM_LAUNCH_CONTROL
+#define WPM_SAMPLE_SECONDS 3
+
 // Mouse Key
 #define MOUSEKEY_MOVE_DELTA 2
 

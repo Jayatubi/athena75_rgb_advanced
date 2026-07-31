@@ -82,6 +82,16 @@ static bool loader_app_area_erase_busy(void) { return app_sys_app_delete_busy();
 static uint32_t loader_app_base(void) { return g_loaded_base; }
 static void loader_fw_info(app_fw_info_t *out) { fw_info_get(out); }
 
+// Typing speed. update_wpm() runs in process_record_quantum, ahead of the hook
+// that swallows OS-mode keys, so menu navigation would otherwise read as typing.
+static uint8_t loader_wpm(void) {
+#ifdef WPM_ENABLE
+    return app_input_mode() == APP_INPUT_OS ? 0u : get_current_wpm();
+#else
+    return 0u;
+#endif
+}
+
 // The firmware services handed to every app. All are core1-safe. Static const:
 // it lives in flash and just holds function addresses + the shared fb pointer.
 static const host_api_t g_api = {
@@ -155,6 +165,7 @@ static const host_api_t g_api = {
     .menu_suspend      = menu_suspend,
     .menu_resume       = menu_request_resume,
     .fw_info           = loader_fw_info,
+    .wpm               = loader_wpm,
 };
 
 static const app_desc_t *g_desc        = NULL; // loaded app's descriptor (NULL = none/failed)
