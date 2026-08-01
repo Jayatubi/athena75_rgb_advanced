@@ -31,6 +31,11 @@
 // triangle pointing at the joint ahead of it -- the reference's geometry mode,
 // the one it falls back to without the photo sprite.
 //
+// Every so often -- or sooner, once the user has typed a page worth of text --
+// a pellet drops somewhere in the tank and the school converges on it. That is
+// the reference's mouse attractor: one gravity well, gone once enough fish have
+// crowded round it.
+//
 // All of it is Q15.16 through the firmware's fixed_math library — this core has
 // no FPU. The two exceptions written here are hypot (fixed_sqrt goes through
 // exp/log, far too slow and lossy) and atan2 (the library's loses the quadrant).
@@ -104,6 +109,43 @@ static const host_api_t *g_api;
 #define SMOOTH_ACC  FX(0.128)   // DT x 8
 #define SMOOTH_AMP  FX(0.16)    // DT x 10
 
+// The pellet's field is the reference's mouse attractor, at the reference's own
+// strengths: a pull that reaches most of the tank plus a core repulsion on a
+// much shorter scale, both softened inverse squares. The sum points inwards
+// everywhere but is weakest at the pellet itself, so the school gathers into a
+// loose ball around it rather than collapsing onto the point.
+// The pull has to match separation to read as a gravity well at all. Reynolds
+// steering normalises before weighting, so separation puts out its full 3x
+// cruise at any distance inside VISION; a gentler pull (this started at 1x,
+// on the theory that 3x cruise would fling the school across 128 px) loses to
+// it every time and the school merely drifts over instead of converging.
+#define FOOD_PULL   FX(3.0)     // x cruise, peak (at the pellet)
+#define FOOD_CORE   FX(2.0)
+#define FOOD_R      FX(64.0)    // the reference's 15 world units, 4.27 px each
+#define FOOD_CORE_R FX(13.0)    // its 3
+#define FOOD_MARGIN FX(24.0)    // keeps a pellet out of the wall field
+// The pellet is nibbled away rather than tested against a head count: it holds
+// FOOD_BITES fish-seconds of food and every fish within FOOD_EAT_R eats one per
+// second, so a school that has gathered on it takes a couple of seconds and a
+// lone fish takes ten -- enough that the crowd is worth watching, rather than
+// the pellet blinking out the moment the first arrivals reach it.
+// A plain "N fish at once inside R" cannot work across the settings. The core
+// repulsion deliberately weakens the pull close in, while separation does not
+// weaken at all inside VISION, so however hard the pellet pulls the fish still
+// settle roughly a vision apart: a tank tuned to VISION 31 can never gather
+// three of them into any radius small enough that three were not already there
+// by chance.
+#define FOOD_EAT_R  FX(14.0)    // mouth range, about three body radii
+#define FOOD_EAT_R2 FX(196.0)
+#define FOOD_BITES  FX(10.0)    // fish-seconds to finish a pellet
+#define FOOD_TTL_MS 30000u      // one the school never reached must not block it
+#define FOOD_PULSE  FX(0.0754)  // 4.7 rad/s x DT: breathes at ~0.75 Hz
+// Characters typed, at the usual five per word, integrated from WPM in Q16.
+#define WPM_CHARS_STEP ((int32_t)FX(5.0 / 60.0 * 0.016))
+// Sixteen words: about twelve seconds of brisk typing, twice that at a gentler
+// pace, so it usually beats the idle interval while the user is actually working.
+#define FOOD_CHARS  FX(80.0)
+
 #define EPS FX(0.002)
 
 typedef struct {
@@ -137,12 +179,13 @@ typedef struct {
     uint8_t  coh;      // cohesion weight x10
     uint8_t  vision;   // neighbour radius, px
     uint8_t  typing;   // how much the user's WPM speeds the school up, %
-    uint16_t reserved; // held the body colour up to v7; speed picks the hue now
+    uint8_t  feed;     // seconds between pellets, 0 = no feeding at all
+    uint8_t  reserved; // low half held the body colour up to v7
     uint32_t crc;
 } fish_save_t;
 
 #define FISH_SAVE_MAGIC   0x31485346u /* "FSH1" */
-#define FISH_SAVE_VERSION 8u
+#define FISH_SAVE_VERSION 9u
 
 // Slider bounds: min, max, step, default. The wall strengths sit far above the
 // reference's 10%: its pool holds hundreds of fish and is wide enough that the
@@ -167,6 +210,12 @@ typedef struct {
 #define VIS_MAX   86u
 #define VIS_STEP  2u
 #define VISION_DEF 13u
+// Feeding interval, in seconds: the longest the tank will go without a pellet.
+// The default is slack enough that typing is usually what brings the next one,
+// and idle still gets one often enough to be worth watching.
+#define FEED_MAX   120u
+#define FEED_STEP  5u
+#define FEED_DEF   45u
 
 // Typing response. What the school reacts to is mostly "you started typing",
 // not how fast you are, so the curve steps straight to KICK on the first WPM
@@ -192,6 +241,7 @@ static bool menu_shown;
 // each is one divide, and the pair loop would otherwise redo them N² times.
 static fixed_point fx_cruise, fx_sep, fx_ali, fx_coh, fx_glass, fx_curr;
 static fixed_point fx_vision, fx_vision2, fx_typing;
+static fixed_point fx_food, fx_food_core;
 static fixed_point fx_col_lo, fx_col_span;   // speeds the body palette spans
 
 // The typing boost, smoothed, and the cruise speed it produces this step.
@@ -217,6 +267,10 @@ static void cfg_derive(void) {
     // The square is what the pair loop compares against, so square it once here.
     fx_vision2 = fixed_itox((int32_t)cfg.vision * cfg.vision);
     fx_typing  = percent(cfg.typing);
+    // The pellet, like the walls, pulls at the base cruise speed: a typing
+    // burst should move the fish, not stiffen the tank around them.
+    fx_food      = fixed_mul(fx_cruise, FOOD_PULL);
+    fx_food_core = fixed_mul(fx_cruise, FOOD_CORE);
     fx_col_lo   = fixed_mul(fx_cruise, COL_LO);
     fx_col_span = fixed_mul(fx_cruise, COL_HI - COL_LO);
     fx_cruise_now = fx_cruise;
@@ -224,15 +278,12 @@ static void cfg_derive(void) {
 
 // The school's speed this step. The wall fields deliberately stay on the base
 // cruise speed: typing should move the fish, not stiffen the tank.
-static void typing_step(void) {
+static void typing_step(uint8_t w) {
     fixed_point target = 0;
-    if (has_wpm && cfg.typing) {
-        uint8_t w = g_api->wpm();
-        if (w) {
-            fixed_point r = w >= WPM_FULL ? fixed_one
-                                          : (fixed_point)(((int32_t)w << 16) / WPM_FULL);
-            target = fixed_mul(fx_typing, WPM_KICK + fixed_mul(WPM_SPAN, r));
-        }
+    if (w && cfg.typing) {
+        fixed_point r = w >= WPM_FULL ? fixed_one
+                                      : (fixed_point)(((int32_t)w << 16) / WPM_FULL);
+        target = fixed_mul(fx_typing, WPM_KICK + fixed_mul(WPM_SPAN, r));
     }
     boost_s += fixed_mul(target - boost_s, target > boost_s ? BOOST_UP : BOOST_DOWN);
     fx_cruise_now = fx_cruise + fixed_mul(fx_cruise, boost_s);
@@ -274,14 +325,15 @@ static void cfg_defaults(void) {
     cfg.coh     = AC_DEF;
     cfg.vision  = VISION_DEF;
     cfg.typing   = TYPE_DEF;
+    cfg.feed     = FEED_DEF;
     cfg.reserved = 0;
     cfg.crc      = crc32(&cfg, (uint32_t)__builtin_offsetof(fish_save_t, crc));
 }
 
 // Every field an older tank set still sits at the same offset: `typing` took
-// the padding byte v6 carried, and `reserved` is where v7 and earlier kept the
-// body colour. Both were already covered by the CRC, so old saves upgrade in
-// place instead of throwing away a tuned tank.
+// the padding byte v6 carried, and `feed` splits the half-word v7 and earlier
+// kept the body colour in. All of it was already covered by the CRC, so old
+// saves upgrade in place instead of throwing away a tuned tank.
 _Static_assert(sizeof(fish_save_t) == 20, "old blobs upgrade in place");
 
 static void cfg_load(void) {
@@ -291,6 +343,7 @@ static void cfg_load(void) {
                    saved.crc == crc32(&saved, (uint32_t)__builtin_offsetof(fish_save_t, crc));
     if (read_ok && saved.version >= 6u && saved.version < FISH_SAVE_VERSION) {
         if (saved.version < 7u) saved.typing = TYPE_DEF;
+        saved.feed     = FEED_DEF;
         saved.reserved = 0;
         saved.version  = FISH_SAVE_VERSION;
         saved.crc      = crc32(&saved, (uint32_t)__builtin_offsetof(fish_save_t, crc));
@@ -301,7 +354,7 @@ static void cfg_load(void) {
         saved.glass > WALL_MAX || saved.current > WALL_MAX ||
         saved.sep > W_MAX || saved.ali > W_MAX || saved.coh > W_MAX ||
         saved.vision < VIS_MIN || saved.vision > VIS_MAX ||
-        saved.typing > TYPE_MAX ||
+        saved.typing > TYPE_MAX || saved.feed > FEED_MAX ||
         saved.count < 1u || saved.count > FISH_MAX) {
         cfg_defaults();
         cfg_derive();
@@ -438,6 +491,108 @@ static void sync_dims(void) {
     view_w = w;
     view_h = h;
     pending_restock = true;
+}
+
+// -- the pellet ---------------------------------------------------------------
+// One at a time, so there is never more than a single well for the school to
+// argue about. The timers run on simulation steps rather than wall clock, which
+// means they stop with the tank while a menu is up.
+static bool        food_live;
+static fixed_point food_x, food_y;
+static fixed_point food_phase;    // breathing
+static uint32_t    food_ms;       // age of the pellet on screen
+static fixed_point food_eaten;    // fish-seconds taken out of it
+static uint32_t    feed_ms;       // since the last one went away
+static fixed_point type_chars;    // characters typed since then, Q16
+
+static void food_clear(void) {
+    food_live  = false;
+    food_ms    = 0;
+    food_eaten = 0;
+    feed_ms    = 0;
+    type_chars = 0;
+}
+
+// Two candidates, keep the one further from where the school already is: a
+// pellet that lands in the middle of it is eaten before anything has swum
+// anywhere, which is the one outcome that reads as nothing happening.
+static void food_spawn(void) {
+    int32_t sx = 0, sy = 0;
+    for (uint8_t i = 0; i < fish_n; i++) {
+        sx += PX(fish[i].x);
+        sy += PX(fish[i].y);
+    }
+    sx /= fish_n;
+    sy /= fish_n;
+
+    const fixed_point mx = bound_x(), my = bound_y();
+    fixed_point gx = FOOD_MARGIN, gy = FOOD_MARGIN;
+    if (2 * gx > mx) gx = mx >> 2;   // a narrow virtual window still has a middle
+    if (2 * gy > my) gy = my >> 2;
+
+    int32_t best = -1;
+    for (uint8_t k = 0; k < 2; k++) {
+        fixed_point x = gx + (fixed_point)(((int64_t)(mx - 2 * gx) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+        fixed_point y = gy + (fixed_point)(((int64_t)(my - 2 * gy) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+        int32_t dx = PX(x) - sx, dy = PX(y) - sy;
+        int32_t d2 = dx * dx + dy * dy;
+        if (d2 > best) {
+            best   = d2;
+            food_x = x;
+            food_y = y;
+        }
+    }
+    food_phase = 0;
+    food_ms    = 0;
+    food_eaten = 0;
+    feed_ms    = 0;
+    type_chars = 0;
+    food_live  = true;
+}
+
+static uint8_t crowd_at_food(void) {
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < fish_n; i++) {
+        fixed_point dx = fish[i].x - food_x, dy = fish[i].y - food_y;
+        if (fixed_abs(dx) >= FOOD_EAT_R || fixed_abs(dy) >= FOOD_EAT_R) continue;
+        if (fixed_mul(dx, dx) + fixed_mul(dy, dy) < FOOD_EAT_R2) n++;
+    }
+    return n;
+}
+
+// Drop one on the interval or once enough has been typed, whichever comes first,
+// and take it away once it has been eaten. WPM is all the app can see of the
+// typing (the keys never reach it in keyboard mode), so the character count is
+// an integral of it rather than a tally.
+static void food_step(uint8_t wpm) {
+    if (!cfg.feed) {
+        if (food_live) food_clear();
+        return;
+    }
+    if (food_live) {
+        food_phase += FOOD_PULSE;
+        if (food_phase > FX_TWO_PI) food_phase -= FX_TWO_PI;
+        food_ms    += SIM_STEP_MS;
+        food_eaten += (fixed_point)crowd_at_food() * DT;
+        if (food_eaten >= FOOD_BITES || food_ms >= FOOD_TTL_MS) food_clear();
+        return;
+    }
+    feed_ms    += SIM_STEP_MS;
+    type_chars += (fixed_point)((int32_t)wpm * WPM_CHARS_STEP);
+    if (feed_ms >= (uint32_t)cfg.feed * 1000u || type_chars >= FOOD_CHARS) food_spawn();
+}
+
+// Pull towards the pellet minus the core push away from it, both on the same
+// radial line, so the two collapse into one signed magnitude.
+static void food_force(const fish_t *f, fixed_point *ax, fixed_point *ay) {
+    if (!food_live) return;
+    fixed_point dx = food_x - f->x, dy = food_y - f->y;
+    fixed_point d  = fx_hypot(dx, dy);
+    if (d < EPS) return;
+    fixed_point m = fixed_mul(fx_food, soft_fall(d, FOOD_R)) -
+                    fixed_mul(fx_food_core, soft_fall(d, FOOD_CORE_R));
+    *ax += fixed_mul(fixed_div(dx, d), m);
+    *ay += fixed_mul(fixed_div(dy, d), m);
 }
 
 // -- forces -------------------------------------------------------------------
@@ -634,7 +789,10 @@ static void refresh_pose(fish_t *f) {
 
 // -- one step -----------------------------------------------------------------
 static void school_step(void) {
-    typing_step();
+    const uint8_t typed = has_wpm ? g_api->wpm() : 0u;
+    typing_step(typed);
+    food_step(typed);
+
     const fixed_point cru  = fx_cruise_now;
     const fixed_point mins = fixed_mul(cru, MIN_FRAC);
     const fixed_point mx = bound_x(), my = bound_y();
@@ -645,6 +803,7 @@ static void school_step(void) {
 
         fixed_point ax = 0, ay = 0;
         flock(i, cru, &ax, &ay);
+        food_force(f, &ax, &ay);
         environment(f, &ax, &ay);
         ax -= fixed_mul(DRAG, f->vx);
         ay -= fixed_mul(DRAG, f->vy);
@@ -806,6 +965,33 @@ static void draw_one(uint8_t *fb, const fish_t *f) {
     }
 }
 
+// A pale core in a warm ring that breathes, so it reads as something edible
+// rather than a stuck pixel. The ring only shows on the bright half of the
+// pulse, which is what makes it look like it is glowing rather than resizing --
+// and it goes for good once the pellet is mostly eaten, so it visibly dwindles
+// to a crumb under the fish that are working on it.
+static void draw_food(uint8_t *fb) {
+    if (!food_live) return;
+    const int16_t  cx    = PX(food_x), cy = PX(food_y);
+    const int32_t  pulse = (int32_t)((fixed_sin(food_phase) + fixed_one) >> 9);   // 0..256
+    const uint16_t core  = hsl565(46, 84);
+    const uint16_t ring  = hsl565(34, 40 + pulse * 28 / 256);
+    const int32_t  reach = food_eaten > FOOD_BITES * 2 / 3 ? 1     // squared radius
+                                                           : (pulse > 128 ? 4 : 2);
+
+    for (int16_t dy = -2; dy <= 2; dy++) {
+        int16_t y = (int16_t)(cy + dy);
+        if (y < 0 || y >= view_h) continue;
+        for (int16_t dx = -2; dx <= 2; dx++) {
+            int32_t d2 = dx * dx + dy * dy;
+            if (d2 > reach) continue;
+            int16_t x = (int16_t)(cx + dx);
+            if (x < 0 || x >= view_w) continue;
+            px_put(fb, x, y, d2 <= 1 ? core : ring);
+        }
+    }
+}
+
 static void hud_text_outlined(uint8_t *fb, int16_t x, int16_t y, const char *s) {
     g_api->text_alpha(fb, (int16_t)(x - 1), y, s, 0x0000, 0x0000, 255);
     g_api->text_alpha(fb, (int16_t)(x + 1), y, s, 0x0000, 0x0000, 255);
@@ -817,6 +1003,7 @@ static void hud_text_outlined(uint8_t *fb, int16_t x, int16_t y, const char *s) 
 static void tank_draw(void) {
     uint8_t *fb = g_api->fb;
     g_api->clear(fb, 0x0000);
+    draw_food(fb);   // under the fish: whoever gets there first covers it
     for (uint8_t i = 0; i < fish_n; i++) draw_one(fb, &fish[i]);
 
     if (hud_active) {
@@ -831,7 +1018,7 @@ static void tank_draw(void) {
 // covers the lot. The engine's slider takes Left/Right for one step, -/= for
 // five and Shift for ten, which is what makes a 0..150 range workable.
 enum { U_SPEED = 1, U_COUNT, U_VISION, U_SEP, U_ALI, U_COH,
-       U_GLASS, U_CURRENT, U_TYPING };
+       U_GLASS, U_CURRENT, U_TYPING, U_FEED };
 enum { N_ROOT = 0 };
 
 #define SLIDER(label_, group_) \
@@ -848,11 +1035,12 @@ static const app_menu_item_t root_items[] = {
     SLIDER("GLASS",    U_GLASS),      // % of cruise
     SLIDER("CURRENT",  U_CURRENT),
     SLIDER("TYPING",   U_TYPING),     // % of the WPM response
+    SLIDER("FEED",     U_FEED),       // s between pellets, 0 = off
 };
 #undef SLIDER
 
 static const app_menu_node_t menu_nodes[] = {
-    [N_ROOT] = { "FISH", root_items, 9 },
+    [N_ROOT] = { "FISH", root_items, 10 },
 };
 
 // Bounds live here only; the direct keys below clamp through the same call.
@@ -867,6 +1055,7 @@ static void menu_uint_spec(uint8_t group, uint32_t *min, uint32_t *max, uint32_t
         case U_GLASS:
         case U_CURRENT: *min = 0u;        *max = WALL_MAX;  *step = WALL_STEP;  break;
         case U_TYPING:  *min = 0u;        *max = TYPE_MAX;  *step = TYPE_STEP;  break;
+        case U_FEED:    *min = 0u;        *max = FEED_MAX;  *step = FEED_STEP;  break;
         default: break;
     }
 }
@@ -882,6 +1071,7 @@ static uint32_t menu_uint_get(uint8_t group) {
         case U_GLASS:   return cfg.glass;
         case U_CURRENT: return cfg.current;
         case U_TYPING:  return cfg.typing;
+        case U_FEED:    return cfg.feed;
         default:        return 0u;
     }
 }
@@ -902,6 +1092,9 @@ static void menu_uint_set(uint8_t group, uint32_t value) {
         case U_GLASS:   cfg.glass = v; break;
         case U_CURRENT: cfg.current = v; break;
         case U_TYPING:  cfg.typing = v; break;
+        // A new interval restarts the wait, so turning feeding back on does not
+        // fire a pellet the same instant.
+        case U_FEED:    cfg.feed = v; food_clear(); break;
         default: return;
     }
     cfg_derive();
@@ -1020,6 +1213,7 @@ static void fish_enter(void) {
     has_wpm = fw.build_num >= FW_WPM_BUILD;
 
     cfg_load();
+    food_clear();
     view_w = view_h = 0;
     sync_dims();
     restock();
