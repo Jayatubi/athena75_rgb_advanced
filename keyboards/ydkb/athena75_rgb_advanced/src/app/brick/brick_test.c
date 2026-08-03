@@ -150,9 +150,56 @@ int main(int argc, char **argv) {
     memcpy(prev, balls, sizeof prev);
     memset(frozen, 0, sizeof frozen);
 
+    uint32_t endgame_ticks = 0;
+    uint32_t endgame_stretch = 0;
+    uint32_t endgame_worst = 0;
+    uint32_t sparse_ticks = 0;
+    uint32_t sparse_stretch = 0;
+    uint32_t sparse_worst = 0;
+    uint32_t clears = 0;
+    uint8_t  prev_level = level;
+
     for (uint32_t t = 0; t < ticks; t++) {
         sim_now += TICK_MS;
         brick_desc.tick(TICK_MS);
+
+        if (level != prev_level) {
+            clears++;
+            prev_level = level;
+            if (endgame_stretch > endgame_worst) endgame_worst = endgame_stretch;
+            if (sparse_stretch > sparse_worst) sparse_worst = sparse_stretch;
+            endgame_stretch = sparse_stretch = 0;
+        }
+        if (phase == PHASE_PLAY && bricks_alive > 0u && bricks_alive <= AI_ENDGAME_N) {
+            endgame_ticks++;
+            endgame_stretch++;
+        } else {
+            if (endgame_stretch > endgame_worst) endgame_worst = endgame_stretch;
+            endgame_stretch = 0;
+        }
+        if (phase == PHASE_PLAY && bricks_alive > 0u && bricks_alive <= 3u) {
+            sparse_ticks++;
+            sparse_stretch++;
+            if (sparse_stretch > 0u && (sparse_stretch % (120u * 1000u / TICK_MS)) == 0u) {
+                printf("  [sparse>%us] level=%u alive=%u aim=(%d,%d)\n",
+                       (unsigned)(sparse_stretch * TICK_MS / 1000u), level, bricks_alive, aim_tx,
+                       aim_ty);
+                for (uint8_t i = 0; i < BRICK_COLS * BRICK_ROWS; i++) {
+                    if (!bricks[i].alive) continue;
+                    printf("    brick[%u] type=%u hits=%u at %d,%d%s\n", i, bricks[i].type,
+                           bricks[i].hits, bricks[i].x, bricks[i].y,
+                           bricks[i].type == BT_GOLD ? " GOLD" : "");
+                }
+                for (uint8_t i = 0; i < BALL_MAX; i++) {
+                    if (!balls[i].active) continue;
+                    printf("    ball[%u] x=%d y=%d vx=%ld vy=%ld\n", i, FP2I(balls[i].x),
+                           FP2I(balls[i].y), (long)balls[i].vx, (long)balls[i].vy);
+                }
+            }
+        } else {
+            if (sparse_stretch > sparse_worst) sparse_worst = sparse_stretch;
+            sparse_stretch = 0;
+        }
 
         /* The device symptom was a ball whose whole state repeated forever. */
         for (uint8_t i = 0; i < BALL_MAX; i++) {
@@ -192,8 +239,11 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+    if (endgame_stretch > endgame_worst) endgame_worst = endgame_stretch;
+    if (sparse_stretch > sparse_worst) sparse_worst = sparse_stretch;
 
-    printf("ok: %u ticks (%u virtual ms), level=%u, bricks_alive=%u, phase=%d\n", ticks, sim_now,
-           level, bricks_alive, (int)phase);
+    printf("ok: %u ticks level=%u clears=%u eg_ms=%u eg_worst=%u sp_ms=%u sp_worst=%u bricks=%u\n",
+           ticks, level, clears, endgame_ticks * TICK_MS, endgame_worst * TICK_MS,
+           sparse_ticks * TICK_MS, sparse_worst * TICK_MS, bricks_alive);
     return 0;
 }

@@ -52,6 +52,7 @@ static const host_api_t *g_api;
 #define PU_W          7    /* capsule: 1 px of body around a 5x5 letter */
 #define PU_H          7
 #define AI_SAVE_URG_PX 28  /* below this gap, aim straight under the ball */
+#define AI_ENDGAME_N   8u  /* sparse wall: bank shots + no paddle jitter */
 
 #define TICK_MS       16u
 #define PAUSE_LOST_MS 900u
@@ -253,6 +254,15 @@ static void level_place_gold(void) {
         brick_make_gold(b);
         col_used[c] = true;
         placed++;
+        /* Anything above gold in this column is unreachable from below -- the ball
+         * hits the gold first. Open the whole chimney, not just the cell on top. */
+        for (uint8_t ar = 0; ar < r; ar++) {
+            brick_t *above = &bricks[ar * BRICK_COLS + c];
+            if (above->alive && above->type != BT_GOLD) {
+                above->alive = false;
+                bricks_alive--;
+            }
+        }
     }
 }
 
@@ -328,6 +338,7 @@ static int16_t paddle_width(void) {
 
 static int16_t  aim_tx, aim_ty;
 static bool     aim_valid;
+static bool     aim_side; /* target is gold-shielded: bank only, no direct climb */
 
 static void ball_clamp_speed(ball_t *b, int32_t mag) {
     int32_t m = isqrt32(b->vx * b->vx + b->vy * b->vy);
@@ -346,29 +357,121 @@ static int32_t abs32(int32_t v) {
 
 #define AI_VERT_VX_FP I2FP(2) /* nearly vertical — aim english instead of centering */
 
-/* Pick a live brick to shoot for; avoid the ball's incoming column (vertical trap). */
+/* True when an unbreakable brick sits in the same column under `br`, so a shot
+ * straight up that column hits gold before the target. */
+static bool brick_shielded_below(const brick_t *br) {
+    for (uint8_t i = 0; i < BRICK_COLS * BRICK_ROWS; i++) {
+        const brick_t *g = &bricks[i];
+        if (!g->alive || g->type != BT_GOLD) continue;
+        if (g->y <= br->y) continue;
+        if (g->x + BRICK_W - 1 < br->x || g->x > br->x + BRICK_W - 1) continue;
+        return true;
+    }
+    return false;
+}
+
+/* Required upward vx from (from_x, PADDLE_Y) toward (tx, ty). When `bank` is set the
+ * side walls are unfolded so a brick past the paddle's max english is still a
+ * one- or two-bounce bank shot instead of a saturated miss. `side_only` skips the
+ * direct (k=0) path -- used when a gold brick shields the target from below.
+ * `out_miss` (optional) gets how far past vx_max the best path still is (0 = on). */
+static int32_t ai_aim_vx(int16_t from_x, int16_t tx, int16_t ty, int32_t mag, int32_t vx_max,
+                         bool bank, bool side_only, int32_t *out_miss) {
+    int32_t rise = PADDLE_Y - ty;
+    if (rise < 10) rise = 10;
+
+    int32_t L    = PLAY_L + BALL_R;
+    int32_t R    = PLAY_R - BALL_R;
+    int32_t span = R - L;
+    int32_t rel  = (int32_t)tx - L;
+    int8_t  k0   = bank ? (int8_t)-2 : (int8_t)0;
+    int8_t  k1   = bank ? (int8_t)2 : (int8_t)0;
+
+    int32_t best_vx   = 0;
+    int32_t best_miss = 0x7FFFFFFF;
+    int32_t best_rank = 0x7FFFFFFF;
+    for (int8_t k = k0; k <= k1; k++) {
+        if (side_only && k == 0) continue;
+        int32_t mtx = ((k & 1) == 0) ? (L + (int32_t)k * span + rel)
+                                     : (L + (int32_t)k * span + (span - rel));
+        int32_t dx  = mtx - from_x;
+        /* Exact direction: vx/vy = dx/rise with vx^2+vy^2 = mag^2
+         *  =>  vx = mag * dx / hypot(dx, rise).  (dx*mag)/rise is only a
+         * small-angle stand-in and throws bank shots well wide of the brick. */
+        int32_t hyp = isqrt32(dx * dx + rise * rise);
+        if (hyp < 1) hyp = 1;
+        int32_t vx   = dx * mag / hyp;
+        int32_t miss = abs32(vx) > vx_max ? abs32(vx) - vx_max : 0;
+        int32_t clamped = vx;
+        if (clamped > vx_max) clamped = vx_max;
+        else if (clamped < -vx_max) clamped = -vx_max;
+        /* Prefer an exact fit; among those, the steeper (smaller |vx|) path. */
+        int32_t rank = miss * 1000 + abs32(clamped);
+        if (rank < best_rank) {
+            best_rank = rank;
+            best_vx   = clamped;
+            best_miss = miss;
+        }
+    }
+    if (out_miss) *out_miss = best_miss;
+    return best_vx;
+}
+
+/* Pick a live brick to shoot for. Early game: prefer low rows and dodge the
+ * ball's column (vertical trap). Endgame: prefer whatever a bank shot can
+ * actually reach from the intercept; bricks sitting on gold are aimed at the
+ * side so the ball does not eat the shield first. */
 static void ai_pick_target(int16_t avoid_x) {
-    int32_t best = -0x7FFFFFFF;
-    aim_valid    = false;
+    bool    endgame = bricks_alive <= AI_ENDGAME_N;
+    int32_t best    = -0x7FFFFFFF;
+    aim_valid       = false;
+    aim_side        = false;
+
+    int32_t mag = 0, vx_max = 0;
+    if (endgame) {
+        mag = ball_speed_nominal();
+        int16_t pw   = paddle_width();
+        int32_t edge = (pw / 2) - BALL_R - 1;
+        if (edge < 4) edge = 4;
+        vx_max = mag * edge / (pw / 2);
+    }
+
     for (uint8_t i = 0; i < BRICK_COLS * BRICK_ROWS; i++) {
         if (!bricks[i].alive) continue;
         if (bricks[i].type == BT_GOLD) continue;
+        bool    shielded = endgame && brick_shielded_below(&bricks[i]);
         int16_t tx = (int16_t)(bricks[i].x + BRICK_W / 2);
         int16_t ty = (int16_t)(bricks[i].y + BRICK_H / 2);
-        int32_t score = (int32_t)(PANEL - ty) * 3;
-        int16_t col   = abs16((int16_t)(tx - avoid_x));
-        if (col < 6) score -= 300;
-        else score += (int32_t)col;
+        /* Side-face aim point: arrive from the open flank, not up the gold chimney. */
+        if (shielded) {
+            tx = (avoid_x < tx) ? bricks[i].x
+                                : (int16_t)(bricks[i].x + BRICK_W - 1);
+        }
+        int32_t score;
+        if (endgame) {
+            int32_t miss = 0;
+            (void)ai_aim_vx(avoid_x, tx, ty, mag, vx_max, true, shielded, &miss);
+            score = -miss * 40 + (int32_t)(PANEL - ty) * 2;
+            if (bricks[i].hits <= 1u) score += 15;
+            if (shielded) score -= 80; /* prefer an open brick while any remain */
+        } else {
+            score         = (int32_t)(PANEL - ty) * 3;
+            int16_t col   = abs16((int16_t)(tx - avoid_x));
+            if (col < 6) score -= 300;
+            else score += (int32_t)col;
+        }
         if (score > best) {
             best      = score;
             aim_tx    = tx;
             aim_ty    = ty;
+            aim_side  = shielded;
             aim_valid = true;
         }
     }
     if (!aim_valid) {
         aim_tx    = PANEL / 2;
         aim_ty    = (int16_t)(BRICK_OY + BRICK_H / 2);
+        aim_side  = false;
         aim_valid = true;
     }
 }
@@ -377,14 +480,11 @@ static void ai_pick_target(int16_t avoid_x) {
 static int16_t ai_paddle_center_for_aim(int16_t intercept_x, int16_t tx, int16_t ty) {
     int32_t mag  = ball_speed_nominal();
     int16_t pw   = paddle_width();
-    int32_t rise = PADDLE_Y - ty;
-    if (rise < 10) rise = 10;
-    int32_t vx   = (int32_t)(tx - intercept_x) * mag / rise;
     int32_t edge = (pw / 2) - BALL_R - 1;
     if (edge < 4) edge = 4;
     int32_t vx_max = mag * edge / (pw / 2);
-    if (vx > vx_max) vx = vx_max;
-    else if (vx < -vx_max) vx = -vx_max;
+    bool bank = bricks_alive <= AI_ENDGAME_N || aim_side;
+    int32_t vx = ai_aim_vx(intercept_x, tx, ty, mag, vx_max, bank, aim_side, 0);
     int32_t hit = vx * (pw / 2) / mag;
     return (int16_t)(intercept_x - hit);
 }
@@ -392,15 +492,12 @@ static int16_t ai_paddle_center_for_aim(int16_t intercept_x, int16_t tx, int16_t
 static void ball_aim_at_brick(ball_t *b, int16_t ox, int16_t oy) {
     ai_pick_target(ox);
     int32_t sp  = ball_speed_nominal();
-    int32_t dx  = aim_tx - ox;
-    int32_t rise = oy - aim_ty;
-    if (rise < 10) rise = 10;
-    int32_t vx  = dx * sp / rise;
     int32_t lim = sp * 9 / 10;
-    if (vx > lim) vx = lim;
-    else if (vx < -lim) vx = -lim;
+    bool bank = bricks_alive <= AI_ENDGAME_N || aim_side;
+    int32_t vx  = ai_aim_vx(ox, aim_tx, aim_ty, sp, lim, bank, aim_side, 0);
     int32_t vy2 = sp * sp - vx * vx;
     int32_t vy  = vy2 > 0 ? isqrt32(vy2) : (sp * 4) / 5;
+    (void)oy;
     b->vx       = vx;
     b->vy       = -vy;
     ball_clamp_speed(b, sp);
@@ -458,7 +555,12 @@ static void effects_clear(void) {
 
 static void level_build(void) {
     prng ^= (uint32_t)(level + 1u) * 0x9E3779B9u;
-    level_silver_from = (uint8_t)(4u + (rng_u32() % 3u));
+    /* Silver used to start at row 4..6 (half the wall). Keep it to the bottom
+     * 1–2 rows so most of the board is still one-hit colour. */
+    uint8_t silver_rows = (uint8_t)(1u + (rng_u32() % 2u));
+    if (level >= 10u) silver_rows = (uint8_t)(2u + (rng_u32() % 2u)); /* 2–3 late */
+    if (silver_rows > BRICK_ROWS) silver_rows = BRICK_ROWS;
+    level_silver_from = (uint8_t)(BRICK_ROWS - silver_rows);
     level_color_rot   = (uint8_t)(rng_u32() % 6u);
 
     bricks_alive = 0;
@@ -665,6 +767,32 @@ static int16_t ai_target_x(void) {
 
     if (fall) {
         int16_t intercept = ai_predict_ball_x(fall);
+        bool    endgame   = bricks_alive <= AI_ENDGAME_N;
+
+        if (endgame) {
+            /* Always keep the aimed english -- returning dead-center on a late
+             * save is why a lone side-column brick can sit untouched for minutes.
+             * The offset still meets the ball at `intercept`; only give it up
+             * when the paddle cannot reach that pose before contact. */
+            ai_pick_target(intercept);
+            int16_t aimed = ai_paddle_center_for_aim(intercept, aim_tx, aim_ty);
+            int16_t here  = (int16_t)(paddle_x + pw / 2);
+            int16_t t     = ball_ticks_to_paddle(fall);
+            if (t < 1) t = 1;
+            int16_t reach = (int16_t)(t * (int16_t)paddle_step[cfg.speed]);
+            int16_t max_off = (int16_t)(pw / 2 - BALL_R - 1);
+            if (max_off < 4) max_off = 4;
+            int16_t lo = (int16_t)(intercept - max_off);
+            int16_t hi = (int16_t)(intercept + max_off);
+            if (aimed < lo) aimed = lo;
+            if (aimed > hi) aimed = hi;
+            if (aimed > here + reach) aimed = (int16_t)(here + reach);
+            if (aimed < here - reach) aimed = (int16_t)(here - reach);
+            if (aimed < lo) aimed = lo;
+            if (aimed > hi) aimed = hi;
+            return aimed;
+        }
+
         if (fall_dy < AI_SAVE_URG_PX) {
             if (abs32(fall->vx) < AI_VERT_VX_FP) {
                 ai_pick_target(intercept);
@@ -679,9 +807,11 @@ static int16_t ai_target_x(void) {
     }
 
     if (any) {
-        int16_t ix   = FP2I(any->x);
-        int16_t grab = ai_capsule_detour(ix, -1);
-        if (grab >= 0) return grab;
+        int16_t ix = FP2I(any->x);
+        if (bricks_alive > AI_ENDGAME_N) {
+            int16_t grab = ai_capsule_detour(ix, -1);
+            if (grab >= 0) return grab;
+        }
         ai_pick_target(ix);
         return ai_paddle_center_for_aim(ix, aim_tx, aim_ty);
     }
@@ -903,9 +1033,12 @@ static void paddle_bounce(ball_t *b) {
     int32_t mag = ball_speed_nominal();
     int16_t hit = (int16_t)(cx - (paddle_x + pw / 2));
     int32_t vx  = (int32_t)hit * mag / (pw / 2);
-    /* The AI keeps saturating at the same edge offset; without this the return angle
-     * repeats exactly and the rally locks into a closed orbit. */
-    vx += (int32_t)(rng_u32() % (uint32_t)(mag / 16)) - mag / 32;
+    /* Mid-game the AI saturates the same edge every rally and locks into a closed
+     * orbit; a little noise breaks that. Endgame needs the exact english it asked
+     * for, so leave the aimed vx alone. */
+    if (bricks_alive > AI_ENDGAME_N) {
+        vx += (int32_t)(rng_u32() % (uint32_t)(mag / 16)) - mag / 32;
+    }
     if (vx > mag) vx = mag;
     else if (vx < -mag) vx = -mag;
     int32_t vy2 = mag * mag - vx * vx;
