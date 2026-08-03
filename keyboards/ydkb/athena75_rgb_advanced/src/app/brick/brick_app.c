@@ -57,6 +57,7 @@ static const host_api_t *g_api;
 #define PAUSE_LOST_MS 900u
 #define PAUSE_WIN_MS  1800u
 #define STUCK_MS      7000u /* no brick broken for this long -> kick the ball off its orbit */
+#define STUCK_GIVEUP  3u    /* ...and after this many fruitless kicks, re-serve */
 #define BRICK_HUD_MS  1600u
 
 enum {
@@ -121,6 +122,7 @@ static uint32_t phase_t;
 static uint32_t last_tick;
 static uint32_t last_break;  /* when a brick last died -- limit-cycle watchdog */
 static uint8_t  last_alive;
+static uint8_t  stall_kicks; /* consecutive watchdog kicks that broke nothing */
 static bool     leave_pending;
 
 static char     hud_text[10];
@@ -422,6 +424,7 @@ static void balls_clear(void) {
 static void ball_serve(void) {
     balls_clear();
     ball_launch(&balls[0], 0);
+    stall_kicks = 0;
 }
 
 static void balls_spawn_multi(void) {
@@ -788,28 +791,41 @@ static void brick_bounce_ball(ball_t *b, brick_t *br) {
     int16_t pen_b = (int16_t)(rb - (cy - BALL_R));
     if (pen_l < 0 || pen_r < 0 || pen_t < 0 || pen_b < 0) return;
 
-    int16_t pen  = pen_l;
-    uint8_t axis = 0;
-    if (pen_r < pen) { pen = pen_r; axis = 1; }
-    if (pen_t < pen) { pen = pen_t; axis = 2; }
-    if (pen_b < pen) { pen = pen_b; axis = 3; }
-
     /* Land one pixel clear of the face, otherwise the ball still overlaps next pass. */
+    const int16_t pen[4] = { pen_l, pen_r, pen_t, pen_b };
+    const int16_t out[4] = { (int16_t)(rl - BALL_R - 1), (int16_t)(rr + BALL_R + 1),
+                             (int16_t)(rt - BALL_R - 1), (int16_t)(rb + BALL_R + 1) };
+
+    /* The outer brick columns sit closer to the side walls than the ball's diameter,
+     * so the shallowest face is often one the ball cannot occupy: wall_bounce shoves
+     * it straight back inside on the same tick and the two undo each other forever
+     * (a gold brick in the corner froze the whole demo). Only consider faces that
+     * leave the ball somewhere legal; downwards always is. */
+    uint8_t axis = 3;
+    int16_t best = pen[3];
+    for (uint8_t a = 0; a < 3u; a++) {
+        bool ok = (a == 0u) ? (out[0] >= PLAY_L + BALL_R)
+                : (a == 1u) ? (out[1] <= PLAY_R - BALL_R)
+                            : (out[2] >= PLAY_T + BALL_R);
+        if (!ok) continue;
+        if (pen[a] < best) { best = pen[a]; axis = a; }
+    }
+
     switch (axis) {
     case 0:
-        cx = (int16_t)(rl - BALL_R - 1);
+        cx = out[0];
         if (b->vx > 0) b->vx = -b->vx;
         break;
     case 1:
-        cx = (int16_t)(rr + BALL_R + 1);
+        cx = out[1];
         if (b->vx < 0) b->vx = -b->vx;
         break;
     case 2:
-        cy = (int16_t)(rt - BALL_R - 1);
+        cy = out[2];
         if (b->vy > 0) b->vy = -b->vy;
         break;
     default:
-        cy = (int16_t)(rb + BALL_R + 1);
+        cy = out[3];
         if (b->vy < 0) b->vy = -b->vy;
         break;
     }
@@ -961,11 +977,20 @@ static void stall_watchdog(uint32_t now) {
     if (bricks_alive != last_alive) {
         last_alive = bricks_alive;
         last_break = now;
+        stall_kicks = 0;
         return;
     }
     if ((uint32_t)(now - last_break) < STUCK_MS) return;
-    for (uint8_t i = 0; i < BALL_MAX; i++)
-        if (balls[i].active && !balls[i].stuck) ball_kick(&balls[i]);
+
+    /* A kick only re-angles the ball. If several in a row bought nothing the ball is
+     * wedged somewhere geometry alone cannot free, so start the round's ball over --
+     * a screen saver must never need a power cycle. */
+    if (++stall_kicks > STUCK_GIVEUP) {
+        ball_serve();
+    } else {
+        for (uint8_t i = 0; i < BALL_MAX; i++)
+            if (balls[i].active && !balls[i].stuck) ball_kick(&balls[i]);
+    }
     last_break = now;
 }
 
