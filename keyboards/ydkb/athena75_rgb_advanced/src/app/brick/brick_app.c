@@ -596,6 +596,52 @@ static int16_t ai_predict_ball_x(const ball_t *b) {
     return FP2I(pred);
 }
 
+static bool pu_is_good(uint8_t kind) {
+    return kind == PU_EXPAND || kind == PU_MULTI || kind == PU_SLOW ||
+           kind == PU_CATCH || kind == PU_FIRE;
+}
+
+/* Ticks before the ball crosses the paddle line, ignoring brick bounces (side walls
+ * leave vy alone, so the estimate only errs when a brick flips it -- and then in our
+ * favour, since the ball takes longer). Negative = not coming down yet. */
+static int16_t ball_ticks_to_paddle(const ball_t *b) {
+    if (b->stuck || b->vy <= 0) return -1;
+    int32_t dy = I2FP(PADDLE_Y - BALL_R) - b->y;
+    if (dy <= 0) return 0;
+    return (int16_t)(dy / b->vy);
+}
+
+/* Centre of a capsule the paddle can fetch and still be back under the ball for.
+ * -1 when nothing is worth the detour. t_ball < 0 means the ball is still rising,
+ * so there is time for anything. */
+static int16_t ai_capsule_detour(int16_t intercept, int16_t t_ball) {
+    int16_t step = (int16_t)paddle_step[cfg.speed];
+    int16_t here = (int16_t)(paddle_x + paddle_width() / 2);
+    int16_t best = -1;
+    int16_t best_t = 0x7FFF;
+
+    for (uint8_t i = 0; i < PU_MAX; i++) {
+        const powerup_t *p = &powerups[i];
+        if (!p->active || !pu_is_good(p->kind)) continue;
+
+        int16_t cx    = (int16_t)(p->x + PU_W / 2);
+        int16_t t_cap = (int16_t)((PADDLE_Y - (p->y + PU_H - 1)) / PU_FALL_PX);
+        if (t_cap < 0) t_cap = 0;
+
+        if (abs16((int16_t)(cx - here)) > (int16_t)(t_cap * step)) continue;
+        if (t_ball >= 0) {
+            int16_t spare = (int16_t)(t_ball - t_cap - 1);
+            if (spare < 0) continue;
+            if (abs16((int16_t)(intercept - cx)) > (int16_t)(spare * step)) continue;
+        }
+        if (t_cap < best_t) {
+            best_t = t_cap;
+            best   = cx;
+        }
+    }
+    return best;
+}
+
 static int16_t ai_target_x(void) {
     int16_t pw = paddle_width();
 
@@ -623,17 +669,21 @@ static int16_t ai_target_x(void) {
             }
             return intercept;
         }
+        int16_t grab = ai_capsule_detour(intercept, ball_ticks_to_paddle(fall));
+        if (grab >= 0) return grab;
         ai_pick_target(intercept);
         return ai_paddle_center_for_aim(intercept, aim_tx, aim_ty);
     }
 
     if (any) {
-        int16_t ix = FP2I(any->x);
+        int16_t ix   = FP2I(any->x);
+        int16_t grab = ai_capsule_detour(ix, -1);
+        if (grab >= 0) return grab;
         ai_pick_target(ix);
         return ai_paddle_center_for_aim(ix, aim_tx, aim_ty);
     }
 
-    /* No live ball — only then chase a falling capsule. */
+    /* No live ball left — nothing to defend, so take whatever is still falling. */
     int16_t px = -1;
     int16_t py = -1;
     for (uint8_t i = 0; i < PU_MAX; i++) {
