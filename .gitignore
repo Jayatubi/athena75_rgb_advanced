@@ -89,6 +89,7 @@ tags
 !keyboards/ydkb/athena75_rgb_advanced/apps/sdk/default_app_icon_32.png
 !keyboards/ydkb/athena75_rgb_advanced/apps/**/icon.png
 !keyboards/ydkb/athena75_rgb_advanced/src/app/**/icon.png
+!keyboards/ydkb/athena75_rgb_advanced/docs/apps/*.gif
 *.apng
 *.mng
 *.svg
