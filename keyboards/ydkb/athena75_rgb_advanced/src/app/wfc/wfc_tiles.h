@@ -6,8 +6,8 @@
 #define WFC_TILE_BYTES  512u
 #define WFC_TILESET_N   4u
 
-#define WFC_CIRCUIT_TILES  12u
-#define WFC_PIPES_TILES  12u
+#define WFC_CIRCUIT_TILES  16u
+#define WFC_PIPES_TILES  16u
 #define WFC_DUNGEON_TILES  25u
 #define WFC_ISLAND_TILES  18u
 

@@ -77,7 +77,7 @@ Doors go in horizontal walls only. Partly it is a budget — the solver's option
 mask is a `uint32`, which caps a set at 32 tiles — but a door in a wall running
 away from the viewer would be drawn edge-on, and at this size that is a smudge.
 
-## Layout comes from the tile odds, not the art
+## Texture comes from the tile odds
 
 Seamless tiles are only half of it. Collapsing to a uniformly random legal tile
 flips roughly every second lattice corner, and the board reads as speckle: the
@@ -89,10 +89,51 @@ neighbouring corners, and same-material domains grow into rooms and landmasses.
 The weights are a balance, and both ends are visible: too flat and the board is
 speckle again, too steep and the whole board falls into a single material.
 
-Once several tiles share one shape, the odds tuned for that shape are *split*
-between them rather than added to. Planting trees on a third of the inland tiles
-must not make inland any more likely than it was, or furnishing a theme quietly
-redraws the floor plan it sits in.
+Anything *built* is scored far below its plain sibling, because the plan below
+places those deliberately and a fire the plan did not ask for is a fire in the
+middle of nowhere. The odds are on a coarse scale so the few can be small
+without being zero: with the plan off, a board still gets the odd one, and that
+is then the only way any appear.
+
+## Structure comes from a plan, drawn before the collapse
+
+Adjacency sees one cell and weights see one tile. Both are local, so between
+them they can only produce something everywhere legal and nowhere meaningful —
+walls that enclose nothing, traces that loop or stop for no reason. Weight
+tuning cannot fix it: a weight is a marginal for a single cell and has nowhere
+to put the idea of a room. Anything bigger than a tile has to be decided before
+the first collapse, which is what `plan_*()` in `wfc_app.c` does.
+
+The plan is written in the solver's own vocabulary, and that is the whole trick.
+For the corner themes it is a floor/rock bitmap on the 9×9 lattice of tile
+corners, so the tile a cell ought to become is just the four lattice points
+around it read off as a corner mask; for the edge themes it is the exits each
+cell ought to carry. Either way the plan names one tile per cell, so leaning on
+it is one term in the weighted draw — never a hard constraint, so it can steer
+the collapse and can never contradict it. Where adjacency has already ruled the
+planned tile out, the plan is simply outvoted and the odds decide.
+
+* **dungeon** — chambers split off the lattice rectangle, one line of rock
+  between them. That thickness is not a coincidence: a single wall line is
+  exactly the 6 px partition the art was cut for, and the two cells either side
+  of a horizontal one are exactly the pair of shapes the door art fits. So
+  horizontal walls get a door and vertical ones an opening the floor runs
+  through, kept off both ends or the wall reads as a stub. The largest chamber
+  gets the fire; corridors do not, since that tile only exists for open floor.
+* **island** — one or two round blobs near the middle with the outer lattice
+  ring held as sea, so the coast closes on itself instead of shattering into an
+  archipelago. A hut goes where land meets water, woods where it does not.
+* **circuit / pipes** — a few nets, each a couple of terminals joined by
+  right-angled runs. Circuit gained single-port tiles for this: without
+  somewhere to end, a trace can only loop or leave the panel.
+
+`PLAN` is how much of the draw the plan wins where it has an opinion, from OFF
+(the odds alone, as before plans existed) to EXACT (the plan rendered outright,
+which is also the honest way to see what it drew). Stated as a share rather than
+as a bonus, because the plan speaks for one tile and the odds speak for every
+other legal one — a fixed bonus would mean less the more room the solver still
+has, and it did: the first version topped out near 70 % agreement at its
+strongest setting.
 
 Two different things decide how much wall a dungeon shows, and they are worth
 keeping apart. How *thick* a wall is comes from `ROOM` in the art: bigger blocks
@@ -115,8 +156,8 @@ coin toss and gave the collapse repeating habits.
 
 ```
 python3 make_tiles.py                                   # per-theme seam check
-bash ../tools/test_wfc.sh 300 400                       # solver still converges
-bash ../tools/preview_wfc.sh 12                         # solved boards, drawn offline
+bash ../tools/test_wfc.sh 300 400                       # converges at every PLAN
+bash ../tools/preview_wfc.sh 12 build/grids 4           # solved boards, drawn offline
 bash ../../../tools/sim_app_preview.sh wfc 9000 24000   # real screenshots
 python3 build/grade_shot.py DUNG <shot.png>             # score what the device drew
 python3 build/check_render_seams.py <shot.png>          # measured on the render
@@ -124,7 +165,15 @@ python3 build/check_render_seams.py <shot.png>          # measured on the render
 
 `preview_wfc.sh` is the one to reach for while tuning layout: it runs the real C
 solver and draws the finished boards with the real tiles in about two seconds,
-against a minute and a half for a device simulation. `grade_shot.py` reads the
-tile ids back out of a capture and scores it the same way, so the offline numbers
-can be checked against what the device actually drew — that comparison is what
-turned up the LCG bug above.
+against a minute and a half for a device simulation. Its third argument is the
+plan strength, and `EXACT` is the one to look at when changing a plan, since
+anything lower mixes in the odds and hides what was actually drawn.
+
+`test_wfc.sh` sweeps all five strengths and reports, besides deadlocks, how much
+of each finished board was what the plan asked for. A plan only ever adds
+weight, so it cannot cause a contradiction — but it can ask for something the
+tiles cannot do, and that shows up as agreement short of 100 % at EXACT.
+
+`grade_shot.py` reads the tile ids back out of a capture and scores it the same
+way, so the offline numbers can be checked against what the device actually
+drew — that comparison is what turned up the LCG bug above.

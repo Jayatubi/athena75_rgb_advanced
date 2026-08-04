@@ -32,8 +32,11 @@ TILE_BYTES = TILE * TILE * 2
 LAST = TILE - 1
 
 # Adjacency tables — must match wfc_app.c.
-CIRCUIT_EXITS = [0, 10, 5, 3, 9, 6, 12, 11, 7, 14, 13, 15]  # N=1 E=2 S=4 W=8
-WANG_COAST = [0, 15, 8, 4, 2, 1, 9, 6, 12, 3, 10, 5]  # N=8 E=4 S=2 W=1
+# The trailing single-port entries are terminals: somewhere for a net or a run
+# to end. Without them every trace either loops or leaves the panel, which is
+# most of why a board of these reads as wallpaper rather than as a circuit.
+CIRCUIT_EXITS = [0, 10, 5, 3, 9, 6, 12, 11, 7, 14, 13, 15, 1, 2, 4, 8]  # N=1 E=2 S=4 W=8
+WANG_COAST = [0, 15, 8, 4, 2, 1, 9, 6, 12, 3, 10, 5, 14, 13, 11, 7]  # N=8 E=4 S=2 W=1
 
 DOOR_N, DOOR_S = 1, 2
 
@@ -399,15 +402,6 @@ def draw_substrate(buf: bytearray) -> None:
             set_pixel(buf, x, y, col)
 
 
-def draw_pad(buf: bytearray, x0: int, y0: int) -> None:
-    fill_rect(buf, x0, y0, x0 + 3, y0 + 3, PCB_BASE)
-    set_pixel(buf, x0, y0, PCB_LIGHT)
-    set_pixel(buf, x0 + 1, y0, PCB_LIGHT)
-    set_pixel(buf, x0, y0 + 1, PCB_LIGHT)
-    set_pixel(buf, x0 + 3, y0 + 3, PCB_SHADOW)
-    fill_rect(buf, x0 + 1, y0 + 1, x0 + 2, y0 + 2, PCB_HOLE)
-
-
 def circuit_mask(exits: int) -> Mask:
     m = [[False] * TILE for _ in range(TILE)]
 
@@ -416,8 +410,11 @@ def circuit_mask(exits: int) -> Mask:
             for x in range(x0, x1 + 1):
                 m[y][x] = True
 
-    if bin(exits).count("1") >= 3:
+    ports = bin(exits).count("1")
+    if ports >= 3:
         band(TRACE_LO - 1, TRACE_HI + 1, TRACE_LO - 1, TRACE_HI + 1)  # solder pad
+    elif ports == 1:
+        band(TRACE_LO - 2, TRACE_HI + 2, TRACE_LO - 2, TRACE_HI + 2)  # terminal pad
     elif exits:
         band(TRACE_LO, TRACE_HI, TRACE_LO, TRACE_HI)
     if exits & 1:
@@ -447,10 +444,19 @@ def render_circuit(exits: int) -> TileArt:
             if m[y][x]:
                 set_pixel(buf, x, y, shade[face_of(m, x, y)])
 
+    ports = bin(exits).count("1")
     if exits == 0:
-        draw_pad(buf, 3, 3)
-        draw_pad(buf, 9, 9)
-    elif bin(exits).count("1") >= 3:
+        # Bare substrate. Scattering pads over the blank tile made the empty
+        # parts of a board tile into perfect graph paper, and left a real pad
+        # nothing to stand out against.
+        pass
+    elif ports == 1:
+        # A trace has to stop *at* something, or it reads as artwork that broke
+        # off rather than as the end of a net.
+        fill_rect(buf, 6, 6, 9, 9, PCB_HOLE)
+        set_pixel(buf, 6, 6, PCB_SHADOW)
+        set_pixel(buf, 9, 9, PCB_LIGHT)
+    elif ports >= 3:
         # Plated through-hole in the middle of the pad.
         fill_rect(buf, 7, 7, 8, 8, PCB_HOLE)
     return TileArt(bytes(buf), m)

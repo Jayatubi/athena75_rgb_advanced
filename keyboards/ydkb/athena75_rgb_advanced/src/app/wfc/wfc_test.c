@@ -85,6 +85,8 @@ static const host_api_t api = {
     .menu_active = h_menu_active,
 };
 
+static uint8_t plan_strength = 3u;
+
 static int run_one(uint8_t sid, uint32_t seed, uint32_t max_steps, uint32_t *steps_out, int *phase_out) {
     sim_now = 0;
     sim_rng = seed;
@@ -93,6 +95,7 @@ static int run_one(uint8_t sid, uint32_t seed, uint32_t max_steps, uint32_t *ste
     leave_pending = false;
     app_init(&api);
     cfg_defaults();
+    cfg.plan = plan_strength;
     wfc_reset();
     wfc_seed_center();
 
@@ -126,15 +129,27 @@ static void dump_grid(const char *name, uint32_t seed) {
     printf("\n");
 }
 
+/* How much of the finished board is what the plan asked for. A plan can only
+   ever add weight, so this never reaches 100%: where adjacency has already
+   ruled the planned tile out, the cell falls back on the tile odds. */
+static unsigned plan_agree(void) {
+    const wfc_set_t *s = active_set();
+    unsigned         n = 0;
+    for (uint16_t i = 0; i < WFC_CELLS; i++)
+        if (wfc_tile[i] != WFC_UNK && plan_wants(s, i, wfc_tile[i])) n++;
+    return n;
+}
+
 int main(int argc, char **argv) {
     unsigned trials = argc > 1 ? (unsigned)atoi(argv[1]) : 200u;
     unsigned max_steps = argc > 2 ? (unsigned)atoi(argv[2]) : 200u;
     unsigned dump = argc > 3 ? (unsigned)atoi(argv[3]) : 0u;
+    if (argc > 4) plan_strength = (uint8_t)atoi(argv[4]);
     const char *names[] = {"CIRC", "PIPE", "DUNG", "ISLE"};
     int fail = 0;
 
     for (uint8_t sid = 0; sid < WFC_SET_N; sid++) {
-        unsigned ok = 0, bad = 0, stall = 0, shown = 0;
+        unsigned ok = 0, bad = 0, stall = 0, shown = 0, agree = 0;
         for (unsigned t = 0; t < trials; t++) {
             uint32_t seed = (uint32_t)(0x9E3779B9u * (t + 1u) ^ ((uint32_t)sid << 24));
             uint32_t steps = 0;
@@ -142,6 +157,7 @@ int main(int argc, char **argv) {
             int r = run_one(sid, seed, max_steps, &steps, &ph);
             if (r == 0) {
                 ok++;
+                agree += plan_agree();
                 if (shown < dump) { dump_grid(names[sid], seed); shown++; }
             } else if (r == 1) {
                 bad++;
@@ -154,7 +170,8 @@ int main(int argc, char **argv) {
                             seed, steps, ph, wfc_done() ? 1 : 0);
             }
         }
-        printf("%s: ok=%u fail=%u stall=%u / %u\n", names[sid], ok, bad, stall, trials);
+        printf("%s: ok=%u fail=%u stall=%u / %u  plan=%u%%\n", names[sid], ok, bad, stall, trials,
+               ok ? agree * 100u / (ok * WFC_CELLS) : 0u);
         fail += bad + stall;
     }
     return fail ? 1 : 0;

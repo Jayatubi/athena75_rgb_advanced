@@ -9,12 +9,13 @@ OUT="${ROOT}/build/sim-record/wfc"
 mkdir -p "${OUT}"
 
 # FAST (25 ms/step): collapse stays visible, finishes reliably within the budget.
+# PLAN FIRM: the app's own default, so the recording shows what a user gets.
 python3 - "${OUT}/wfc_fast.save" <<'PY'
 import struct, binascii, sys
 from pathlib import Path
 p = Path(sys.argv[1])
-magic, version, speed = 0x57464331, 1, 1  # WFC1, FAST
-head = struct.pack("<IBBxx", magic, version, speed)
+magic, version, speed, plan = 0x57464331, 2, 1, 3  # WFC1, FAST, FIRM
+head = struct.pack("<IBBBx", magic, version, speed, plan)
 crc = binascii.crc32(head) & 0xFFFFFFFF
 p.write_bytes(head + struct.pack("<I", crc))
 print(f">> save {p}")
