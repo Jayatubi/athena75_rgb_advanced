@@ -35,6 +35,14 @@ fi
 if [[ "${APP}" == "settings" ]]; then
     EXTRA_SRC="${EXTRA_SRC} /kbd/src/firmware/ui_arrow_confirm.c /kbd/src/firmware/ui_window.c"
 fi
+if [[ "${APP}" == "wfc" ]]; then
+    # Tile art is generated every build so wfc_tiles.c can never drift from
+    # make_tiles.py. The icon is not: like every other app's it is a committed
+    # build input, because the illustration it was resized from is a local file
+    # the repo's blanket *.png rule keeps out.
+    python3 "${APPS_DIR}/wfc/make_tiles.py"
+    EXTRA_SRC="${APP}/wfc_tiles.c"
+fi
 
 if [[ ! -f "${SRC}" ]]; then
     echo "error: app source not found: ${SRC}" >&2

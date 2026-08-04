@@ -67,7 +67,7 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 | **MAZE**<br><img src="docs/apps/maze.gif" width="256" alt="MAZE"> | 16×16 完美迷宫自动寻路（中心 32×32 封闭区）。Enter → SPEED；走完自动重开。 |
 | **BRICK**<br><img src="docs/apps/brick.gif" width="256" alt="BRICK"> | Breakout 屏保：7×7 大砖、AI 挡板、随机胶囊与关卡布局。↑↓ 调速，Enter → SPEED，Space 重开。 |
 | **FISH**<br><img src="docs/apps/fish.gif" width="256" alt="FISH"> | Reynolds 鱼群（boids + 池壁力场，体色即速度，可选 WPM 加速与投饵）。Enter → 滑条菜单；Space 重放，↑↓ ←→ `-`/`=` 快捷调参。TYPING 需固件 ≥ 260731。 |
-| **WFC** | Wave Function Collapse 演示屏保：16×16 Wang tile 逐步坍缩成 edge-matching 图案，完成后停留再重开。Space 手动重开。 |
+| **WFC**<br><img src="docs/apps/wfc.gif" width="256" alt="WFC"> | Simple tiled-model WFC（mxgmn 风格）：8×8×16 px，**Circuit / Pipes / Dungeon / Island** 四套经典主题；tile 由 `make_tiles.py` 直接绘制成 16×16 像素画。坍缩时按权重挑 tile 而非等概率，同材质区域才会长成房间和陆块，否则整盘只是噪点。同一个形状可以有多张 tile：地牢会长出篝火，海岛会长出树林和木屋；门是两张 tile 各画一半——墙本来就跨在 tile 交界上——靠邻接规则里的门标记配对。Space 切换 tileset，↑↓（或 `-`/`=`）调坍缩速度，Enter → SPEED。未坍缩的格子按剩余候选 tile 的平均色填充。 |
 
 所有 app 的参数都存在自己 slot 末尾那 4 KiB save 区，并且**只在退出 app 时落盘一次**：菜单里改、直接按键改，都只是把结构体交给固件暂存（`cfg_save`），由固件在退出（或重载前，例如休眠唤醒）比较一次、需要才擦写。以前菜单是改一下就写一次 flash（长按连发时每一次重复都写一次），一个 sector 的擦写寿命经不起这么用。SETTINGS 改的 RGB、CapsLock 颜色、SLEEP 等属于 QMK 自己的 EEPROM，走的还是 eeconfig，不在此列。
 

@@ -39,6 +39,7 @@ APP_FRAME_MS = {
     "matrix": 16,
     "maze": 16,
     "settings": 16,
+    "wfc": 16,
 }
 DEFAULT_FRAME_MS = 16
 README_GIF_MS = 40       # 25 fps — survives most web GIF viewers

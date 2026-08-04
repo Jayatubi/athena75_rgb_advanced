@@ -1,14 +1,17 @@
 // Copyright 2026 jayatubi
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// WFC — Wave Function Collapse demo screen saver (128×128, 16×16 Wang tiles).
-// Each cell collapses from superposition to one of 16 edge-matching tiles;
-// the animation restarts when the grid is complete or hits a contradiction.
+// WFC — Simple tiled-model demo (mxgmn/WaveFunctionCollapse style).
+// Four classic themes on 8×8×16 px (128×128): Circuit, Pipes, Dungeon, Island.
+// Tile art: 16x16 pixel art drawn by make_tiles.py. Space cycles tileset,
+// Up/Down changes collapse speed. Persistence: speed staged with cfg_save,
+// written by the OS on app exit.
 
 #include <stdint.h>
 #include <stdbool.h>
 
 #include "host_api.h"
+#include "wfc_tiles.h"
 
 void *memset(void *d, int c, unsigned long n) {
     unsigned char *p = (unsigned char *)d;
@@ -18,75 +21,340 @@ void *memset(void *d, int c, unsigned long n) {
 
 static const host_api_t *g_api;
 
-#define WFC_W      16u
-#define WFC_H      16u
-#define WFC_CS     8u
-#define WFC_TILE_N 16u
-#define WFC_ALL    0xFFFFu
+#define WFC_W      8u
+#define WFC_H      8u
+#define WFC_CS     WFC_TILE_PX
+#define WFC_CELLS  (WFC_W * WFC_H)
 #define WFC_UNK    0xFFu
+#define WFC_SET_N  WFC_TILESET_N
 
-#define WFC_STEP_MS   48u
-#define WFC_HOLD_MS   4000u
-#define WFC_FAIL_MS   600u
+#define WFC_HOLD_MS  3200u
+#define WFC_FAIL_MS  600u
+#define WFC_HUD_MS   2000u
+#define WFC_SPEED_N  5u
 
-/* Tile bits: N=8 E=4 S=2 W=1 (1 = solid edge band on that side). */
-static uint16_t wfc_mask[WFC_W * WFC_H];
-static uint8_t  wfc_tile[WFC_W * WFC_H];
+#define COL_BG   0x0841u
+#define COL_UNK  0x3186u
+
+static uint32_t wfc_mask[WFC_CELLS];
+static uint8_t  wfc_tile[WFC_CELLS];
 static uint32_t prng;
 static bool     leave_pending;
-static uint8_t  last_x;
-static uint8_t  last_y;
+static uint8_t  set_id;
 static uint32_t phase_t;
 static uint32_t step_t;
+static uint32_t anim_t;
 static enum { ST_COLLAPSE = 0, ST_HOLD, ST_FAIL } phase;
+
+static char     hud_text[14];
+static bool     hud_active;
+static uint32_t hud_until;
+
+/* ms between collapses. TURBO is below one frame, so a tick may run several. */
+static const uint16_t speed_ms[WFC_SPEED_N] = {8u, 25u, 80u, 200u, 450u};
+
+static const char *speed_label(uint8_t idx) {
+    switch (idx) {
+        case 0: return "TURBO";
+        case 1: return "FAST";
+        case 2: return "MED";
+        case 3: return "SLOW";
+        default: return "V.SLOW";
+    }
+}
+
+typedef struct {
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  speed;
+    uint8_t  pad[2];
+    uint32_t crc;
+} wfc_save_t;
+
+#define WFC_SAVE_MAGIC   0x57464331u /* "WFC1" */
+#define WFC_SAVE_VERSION 1u
+static wfc_save_t cfg;
+
+static bool wang_adj(uint8_t a, uint8_t b, uint8_t dir) {
+    /* bits: N=8 E=4 S=2 W=1; dir 0=N 1=E 2=S 3=W */
+    static const uint8_t abit[4] = {3u, 2u, 1u, 0u};
+    static const uint8_t bbit[4] = {1u, 0u, 3u, 2u};
+    return ((a >> abit[dir]) & 1u) == ((b >> bbit[dir]) & 1u);
+}
+
+typedef struct {
+    const char   *name;
+    uint8_t       n;
+    const uint8_t *weight; /* relative pick odds per tile; NULL = uniform */
+    bool (*adj)(uint8_t a, uint8_t b, uint8_t dir);
+} wfc_set_t;
+
+/* mxgmn-style subsets: open(0), fill(15), edge(8/4/2/1), corners(9/6/12/3),
+   and the two straight-throughs (10/5) without which every tile turns and a
+   run of pipe never gets long enough to read as one. */
+static const uint8_t wang_coast[12] = {0u,  15u, 8u,  4u, 2u,  1u,
+                                       9u,  6u,  12u, 3u, 10u, 5u};
+
+static bool subset_adj(const uint8_t *map, uint8_t a, uint8_t b, uint8_t dir) {
+    return wang_adj(map[a], map[b], dir);
+}
+
+static bool pipe_adj(uint8_t a, uint8_t b, uint8_t dir) {
+    return subset_adj(wang_coast, a, b, dir);
+}
+
+/* Corner-labelled Wang (NW=8 NE=4 SE=2 SW=1). Neighbours agree on the two
+   corners they share, which pins the whole strip either side of a joint — so
+   beaches and bevels carry across it unbroken.
+
+   A tile is no longer just its corner mask: several may share a shape and
+   differ only in what is built on it. Doors are the exception that has to
+   enter the matching rule, because a wall straddles a tile boundary with half
+   its thickness on each side, so the two tiles splitting it must agree that a
+   door hangs there. Must match DUNGEON_TILES / ISLAND_TILES in make_tiles.py. */
+#define DOOR_N 1u
+#define DOOR_S 2u
+
+typedef struct {
+    uint8_t corners;
+    uint8_t doors;
+} corner_tile_t;
+
+static const corner_tile_t dungeon_map[WFC_DUNGEON_TILES] = {
+    {0u, 0u},  {1u, 0u},  {2u, 0u},  {3u, 0u},  {4u, 0u},
+    {5u, 0u},  {6u, 0u},  {7u, 0u},  {8u, 0u},  {9u, 0u},
+    {10u, 0u}, {11u, 0u}, {12u, 0u}, {13u, 0u}, {14u, 0u},
+    {15u, 0u},
+    /* Upper half of a door, one per shape that leaves the south edge rock. */
+    {0u, DOOR_S}, {4u, DOOR_S}, {8u, DOOR_S}, {12u, DOOR_S},
+    /* Lower half, likewise — so whichever side the solver commits to first,
+       the other always has a partner and never paints half a door. */
+    {0u, DOOR_N}, {1u, DOOR_N}, {2u, DOOR_N}, {3u, DOOR_N},
+    {15u, 0u}, /* campfire */
+};
+
+static const corner_tile_t island_map[WFC_ISLAND_TILES] = {
+    {0u, 0u},  {1u, 0u},  {2u, 0u},  {3u, 0u},  {4u, 0u},
+    {5u, 0u},  {6u, 0u},  {7u, 0u},  {8u, 0u},  {9u, 0u},
+    {10u, 0u}, {11u, 0u}, {12u, 0u}, {13u, 0u}, {14u, 0u},
+    {15u, 0u},
+    {15u, 0u}, /* trees */
+    {15u, 0u}, /* hut   */
+};
+
+static bool corner_map_adj(const corner_tile_t *map, uint8_t a, uint8_t b, uint8_t dir) {
+    /* Per direction, the two {a bit, b bit} corner pairs that must agree. */
+    static const uint8_t pairs[4][4] = {
+        {3u, 0u, 2u, 1u}, /* N: a NW=b SW, a NE=b SE */
+        {2u, 3u, 1u, 0u}, /* E: a NE=b NW, a SE=b SW */
+        {0u, 3u, 1u, 2u}, /* S: a SW=b NW, a SE=b NE */
+        {3u, 2u, 0u, 1u}, /* W: a NW=b NE, a SW=b SE */
+    };
+    const uint8_t *p  = pairs[dir];
+    const uint8_t  ca = map[a].corners, cb = map[b].corners;
+    if (((ca >> p[0]) & 1u) != ((cb >> p[1]) & 1u)) return false;
+    if (((ca >> p[2]) & 1u) != ((cb >> p[3]) & 1u)) return false;
+    if (dir == 0u) return (map[a].doors & DOOR_N) == ((map[b].doors & DOOR_S) >> 1);
+    if (dir == 2u) return ((map[a].doors & DOOR_S) >> 1) == (map[b].doors & DOOR_N);
+    return true;
+}
+
+static bool dungeon_adj(uint8_t a, uint8_t b, uint8_t dir) {
+    return corner_map_adj(dungeon_map, a, b, dir);
+}
+
+static bool island_adj(uint8_t a, uint8_t b, uint8_t dir) {
+    return corner_map_adj(island_map, a, b, dir);
+}
+
+/* Sampling the corner lattice uniformly is just noise: every second lattice
+   point flips, so the dungeon comes out as speckle (pillars, not rooms) and the
+   island as confetti. Favouring the two solid tiles couples neighbouring
+   corners, which lets same-material domains grow into rooms and landmasses;
+   the diagonal pinches are rare because they are what shreds a domain. */
+/* A dungeon is masonry, so the rock between two rooms should read as a wall,
+   not as a quarry. Tile 0 is the lever: it can only appear where the rock is at
+   least two tiles across, so keeping it rare keeps walls one tile thick. What
+   is left is open floor and the straight faces that divide it. Tiles with a
+   lone rock corner stay low too — on their own those are the pillars that made
+   an earlier build read as a hall rather than a floor plan. */
+/* Where a shape has more than one tile, the odds tuned for the plain tile are
+   split between them rather than added to, so furnishing a dungeon or planting
+   an island does not quietly move the floor plan it sits in. The two door
+   halves of shape 0 get nothing: a door buried in two tiles of rock is not
+   worth drawing, but the tiles have to exist so propagation can never corner
+   the solver into needing one. */
+static const uint8_t dungeon_weight[WFC_DUNGEON_TILES] = {
+    [0] = 1,   [15] = 9,                       /* thick rock / open floor */
+    [12] = 10, [6] = 12, [3] = 10, [9] = 12,   /* run of wall             */
+    [8] = 4,   [4] = 4,  [2] = 4,  [1] = 4,    /* wall turn or junction   */
+    [7] = 1,   [11] = 1, [13] = 1, [14] = 1,   /* wall dead end           */
+    [10] = 1,  [5] = 1,                        /* diagonal pinch          */
+    [16] = 0,  [17] = 1, [18] = 1, [19] = 2,   /* door, upper half        */
+    [20] = 0,  [21] = 1, [22] = 1, [23] = 2,   /* door, lower half        */
+    [24] = 3,                                  /* campfire                */
+};
+
+static const uint8_t island_weight[WFC_ISLAND_TILES] = {
+    [0] = 16, [15] = 8,                     /* open sea / inland         */
+    [12] = 6, [6] = 6,  [3] = 6,  [9] = 6,  /* straight coastline        */
+    [8] = 2,  [4] = 2,  [2] = 2,  [1] = 2,  /* headland                  */
+    [7] = 2,  [11] = 2, [13] = 2, [14] = 2, /* bay                       */
+    [10] = 1, [5] = 1,                      /* diagonal pinch            */
+    [16] = 6, [17] = 2,                     /* trees / hut               */
+};
+
+static uint32_t options_for_set(const wfc_set_t *s, uint8_t fixed, uint8_t dir) {
+    uint32_t m = 0;
+    for (uint8_t t = 0; t < s->n; t++) {
+        if (s->adj(fixed, t, dir)) m |= (uint32_t)(1u << t);
+    }
+    return m;
+}
+
+static uint32_t crc32(const void *data, uint32_t len) {
+    const uint8_t *p   = (const uint8_t *)data;
+    uint32_t       crc = 0xFFFFFFFFu;
+    while (len--) {
+        crc ^= *p++;
+        for (uint8_t b = 0; b < 8; b++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+static void cfg_rehash(void) {
+    cfg.version = WFC_SAVE_VERSION;
+    cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(wfc_save_t, crc));
+}
+
+static void cfg_defaults(void) {
+    cfg.magic = WFC_SAVE_MAGIC;
+    cfg.speed = 2u;
+    cfg_rehash();
+}
+
+static void cfg_load(void) {
+    wfc_save_t s;
+    if (g_api->save_read(0, &s, sizeof s) && s.magic == WFC_SAVE_MAGIC &&
+        s.version == WFC_SAVE_VERSION && s.speed < WFC_SPEED_N &&
+        s.crc == crc32(&s, (uint32_t)__builtin_offsetof(wfc_save_t, crc))) {
+        cfg = s;
+        cfg_rehash();
+        return;
+    }
+    cfg_defaults();
+}
+
+// Staged, never written here: the OS compares and programs the sector once, on
+// the way out of the app, so a held key does not cost an erase per repeat.
+static void cfg_commit(void) {
+    cfg_rehash();
+    g_api->cfg_save(0, &cfg, sizeof cfg);
+}
 
 static uint32_t rng_u32(void) {
     prng = prng * 1664525u + 1013904223u;
     return prng;
 }
 
-static uint8_t pop16(uint16_t m) {
+/* Take the range from the top of the word. A linear congruential generator's
+   low bits are barely random — bit 0 just alternates — so `rng_u32() % n`, which
+   is all this app used to do, made the collapse fall into repeating habits and
+   flattened the tile weights below into something closer to a coin toss. */
+static uint32_t rng_below(uint32_t n) {
+    return (uint32_t)(((uint64_t)rng_u32() * n) >> 32);
+}
+
+static uint8_t pop32(uint32_t m) {
     uint8_t n = 0;
-    for (; m; m &= (uint16_t)(m - 1u)) n++;
+    for (; m; m &= m - 1u) n++;
     return n;
-}
-
-static bool edge_match(uint8_t a, uint8_t b, uint8_t dir) {
-    static const uint8_t abit[4] = {3u, 2u, 1u, 0u};
-    static const uint8_t bbit[4] = {1u, 3u, 2u, 0u};
-    return ((a >> abit[dir]) & 1u) == ((b >> bbit[dir]) & 1u);
-}
-
-static uint16_t options_for(uint8_t fixed, uint8_t dir) {
-    uint16_t m = 0;
-    for (uint8_t t = 0; t < WFC_TILE_N; t++) {
-        if (edge_match(fixed, t, dir)) m |= (uint16_t)(1u << t);
-    }
-    return m;
 }
 
 static uint16_t idx_xy(uint8_t x, uint8_t y) {
     return (uint16_t)(y * WFC_W + x);
 }
 
+/* Circuit (mxgmn Circuit simplified): exits N=1 E=2 S=4 W=8. */
+static const uint8_t circuit_exits[12] = {
+    0u, 10u, 5u, 3u, 9u, 6u, 12u, 11u, 7u, 14u, 13u, 15u,
+};
+
+/* A trace leaving one tile must be met by the neighbour, and vice versa —
+   otherwise a wire runs into blank substrate and visibly dead-ends. */
+static bool circuit_adj(uint8_t a, uint8_t b, uint8_t dir) {
+    static const uint8_t an[4] = {1u, 2u, 4u, 8u};
+    static const uint8_t bn[4] = {4u, 8u, 1u, 2u};
+    bool                 ea    = (circuit_exits[a] & an[dir]) != 0u;
+    bool                 eb    = (circuit_exits[b] & bn[dir]) != 0u;
+    return ea == eb;
+}
+
+static const wfc_set_t *active_set(void);
+static void             cache_tile_colors(void);
+
+static const wfc_tileset_blob_t *active_tiles(void) {
+    return &wfc_tilesets[set_id % WFC_SET_N];
+}
+
+static uint16_t rgb565_at(const uint8_t *p) {
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+static void blit_tile(uint8_t *fb, int16_t px, int16_t py, uint8_t tid) {
+    const wfc_tileset_blob_t *ts = active_tiles();
+    if (tid >= ts->n) return;
+    g_api->blit565(fb, px, py, WFC_CS, WFC_CS, ts->rgb565 + (uint32_t)tid * WFC_TILE_BYTES);
+}
+
+static const wfc_set_t wfc_sets[WFC_SET_N] = {
+    {"CIRC", WFC_CIRCUIT_TILES, 0, circuit_adj},
+    {"PIPE", WFC_PIPES_TILES, 0, pipe_adj},
+    {"DUNG", WFC_DUNGEON_TILES, dungeon_weight, dungeon_adj},
+    {"ISLE", WFC_ISLAND_TILES, island_weight, island_adj},
+};
+
+static const wfc_set_t *active_set(void) {
+    return &wfc_sets[set_id % WFC_SET_N];
+}
+
+static uint32_t set_all_mask(const wfc_set_t *s) {
+    return s->n >= 32u ? 0xFFFFFFFFu : ((1u << s->n) - 1u);
+}
+
+static bool cell_done(uint8_t x, uint8_t y) {
+    return wfc_tile[idx_xy(x, y)] != WFC_UNK;
+}
+
+static bool has_done_neighbor(uint8_t x, uint8_t y) {
+    if (x > 0u && cell_done((uint8_t)(x - 1u), y)) return true;
+    if (x + 1u < WFC_W && cell_done((uint8_t)(x + 1u), y)) return true;
+    if (y > 0u && cell_done(x, (uint8_t)(y - 1u))) return true;
+    if (y + 1u < WFC_H && cell_done(x, (uint8_t)(y + 1u))) return true;
+    return false;
+}
+
 static void wfc_reset(void) {
-    for (uint16_t i = 0; i < WFC_W * WFC_H; i++) {
-        wfc_mask[i] = WFC_ALL;
+    const wfc_set_t *s = active_set();
+    uint32_t all         = set_all_mask(s);
+    for (uint16_t i = 0; i < WFC_CELLS; i++) {
+        wfc_mask[i] = all;
         wfc_tile[i] = WFC_UNK;
     }
-    last_x = 0xFFu;
-    last_y = 0xFFu;
-    phase  = ST_COLLAPSE;
-    phase_t = step_t = g_api->now_ms();
+    cache_tile_colors();
+    phase   = ST_COLLAPSE;
+    phase_t = step_t = anim_t = g_api->now_ms();
 }
 
 static bool wfc_propagate(uint8_t qx[], uint8_t qy[], uint8_t *qn, uint8_t sx, uint8_t sy) {
+    const wfc_set_t *s = active_set();
     qx[0] = sx;
     qy[0] = sy;
     *qn   = 1u;
     for (uint8_t qi = 0; qi < *qn; qi++) {
-        uint8_t x = qx[qi];
-        uint8_t y = qy[qi];
+        uint8_t  x = qx[qi];
+        uint8_t  y = qy[qi];
         uint16_t i = idx_xy(x, y);
         if (wfc_tile[i] == WFC_UNK) continue;
         uint8_t t = wfc_tile[i];
@@ -97,24 +365,27 @@ static bool wfc_propagate(uint8_t qx[], uint8_t qy[], uint8_t *qn, uint8_t sx, u
             int16_t ny = (int16_t)y + dy[d];
             if (nx < 0 || ny < 0 || nx >= (int16_t)WFC_W || ny >= (int16_t)WFC_H) continue;
             uint16_t ni   = idx_xy((uint8_t)nx, (uint8_t)ny);
-            uint16_t keep = options_for(t, d);
-            uint16_t nm   = (uint16_t)(wfc_mask[ni] & keep);
+            uint32_t keep = options_for_set(s, t, d);
+            uint32_t nm   = wfc_mask[ni] & keep;
             if (nm == wfc_mask[ni]) continue;
             wfc_mask[ni] = nm;
             if (!nm) return false;
-            if (pop16(nm) == 1u) {
+
+            if (wfc_tile[ni] != WFC_UNK) {
+                /* Collapsed cells stay — only check still valid. */
+                if ((nm & (1u << wfc_tile[ni])) == 0u) return false;
+            } else if (pop32(nm) == 1u) {
                 uint8_t only = 0;
-                for (uint8_t k = 0; k < WFC_TILE_N; k++) {
-                    if (nm & (uint16_t)(1u << k)) {
+                for (uint8_t k = 0; k < s->n; k++) {
+                    if (nm & (1u << k)) {
                         only = k;
                         break;
                     }
                 }
                 wfc_tile[ni] = only;
-            } else {
-                wfc_tile[ni] = WFC_UNK;
             }
-            if (*qn < 255u) {
+
+            if (*qn < 64u) {
                 qx[*qn] = (uint8_t)nx;
                 qy[*qn] = (uint8_t)ny;
                 (*qn)++;
@@ -125,122 +396,306 @@ static bool wfc_propagate(uint8_t qx[], uint8_t qy[], uint8_t *qn, uint8_t sx, u
 }
 
 static bool wfc_pick_cell(uint8_t *ox, uint8_t *oy) {
-    uint8_t best = 17u;
+    uint8_t best_e  = 33u;
+    uint8_t best_fr = 0u;
+    *ox = *oy = 0u;
     for (uint8_t y = 0; y < WFC_H; y++) {
         for (uint8_t x = 0; x < WFC_W; x++) {
             uint16_t i = idx_xy(x, y);
             if (wfc_tile[i] != WFC_UNK) continue;
-            uint8_t e = pop16(wfc_mask[i]);
+            uint8_t e = pop32(wfc_mask[i]);
             if (e < 2u) continue;
-            if (e < best) {
-                best = e;
-                *ox  = x;
-                *oy  = y;
+            uint8_t fr = has_done_neighbor(x, y) ? 1u : 0u;
+            if (e < best_e || (e == best_e && fr > best_fr)) {
+                best_e  = e;
+                best_fr = fr;
+                *ox     = x;
+                *oy     = y;
             }
         }
     }
-    return best < 17u;
+    return best_e < 33u;
 }
 
-static bool wfc_step_once(void) {
-    uint8_t x = 0;
-    uint8_t y = 0;
-    if (!wfc_pick_cell(&x, &y)) return true;
-
-    uint16_t i = idx_xy(x, y);
-    uint16_t m = wfc_mask[i];
-    if (!m) return false;
-
-    uint8_t pick = 0;
-    uint8_t n    = pop16(m);
-    uint8_t slot = (uint8_t)(rng_u32() % n);
-    for (uint8_t t = 0; t < WFC_TILE_N; t++) {
-        if ((m & (uint16_t)(1u << t)) == 0u) continue;
-        if (!slot) {
-            pick = t;
-            break;
-        }
-        slot--;
+static uint8_t mask_pick_nth(uint32_t m, uint8_t n) {
+    for (uint8_t t = 0; t < 32u; t++) {
+        if ((m & (1u << t)) == 0u) continue;
+        if (!n) return t;
+        n--;
     }
+    return 0;
+}
 
-    wfc_tile[i] = pick;
-    wfc_mask[i] = (uint16_t)(1u << pick);
-    last_x      = x;
-    last_y      = y;
+static uint8_t mask_pick_weighted(const wfc_set_t *s, uint32_t m) {
+    uint32_t total = 0;
+    if (s->weight) {
+        for (uint8_t t = 0; t < s->n; t++)
+            if (m & (1u << t)) total += s->weight[t];
+    }
+    if (!total) return mask_pick_nth(m, (uint8_t)rng_below(pop32(m)));
 
-    uint8_t qx[WFC_W * WFC_H];
-    uint8_t qy[WFC_W * WFC_H];
-    uint8_t qn = 0;
-    return wfc_propagate(qx, qy, &qn, x, y);
+    uint32_t r = rng_below(total);
+    for (uint8_t t = 0; t < s->n; t++) {
+        if ((m & (1u << t)) == 0u) continue;
+        if (r < s->weight[t]) return t;
+        r -= s->weight[t];
+    }
+    return mask_pick_nth(m, 0);
 }
 
 static bool wfc_done(void) {
-    for (uint16_t i = 0; i < WFC_W * WFC_H; i++) {
+    for (uint16_t i = 0; i < WFC_CELLS; i++) {
         if (wfc_tile[i] == WFC_UNK) return false;
     }
     return true;
 }
 
-static uint16_t super_color(uint16_t m, uint32_t t) {
-    uint8_t n = pop16(m);
-    if (n <= 1u) return 0x0841u;
-    uint32_t hue = (t + n * 37u) % 360u;
-    uint8_t  r   = (uint8_t)((hue < 60u || hue >= 300u) ? 20u + n : 6u);
-    uint8_t  g   = (uint8_t)((hue >= 60u && hue < 180u) ? 18u + n : 8u);
-    uint8_t  b   = (uint8_t)((hue >= 180u && hue < 300u) ? 16u + n : 6u);
-    return (uint16_t)(((uint16_t)r << 11) | ((uint16_t)g << 5) | b);
+static bool wfc_has_contradiction(void) {
+    for (uint16_t i = 0; i < WFC_CELLS; i++) {
+        if (wfc_tile[i] == WFC_UNK && wfc_mask[i] == 0u) return true;
+    }
+    return false;
 }
 
-static uint16_t tile_color(uint8_t t) {
-    static const uint16_t cols[WFC_TILE_N] = {
-        0x0841u, 0x4B6Du, 0x8818u, 0x5AEBu, 0xC986u, 0x3D4Eu, 0xEB6Au, 0x9B26u,
-        0x6B4Du, 0xA905u, 0x528Au, 0xB5D6u, 0x7BCFu, 0xD260u, 0x4565u, 0xFEA0u,
-    };
-    return cols[t & 0x0Fu];
+static bool wfc_collapse_singletons(void) {
+    bool progress = true;
+    while (progress) {
+        progress = false;
+        for (uint8_t y = 0; y < WFC_H; y++) {
+            for (uint8_t x = 0; x < WFC_W; x++) {
+                uint16_t i = idx_xy(x, y);
+                if (wfc_tile[i] != WFC_UNK) continue;
+                uint32_t m = wfc_mask[i];
+                if (m == 0u) return false;
+                if (pop32(m) != 1u) continue;
+                uint8_t only = mask_pick_nth(m, 0);
+                wfc_tile[i]  = only;
+                wfc_mask[i]  = (uint32_t)(1u << only);
+                progress     = true;
+                uint8_t qx[64];
+                uint8_t qy[64];
+                uint8_t qn = 0;
+                if (!wfc_propagate(qx, qy, &qn, x, y)) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool wfc_step_once(void) {
+    if (wfc_has_contradiction()) return false;
+    if (!wfc_collapse_singletons()) return false;
+    if (wfc_done()) return true;
+
+    uint8_t x = 0;
+    uint8_t y = 0;
+    if (!wfc_pick_cell(&x, &y)) {
+        if (!wfc_collapse_singletons()) return false;
+        return !wfc_has_contradiction();
+    }
+
+    uint16_t i = idx_xy(x, y);
+    uint32_t m = wfc_mask[i];
+    if (!m) return false;
+
+    uint8_t pick = mask_pick_weighted(active_set(), m);
+
+    wfc_tile[i] = pick;
+    wfc_mask[i] = (uint32_t)(1u << pick);
+
+    uint8_t qx[64];
+    uint8_t qy[64];
+    uint8_t qn = 0;
+    return wfc_propagate(qx, qy, &qn, x, y);
+}
+
+static void wfc_seed_center(void) {
+    uint8_t cx = WFC_W / 2u;
+    uint8_t cy = WFC_H / 2u;
+    uint8_t pick;
+    const wfc_set_t *s = active_set();
+    if (set_id == 0u) pick = (uint8_t)(1u + rng_below(11u));
+    else pick = mask_pick_weighted(s, set_all_mask(s));
+    uint16_t i = idx_xy(cx, cy);
+    wfc_tile[i] = pick;
+    wfc_mask[i] = (uint32_t)(1u << pick);
+    uint8_t qx[64];
+    uint8_t qy[64];
+    uint8_t qn = 0;
+    (void)wfc_propagate(qx, qy, &qn, cx, cy);
+}
+
+/* Per tile, its 256 pixels summed per channel. Every tile has the same pixel
+   count, so the mean over a set of tiles is the mean of these — which turns the
+   superposition colour below into a handful of adds instead of a walk over
+   every candidate's art on every frame. */
+static uint16_t tile_sum_r[32];
+static uint16_t tile_sum_g[32];
+static uint16_t tile_sum_b[32];
+
+static void cache_tile_colors(void) {
+    const wfc_tileset_blob_t *ts = active_tiles();
+    for (uint8_t t = 0; t < ts->n && t < 32u; t++) {
+        const uint8_t *tile = ts->rgb565 + (uint32_t)t * WFC_TILE_BYTES;
+        uint16_t       r = 0, g = 0, b = 0;
+        for (uint16_t i = 0; i < WFC_TILE_BYTES; i += 2u) {
+            uint16_t c = rgb565_at(tile + i);
+            r = (uint16_t)(r + (c >> 11));
+            g = (uint16_t)(g + ((c >> 5) & 0x3Fu));
+            b = (uint16_t)(b + (c & 0x1Fu));
+        }
+        tile_sum_r[t] = r;
+        tile_sum_g[t] = g;
+        tile_sum_b[t] = b;
+    }
+}
+
+/* A cell that has not collapsed yet is painted as the mean colour of every tile
+   it could still become — so it starts as the theme's overall tint and drifts
+   towards the answer as options are ruled out. */
+static uint16_t avg_mask_color(uint32_t m) {
+    const wfc_tileset_blob_t *ts = active_tiles();
+    uint32_t                  r = 0;
+    uint32_t                  g = 0;
+    uint32_t                  b = 0;
+    uint32_t                  n = 0;
+    for (uint8_t t = 0; t < ts->n; t++) {
+        if ((m & (1u << t)) == 0u) continue;
+        r += tile_sum_r[t];
+        g += tile_sum_g[t];
+        b += tile_sum_b[t];
+        n++;
+    }
+    if (!n) return COL_UNK;
+    n *= (WFC_TILE_BYTES / 2u);
+    return (uint16_t)(((r / n) << 11) | (((g / n) & 0x3Fu) << 5) | (b / n));
 }
 
 static void draw_cell(uint8_t *fb, uint8_t x, uint8_t y) {
-    int16_t px = (int16_t)(x * WFC_CS);
-    int16_t py = (int16_t)(y * WFC_CS);
-    uint16_t i = idx_xy(x, y);
-    uint32_t now = g_api->now_ms();
+    int16_t  px = (int16_t)(x * WFC_CS);
+    int16_t  py = (int16_t)(y * WFC_CS);
+    uint16_t i  = idx_xy(x, y);
 
     if (wfc_tile[i] == WFC_UNK) {
-        uint16_t col = super_color(wfc_mask[i], now / 40u + i);
-        g_api->fill_rect(fb, px, py, WFC_CS, WFC_CS, col);
+        uint32_t m = wfc_mask[i];
+        g_api->fill_rect(fb, px, py, WFC_CS, WFC_CS, m ? avg_mask_color(m) : COL_BG);
         return;
     }
 
-    uint8_t  t   = wfc_tile[i];
-    uint16_t col = tile_color(t);
-    g_api->fill_rect(fb, px, py, WFC_CS, WFC_CS, col);
-    if (t & 8u) g_api->fill_rect(fb, px, py, WFC_CS, 1, 0x0000u);
-    if (t & 4u) g_api->fill_rect(fb, (int16_t)(px + WFC_CS - 1), py, 1, WFC_CS, 0x0000u);
-    if (t & 2u) g_api->fill_rect(fb, px, (int16_t)(py + WFC_CS - 1), WFC_CS, 1, 0x0000u);
-    if (t & 1u) g_api->fill_rect(fb, px, py, 1, WFC_CS, 0x0000u);
+    blit_tile(fb, px, py, wfc_tile[i]);
+}
 
-    if (x == last_x && y == last_y && phase == ST_COLLAPSE) {
-        g_api->wire_rect(fb, px, py, WFC_CS, WFC_CS, 0xFFFFu);
-    }
+static void text_outlined(uint8_t *fb, int16_t x, int16_t y, const char *s, uint16_t fg) {
+    g_api->text_alpha(fb, (int16_t)(x - 1), y, s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, (int16_t)(x + 1), y, s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, x, (int16_t)(y - 1), s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, x, (int16_t)(y + 1), s, 0x0000, 0x0000, 255);
+    g_api->text_alpha(fb, x, y, s, fg, 0x0000, 255);
 }
 
 static void wfc_draw(void) {
     uint8_t *fb = g_api->fb;
-    g_api->clear(fb, 0x0010u);
+    g_api->fill_rect(fb, 0, 0, (int16_t)(WFC_W * WFC_CS), (int16_t)(WFC_H * WFC_CS), COL_BG);
     for (uint8_t y = 0; y < WFC_H; y++) {
         for (uint8_t x = 0; x < WFC_W; x++) draw_cell(fb, x, y);
     }
+    if (hud_active && g_api->now_ms() < hud_until) {
+        text_outlined(fb, 2, 1, hud_text, 0xFFFFu);
+    } else if (hud_active) {
+        hud_active = false;
+    }
     g_api->present(fb);
 }
+
+static void hud_show(const char *msg) {
+    unsigned k = 0;
+    for (unsigned i = 0; msg[i] && k + 1u < sizeof hud_text; i++) hud_text[k++] = msg[i];
+    hud_text[k] = 0;
+    hud_active  = true;
+    hud_until   = g_api->now_ms() + WFC_HUD_MS;
+}
+
+static void hud_show_speed(void) {
+    static char buf[13];
+    const char *sl = speed_label(cfg.speed);
+    unsigned    k  = 0;
+    buf[k++] = 'S';
+    buf[k++] = 'P';
+    buf[k++] = 'D';
+    buf[k++] = ' ';
+    for (unsigned i = 0; sl[i] && k + 1u < sizeof buf; i++) buf[k++] = sl[i];
+    buf[k] = 0;
+    hud_show(buf);
+}
+
+static void speed_nudge(int8_t delta) {
+    int v = (int)cfg.speed + (int)delta;
+    if (v < 0) v = 0;
+    else if (v >= (int)WFC_SPEED_N) v = (int)WFC_SPEED_N - 1;
+    if ((uint8_t)v == cfg.speed) return;
+    cfg.speed = (uint8_t)v;
+    cfg_commit();
+    hud_show_speed();
+}
+
+static void wfc_next_set(void) {
+    prng ^= g_api->now_ms();
+    set_id = (uint8_t)((set_id + 1u) % WFC_SET_N);
+    wfc_reset();
+    wfc_seed_center();
+}
+
+enum { G_SPEED = 1, N_ROOT = 0, N_SPEED };
+#define RADIO(label_, group_, value_) \
+    { (label_), APP_MI_VALUE, APP_MI_RADIO, (group_), (value_), 0 }
+static const app_menu_item_t root_items[] = {
+    { "SPEED", APP_MI_FOLDER, 0, 0, 0, N_SPEED },
+};
+static const app_menu_item_t speed_items[] = {
+    RADIO("TURBO", G_SPEED, 0), RADIO("FAST", G_SPEED, 1), RADIO("MED", G_SPEED, 2),
+    RADIO("SLOW", G_SPEED, 3),  RADIO("V.SLOW", G_SPEED, 4),
+};
+#undef RADIO
+static const app_menu_node_t menu_nodes[] = {
+    [N_ROOT]  = { "WFC", root_items, 1 },
+    [N_SPEED] = { 0, speed_items, WFC_SPEED_N },
+};
+
+static uint8_t menu_get(uint8_t group) {
+    return group == G_SPEED ? cfg.speed : 0u;
+}
+
+static void menu_set(uint8_t group, uint8_t value) {
+    if (group == G_SPEED && value < WFC_SPEED_N) {
+        cfg.speed = value;
+        cfg_commit();
+        hud_show_speed();
+    }
+}
+
+static const app_menu_model_t menu_model = {
+    .nodes      = menu_nodes,
+    .node_count = sizeof(menu_nodes) / sizeof(menu_nodes[0]),
+    .group_get  = menu_get,
+    .group_set  = menu_set,
+};
 
 static void wfc_input(void) {
     app_key_event_t ev;
     while (g_api->poll_event(&ev)) {
         if (!ev.pressed) continue;
-        if (ev.keycode == APP_KEY_ESC) leave_pending = true;
-        if (ev.keycode == APP_KEY_SPACE) {
-            prng ^= g_api->now_ms();
-            wfc_reset();
+        if (ev.keycode == APP_KEY_ESC) {
+            leave_pending = true;
+        } else if (ev.keycode == APP_KEY_ENTER) {
+            g_api->menu_run(&menu_model);
+        } else if (ev.keycode == APP_KEY_SPACE) {
+            wfc_next_set();
+            wfc_draw();
+        } else if (ev.keycode == APP_KEY_UP || ev.keycode == APP_KEY_EQUAL) {
+            speed_nudge(-1);
+            wfc_draw();
+        } else if (ev.keycode == APP_KEY_DOWN || ev.keycode == APP_KEY_MINUS) {
+            speed_nudge(+1);
             wfc_draw();
         }
     }
@@ -248,24 +703,30 @@ static void wfc_input(void) {
 
 static void wfc_enter(void) {
     leave_pending = false;
-    prng          = g_api->rng() ^ g_api->now_ms();
+    hud_active    = false;
+    cfg_load();
+    prng   = g_api->rng() ^ g_api->now_ms();
+    set_id = 0u; /* start at Circuit; Space / hold cycles themes */
     wfc_reset();
+    wfc_seed_center();
     wfc_draw();
 }
 
 static void wfc_tick(uint32_t dt_ms) {
     (void)dt_ms;
     if (leave_pending) {
+        if (g_api->save_busy()) return;
         g_api->exit_to_launcher();
         return;
     }
     wfc_input();
+    if (g_api->menu_active()) return;
 
     uint32_t now = g_api->now_ms();
     if (phase == ST_HOLD) {
-        if ((uint32_t)(now - phase_t) >= WFC_HOLD_MS) {
-            prng ^= now;
-            wfc_reset();
+        if ((uint32_t)(now - phase_t) >= WFC_HOLD_MS) wfc_next_set();
+        if ((uint32_t)(now - anim_t) >= 16u) {
+            anim_t = now;
             wfc_draw();
         }
         return;
@@ -274,25 +735,41 @@ static void wfc_tick(uint32_t dt_ms) {
         if ((uint32_t)(now - phase_t) >= WFC_FAIL_MS) {
             prng ^= now + 1u;
             wfc_reset();
+            wfc_seed_center();
+        }
+        if ((uint32_t)(now - anim_t) >= 16u) {
+            anim_t = now;
             wfc_draw();
         }
         return;
     }
 
-    if ((uint32_t)(now - step_t) < WFC_STEP_MS) return;
-    step_t = now;
+    uint16_t step_ms = speed_ms[cfg.speed];
+    /* The menu suspends ticks; without this the backlog would be spent as a
+       burst of collapses the moment it closes. */
+    if ((uint32_t)(now - step_t) > 1000u) step_t = now;
 
-    if (!wfc_step_once()) {
-        phase   = ST_FAIL;
-        phase_t = now;
+    bool    stepped = false;
+    uint8_t budget  = 8u; /* at TURBO a step is shorter than a frame */
+    while (budget-- && (uint32_t)(now - step_t) >= step_ms) {
+        step_t += step_ms;
+        stepped = true;
+        if (!wfc_step_once()) {
+            phase   = ST_FAIL;
+            phase_t = now;
+            break;
+        }
+        if (wfc_done()) {
+            phase   = ST_HOLD;
+            phase_t = now;
+            break;
+        }
+    }
+
+    if (stepped || (uint32_t)(now - anim_t) >= 16u) {
+        anim_t = now;
         wfc_draw();
-        return;
     }
-    if (wfc_done()) {
-        phase   = ST_HOLD;
-        phase_t = now;
-    }
-    wfc_draw();
 }
 
 static const app_desc_t wfc_desc = {
@@ -305,6 +782,7 @@ static const app_desc_t wfc_desc = {
 const app_desc_t *app_init(const host_api_t *api) {
     g_api = api;
     if (!api || api->abi_version != ATHENA_APP_ABI_VERSION) return 0;
+    if (!api->cfg_save || !api->cfg_flush) return 0;
     return &wfc_desc;
 }
 

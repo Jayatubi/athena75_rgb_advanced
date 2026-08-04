@@ -37,5 +37,6 @@ record life 8
 record maze 8
 record fish 8
 record brick 8 --save-data "${BUILD}/brick_fast.save"
+record wfc 16
 
 ls -lh "${DOCS}"/*.gif
