@@ -86,6 +86,8 @@ static bool menu_shift = false;
 
 // Uninstall arrow challenge (shared ui_arrow_confirm).
 static ui_arrow_confirm_t g_uninstall_confirm;
+// True after Enter accepts uninstall until the header-sector erase finishes.
+static bool g_uninstall_waiting;
 
 static uint32_t menu_arc_now(void) { return timer_read32(); }
 
@@ -100,6 +102,7 @@ static const ui_arrow_confirm_ops_t menu_arc_ops = {
 };
 
 static void uninstall_confirm_begin(void) {
+    g_uninstall_waiting = false;
     uint32_t r = timer_read32() ^ ((uint32_t)menu_model_selected_app() << 24);
     ui_arrow_confirm_begin(&g_uninstall_confirm, r, &menu_arc_ops);
 }
@@ -158,6 +161,18 @@ static void menu_push(menu_node_id_t child) {
     menu_wr.focus  = 0;
     menu_wr.scroll = 0;
     if (node_is_app_delete(child)) uninstall_confirm_begin();
+    clamp_focus_scroll();
+    menu_publish();
+}
+
+// Pop UNINSTALL + per-app submenu so the user lands back on INSTALLED.
+static void uninstall_return_to_installed(void) {
+    while (menu_wr.depth > 0 && !node_is_app(current_node())) {
+        menu_wr.depth--;
+        menu_wr.focus  = saved_focus[menu_wr.depth];
+        menu_wr.scroll = saved_scroll[menu_wr.depth];
+    }
+    menu_model_refresh_apps();
     clamp_focus_scroll();
     menu_publish();
 }
@@ -255,6 +270,7 @@ static bool s_suspend_stack; // true while hidden for an in-app overlay (STORAGE
 
 void menu_enter(void) {
     s_suspend_stack = false;
+    g_uninstall_waiting = false;
     memset(&menu_wr, 0, sizeof(menu_wr));
     memset(saved_focus, 0, sizeof(saved_focus));
     memset(saved_scroll, 0, sizeof(saved_scroll));
@@ -282,6 +298,7 @@ static void menu_visual_exit(void) {
 
 void menu_exit(void) {
     s_suspend_stack = false;
+    g_uninstall_waiting = false;
     menu_visual_exit();
 }
 
@@ -396,7 +413,9 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
     // Destructive uninstall confirmation: accept only the four prompted arrows.
     // A wrong arrow cancels immediately; Esc is explicit cancel (Left may be
     // part of the generated sequence, so it cannot also mean Back here).
+    // Erase is header-only (4 KiB): enough to drop the install from app_scan.
     if (node_is_app_delete(node)) {
+        if (g_uninstall_waiting) return true; // flash erase in flight
         if (ui_arrow_confirm_error_expired(&g_uninstall_confirm)) {
             menu_pop();
             return true;
@@ -410,9 +429,18 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
             if (keycode == KC_ENTER) {
                 const app_scan_entry_t *a =
                     app_scan_get(menu_model_selected_app());
-                if (a && app_sys_app_delete(a->base, a->slot_count)) {
-                    app_return_to_launcher();
-                    menu_exit();
+                // slot_count=0: reclaim by wiping the header sector only (fast).
+                if (a && app_sys_app_delete(a->base, 0)) {
+                    uint32_t run = app_slot_req_base();
+                    if (run && run == a->base) {
+                        // Uninstalling the running SETTINGS (or other) app itself.
+                        app_return_to_launcher();
+                        menu_exit();
+                    } else {
+                        g_uninstall_waiting = true;
+                        menu_mark_input();
+                        menu_publish();
+                    }
                 } else {
                     menu_pop();
                 }
@@ -582,6 +610,15 @@ bool menu_process_key(uint16_t keycode, bool pressed) {
 
 void menu_housekeeping_task(void) {
     if (!menu_is_active()) return;
+
+    if (g_uninstall_waiting) {
+        menu_mark_input(); // do not idle-exit mid-erase
+        if (!app_sys_app_delete_busy()) {
+            g_uninstall_waiting = false;
+            uninstall_return_to_installed();
+        }
+        return;
+    }
 
     if (node_is_app_delete(current_node()) &&
         ui_arrow_confirm_error_expired(&g_uninstall_confirm)) {
@@ -1145,14 +1182,31 @@ static void render_app_info(void) {
 }
 
 static void render_app_delete(void) {
+    uint8_t *fb = fbShow;
+    if (g_uninstall_waiting) {
+        // Header erase is one 4K sector (~tens of ms). Keep a wait screen so a
+        // stalled bus never looks like a freeze with no feedback.
+        ui_window_style_t win = UI_WINDOW_STYLE_MENU;
+        win.title             = "UNINSTALLING";
+        ui_window_draw(fb, &win);
+        ui_window_layout_t lay;
+        ui_window_layout_fill(UI_W, UI_H, &lay);
+        const char *msg = "PLEASE WAIT";
+        int16_t tw = ui_text_width(msg);
+        int16_t tx = (int16_t)(lay.content_x + (lay.content_w - tw) / 2);
+        int16_t ty = (int16_t)(lay.content_y + (lay.content_h - ui_line_height()) / 2);
+        ui_text(fb, tx, ty, msg, 0xFFFF, 0x0000);
+        ui_present(fb);
+        return;
+    }
     const app_scan_entry_t *a = app_scan_get(menu_model_selected_app());
     ui_arrow_confirm_view_t view = {
         .banner    = "UNINSTALL APP",
         .banner_bg = 0xF800,
         .subject   = a ? a->name : NULL,
     };
-    ui_arrow_confirm_render(&g_uninstall_confirm, fbShow, UI_W, UI_H, &view);
-    ui_present(fbShow);
+    ui_arrow_confirm_render(&g_uninstall_confirm, fb, UI_W, UI_H, &view);
+    ui_present(fb);
 }
 
 void menu_render_task(void) {
