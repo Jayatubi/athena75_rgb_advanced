@@ -37,17 +37,17 @@ static const host_api_t *g_api;
 #define PADDLE_H      3
 #define PADDLE_Y      (PANEL - 10)
 
-#define BRICK_COLS    10u
-#define BRICK_ROWS    10u
-#define BRICK_W       11
-#define BRICK_H       3
+#define BRICK_COLS    7u
+#define BRICK_ROWS    7u
+#define BRICK_W       16
+#define BRICK_H       5
 #define BRICK_GAPX    1
 #define BRICK_GAPY    1
-#define BRICK_OX      3
+#define BRICK_OX      5
 #define BRICK_OY      4
 
 #define PU_MAX        6u
-#define PU_SPAWN_NUM  3u   /* ~1/3 bricks drop */
+#define PU_SPAWN_NUM  2u   /* ~1/2 bricks drop — more falling capsules on a tiny screen */
 #define PU_FALL_PX    1    /* px per tick */
 #define PU_W          7    /* capsule: 1 px of body around a 5x5 letter */
 #define PU_H          7
@@ -60,6 +60,9 @@ static const host_api_t *g_api;
 #define STUCK_MS      7000u /* no brick broken for this long -> kick the ball off its orbit */
 #define STUCK_GIVEUP  3u    /* ...and after this many fruitless kicks, re-serve */
 #define BRICK_HUD_MS  1600u
+
+#define SPARK_N       28u
+#define TRAIL_LEN     4u
 
 enum {
     PU_NONE = 0,
@@ -77,6 +80,18 @@ enum {
     BT_SILVER = 1,
     BT_GOLD   = 2,
 };
+
+/* Muted palette — no saturated R/G primaries or R+G mixes (yellow/orange/lime). */
+#define COL_CORAL   0xEB6Au
+#define COL_TEAL    0x4B9Du
+#define COL_PLUM    0x8818u
+#define COL_SLATE   0x5AEBu
+#define COL_AMBER   0xFD26u
+#define COL_ROSE    0xC986u
+#define COL_GOLD    0xD4A3u
+#define COL_GOLD_HI 0xEF5Du
+#define COL_STEEL   0x3D4Eu
+#define COL_FIRE    COL_CORAL
 
 typedef struct {
     int16_t  x, y;
@@ -99,14 +114,30 @@ typedef struct {
     bool    active;
 } powerup_t;
 
+typedef struct {
+    int16_t  x, y;
+    int8_t   vx, vy;
+    uint8_t  ttl;
+    uint8_t  size; /* 1 = pixel spark, 2 = chunk */
+    uint16_t color;
+} spark_t;
+
+typedef struct {
+    int16_t x, y;
+    uint8_t age; /* 0 = empty, higher = fresher */
+} trail_pt_t;
+
 static brick_t   bricks[BRICK_COLS * BRICK_ROWS];
 static ball_t    balls[BALL_MAX];
 static powerup_t powerups[PU_MAX];
+static spark_t   sparks[SPARK_N];
+static trail_pt_t ball_trail[BALL_MAX][TRAIL_LEN];
 
 static uint8_t  bricks_alive;
 static uint8_t  level;
 static uint8_t  level_silver_from; /* row index where 2-hit silver begins */
 static uint8_t  level_color_rot;   /* permute 1-hit palette each level */
+static uint8_t  level_color_mode;  /* 0 = row bands, 1 = column bands */
 static int16_t  paddle_x;
 static uint32_t prng;
 
@@ -156,7 +187,7 @@ static const uint8_t pu_spawn_table[] = {
 };
 
 static const uint16_t pu_colors[] = {
-    0x0000u, 0x07E0u, 0xFD20u, 0x07FFu, 0x001Fu, 0xF81Fu, 0xFFE0u, 0xF800u,
+    0x0000u, COL_TEAL, COL_ROSE, COL_SLATE, COL_PLUM, COL_STEEL, COL_AMBER, COL_FIRE,
 };
 
 /* Arkanoid marks its capsules with a letter; colour alone is unreadable at 7 px.
@@ -172,18 +203,37 @@ static const uint8_t pu_glyphs[][5] = {
     { 0x10, 0x10, 0x10, 0x10, 0x1F }, /* FIRE   -> L */
 };
 
-static uint16_t brick_color_for(uint8_t type, uint8_t row, uint8_t hits) {
-    if (type == BT_GOLD) return 0xFFE0u;
+static uint16_t brick_color_for(uint8_t type, uint8_t row, uint8_t col, uint8_t hits) {
+    (void)col;
+    if (type == BT_GOLD) return COL_GOLD;
     if (type == BT_SILVER) return (hits >= 2u) ? 0xC618u : 0x8410u;
     static const uint16_t one_hit[] = {
-        0xF800u, 0xFD20u, 0xFFE0u, 0x07E0u, 0x07FFu, 0x001Fu,
+        COL_CORAL, COL_TEAL, COL_PLUM, COL_SLATE, COL_AMBER, COL_ROSE,
     };
-    return one_hit[(row + level_color_rot) % 6u];
+    uint8_t band = level_color_mode ? col : row;
+    return one_hit[(band + level_color_rot) % 6u];
 }
 
-static uint8_t brick_row_type(uint8_t row) {
-    if (row >= level_silver_from) return BT_SILVER;
-    return BT_1HIT;
+static uint16_t rgb565_scale(uint16_t c, uint8_t num, uint8_t den) {
+    if (!den) return c;
+    uint32_t r = ((uint32_t)(c >> 11) & 0x1Fu) * num / den;
+    uint32_t g = ((uint32_t)(c >> 5) & 0x3Fu) * num / den;
+    uint32_t b = ((uint32_t)c & 0x1Fu) * num / den;
+    if (r > 0x1Fu) r = 0x1Fu;
+    if (g > 0x3Fu) g = 0x3Fu;
+    if (b > 0x1Fu) b = 0x1Fu;
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+static uint16_t spark_core_color(uint16_t brick_col) {
+    return rgb565_scale(brick_col, 5u, 4u);
+}
+
+static uint16_t spark_fade_color(uint16_t brick_col, uint8_t ttl, uint8_t ttl_max) {
+    if (ttl_max < 1u) ttl_max = 1u;
+    uint8_t num = ttl;
+    if (num < 2u) num = 2u;
+    return rgb565_scale(brick_col, num, ttl_max);
 }
 
 static void brick_make_gold(brick_t *b) {
@@ -191,7 +241,7 @@ static void brick_make_gold(brick_t *b) {
     bricks_alive--;
     b->type  = BT_GOLD;
     b->hits  = 1u;
-    b->color = brick_color_for(BT_GOLD, 0, 0);
+    b->color = brick_color_for(BT_GOLD, 0, 0, 0);
 }
 
 static void wall_bounce(ball_t *b);
@@ -239,41 +289,167 @@ static uint32_t rng_u32(void) {
     return prng;
 }
 
-static void level_place_gold(void) {
-    uint8_t want   = (uint8_t)(4u + (rng_u32() % 3u));
-    uint8_t placed = 0;
-    bool    col_used[BRICK_COLS];
-    for (uint8_t c = 0; c < BRICK_COLS; c++) col_used[c] = false;
+static void level_clear_brick(brick_t *b) {
+    if (!b->alive || b->type == BT_GOLD) return;
+    b->alive = false;
+    bricks_alive--;
+}
 
-    for (uint8_t attempt = 0; attempt < 48u && placed < want; attempt++) {
-        uint8_t r = (uint8_t)(1u + (rng_u32() % 6u));
-        uint8_t c = (uint8_t)(rng_u32() % BRICK_COLS);
-        if (col_used[c]) continue;
-        brick_t *b = &bricks[r * BRICK_COLS + c];
-        if (!b->alive || b->type == BT_GOLD) continue;
-        brick_make_gold(b);
-        col_used[c] = true;
-        placed++;
-        /* Anything above gold in this column is unreachable from below -- the ball
-         * hits the gold first. Open the whole chimney, not just the cell on top. */
-        for (uint8_t ar = 0; ar < r; ar++) {
-            brick_t *above = &bricks[ar * BRICK_COLS + c];
-            if (above->alive && above->type != BT_GOLD) {
-                above->alive = false;
-                bricks_alive--;
+static uint8_t level_mirror_row(uint8_t row) {
+    uint8_t out = 0;
+    for (uint8_t c = 0; c < BRICK_COLS; c++) {
+        if (row & (1u << c)) out |= (uint8_t)(1u << (BRICK_COLS - 1u - c));
+    }
+    return out;
+}
+
+static int16_t abs16(int16_t v) {
+    return (v < 0) ? (int16_t)(-v) : v;
+}
+
+/* Curated 7x7 layout paradigms (one bit per column, LSB = col 0). */
+#define LEVEL_TPL_N 16u
+static const uint8_t level_templates[LEVEL_TPL_N][BRICK_ROWS] = {
+    { 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F, 0x7F }, /* full */
+    { 0x08, 0x1C, 0x3E, 0x7F, 0x7F, 0x7F, 0x7F }, /* pyramid */
+    { 0x7F, 0x7F, 0x7F, 0x7F, 0x3E, 0x1C, 0x08 }, /* inverted pyramid */
+    { 0x55, 0x2A, 0x55, 0x2A, 0x55, 0x2A, 0x55 }, /* checker */
+    { 0x7F, 0x7F, 0xE3, 0xE3, 0xE3, 0x7F, 0x7F }, /* hollow centre */
+    { 0x03, 0x07, 0x0E, 0x1C, 0x38, 0x70, 0x60 }, /* diagonal band */
+    { 0x60, 0x70, 0x38, 0x1C, 0x0E, 0x07, 0x03 }, /* anti-diagonal */
+    { 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B }, /* twin column gaps */
+    { 0x08, 0x1C, 0x3E, 0x7F, 0x3E, 0x1C, 0x08 }, /* bowtie / diamond */
+    { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77 }, /* centre lane */
+    { 0x7F, 0x1C, 0x7F, 0x1C, 0x7F, 0x1C, 0x7F }, /* horizontal stripes */
+    { 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55 }, /* vertical stripes */
+    { 0x63, 0x63, 0x00, 0x00, 0x00, 0x63, 0x63 }, /* four corners */
+    { 0x08, 0x08, 0x08, 0x7F, 0x08, 0x08, 0x08 }, /* cross */
+    { 0x7F, 0x41, 0x41, 0x41, 0x41, 0x41, 0x7F }, /* frame */
+    { 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F }, /* staircase */
+};
+
+static void level_tpl_copy(uint8_t ti, uint8_t out[BRICK_ROWS]) {
+    for (uint8_t r = 0; r < BRICK_ROWS; r++) out[r] = level_templates[ti][r];
+}
+
+static void level_tpl_transform(uint8_t rows[BRICK_ROWS], bool hflip, bool vflip) {
+    if (hflip) {
+        for (uint8_t r = 0; r < BRICK_ROWS; r++) rows[r] = level_mirror_row(rows[r]);
+    }
+    if (vflip) {
+        for (uint8_t r = 0; r < BRICK_ROWS / 2u; r++) {
+            uint8_t tmp                   = rows[r];
+            rows[r]                       = rows[BRICK_ROWS - 1u - r];
+            rows[BRICK_ROWS - 1u - r] = tmp;
+        }
+    }
+}
+
+static uint8_t level_layout[BRICK_ROWS];
+
+static uint8_t level_layout_count(const uint8_t rows[BRICK_ROWS]) {
+    uint8_t n = 0;
+    for (uint8_t r = 0; r < BRICK_ROWS; r++) {
+        uint8_t row = rows[r];
+        for (; row; row >>= 1u) n += (uint8_t)(row & 1u);
+    }
+    return n;
+}
+
+/* Pick a paradigm template, optionally mirrored; retry if too sparse. */
+static void level_pick_paradigm(uint8_t rows[BRICK_ROWS]) {
+    uint8_t min_bricks = (uint8_t)(18u + (level / 4u));
+    if (min_bricks > 40u) min_bricks = 40u;
+
+    uint8_t base = (uint8_t)((level + (rng_u32() & 7u)) % LEVEL_TPL_N);
+    for (uint8_t attempt = 0; attempt < LEVEL_TPL_N; attempt++) {
+        uint8_t ti = (uint8_t)((base + attempt) % LEVEL_TPL_N);
+        level_tpl_copy(ti, rows);
+        level_tpl_transform(rows, (rng_u32() & 1u) != 0u, (rng_u32() & 1u) != 0u);
+        if (level_layout_count(rows) >= min_bricks) return;
+    }
+    level_tpl_copy(0, rows);
+}
+
+static void level_apply_layout(const uint8_t rows[BRICK_ROWS]) {
+    bricks_alive = 0;
+    for (uint8_t r = 0; r < BRICK_ROWS; r++) {
+        for (uint8_t c = 0; c < BRICK_COLS; c++) {
+            brick_t *b = &bricks[r * BRICK_COLS + c];
+            b->x     = (int16_t)(BRICK_OX + c * (BRICK_W + BRICK_GAPX));
+            b->y     = (int16_t)(BRICK_OY + r * (BRICK_H + BRICK_GAPY));
+            b->type  = BT_1HIT;
+            b->hits  = 1u;
+            if ((rows[r] >> c) & 1u) {
+                b->alive = true;
+                b->color = brick_color_for(BT_1HIT, r, c, b->hits);
+                bricks_alive++;
+            } else {
+                b->alive = false;
             }
         }
     }
 }
 
-static void level_punch_holes(uint8_t holes) {
-    for (uint8_t n = 0, tries = 0; n < holes && tries < 64u; tries++) {
-        uint8_t idx = (uint8_t)(rng_u32() % (BRICK_COLS * BRICK_ROWS));
-        brick_t *b  = &bricks[idx];
-        if (!b->alive || b->type == BT_GOLD) continue;
-        b->alive = false;
-        bricks_alive--;
-        n++;
+static void level_place_gold(void) {
+    uint8_t want   = (uint8_t)(3u + (rng_u32() % 3u));
+    uint8_t placed = 0;
+
+    for (uint8_t c = 0; c < BRICK_COLS && placed < want; c++) {
+        if ((rng_u32() & 3u) == 0u) continue;
+        for (int8_t r = (int8_t)(BRICK_ROWS - 1); r >= 0; r--) {
+            brick_t *b = &bricks[(uint8_t)r * BRICK_COLS + c];
+            if (!b->alive || b->type == BT_GOLD) continue;
+            brick_make_gold(b);
+            placed++;
+            for (uint8_t ar = 0; ar < (uint8_t)r; ar++) {
+                brick_t *above = &bricks[ar * BRICK_COLS + c];
+                if (above->alive && above->type != BT_GOLD) level_clear_brick(above);
+            }
+            break;
+        }
+    }
+}
+
+static void level_apply_silver(void) {
+    if ((rng_u32() & 3u) == 0u) {
+        /* Silver clusters: bottom two rows plus mirrored pairs upward. */
+        for (uint8_t r = (uint8_t)(BRICK_ROWS - 2u); r < BRICK_ROWS; r++) {
+            for (uint8_t c = 0; c < BRICK_COLS; c++) {
+                brick_t *b = &bricks[r * BRICK_COLS + c];
+                if (!b->alive) continue;
+                b->type  = BT_SILVER;
+                b->hits  = 2u;
+                b->color = brick_color_for(BT_SILVER, r, c, b->hits);
+            }
+        }
+        for (uint8_t c = 0; c < BRICK_COLS / 2u; c++) {
+            if ((rng_u32() & 1u) == 0u) continue;
+            uint8_t r = (uint8_t)(BRICK_ROWS / 2u + (rng_u32() % 2u));
+            for (uint8_t dc = 0; dc < 2u; dc++) {
+                uint8_t col = (dc == 0u) ? c : (uint8_t)(BRICK_COLS - 1u - c);
+                brick_t *b  = &bricks[r * BRICK_COLS + col];
+                if (!b->alive || b->type == BT_GOLD) continue;
+                b->type  = BT_SILVER;
+                b->hits  = 2u;
+                b->color = brick_color_for(BT_SILVER, r, col, b->hits);
+            }
+        }
+        return;
+    }
+
+    uint8_t silver_rows = (uint8_t)(1u + (rng_u32() % 2u));
+    if (level >= 10u) silver_rows = (uint8_t)(2u + (rng_u32() % 2u));
+    if (silver_rows > BRICK_ROWS) silver_rows = BRICK_ROWS;
+    level_silver_from = (uint8_t)(BRICK_ROWS - silver_rows);
+    for (uint8_t r = level_silver_from; r < BRICK_ROWS; r++) {
+        for (uint8_t c = 0; c < BRICK_COLS; c++) {
+            brick_t *b = &bricks[r * BRICK_COLS + c];
+            if (!b->alive) continue;
+            b->type  = BT_SILVER;
+            b->hits  = 2u;
+            b->color = brick_color_for(BT_SILVER, r, c, b->hits);
+        }
     }
 }
 
@@ -345,10 +521,6 @@ static void ball_clamp_speed(ball_t *b, int32_t mag) {
     if (m <= mag || m <= 0) return;
     b->vx = (b->vx * mag) / m;
     b->vy = (b->vy * mag) / m;
-}
-
-static int16_t abs16(int16_t v) {
-    return (int16_t)(v < 0 ? -v : v);
 }
 
 static int32_t abs32(int32_t v) {
@@ -544,6 +716,90 @@ static void balls_spawn_multi(void) {
     }
 }
 
+static void sparks_clear(void) {
+    for (uint8_t i = 0; i < SPARK_N; i++) sparks[i].ttl = 0;
+}
+
+static void spark_emit(int16_t x, int16_t y, int8_t vx, int8_t vy, uint8_t ttl,
+                       uint8_t size, uint16_t col) {
+    for (uint8_t i = 0; i < SPARK_N; i++) {
+        if (sparks[i].ttl) continue;
+        sparks[i].x     = x;
+        sparks[i].y     = y;
+        sparks[i].vx    = vx;
+        sparks[i].vy    = vy;
+        sparks[i].ttl   = ttl;
+        sparks[i].size  = size;
+        sparks[i].color = col;
+        return;
+    }
+}
+
+/* big=true: full brick break; uses ball direction when available. */
+static void sparks_burst(int16_t cx, int16_t cy, uint16_t col, int32_t bvx, int32_t bvy,
+                         bool big) {
+    uint8_t n = big ? 14u : 6u;
+    int8_t  dx = (int8_t)(bvx / (FP_ONE * 2));
+    int8_t  dy = (int8_t)(bvy / (FP_ONE * 2));
+    if (dx == 0 && dy == 0) dy = -2;
+
+    for (uint8_t k = 0; k < n; k++) {
+        int8_t vx = (int8_t)(dx + (int8_t)((rng_u32() % 11u) - 5u));
+        int8_t vy = (int8_t)(dy + (int8_t)((rng_u32() % 11u) - 7u));
+        if (vx == 0 && vy == 0) vy = (int8_t)(-2 - (int8_t)(rng_u32() % 3u));
+        uint8_t ttl  = (uint8_t)((big ? 14u : 10u) + (rng_u32() % 8u));
+        uint8_t size = (uint8_t)(2u + (rng_u32() % (big ? 2u : 1u))); /* 2–3 px */
+        if (big && (rng_u32() & 3u) == 0u) size = 4u;
+        uint16_t c   = col;
+        if ((rng_u32() & 3u) == 0u) c = spark_core_color(col);
+        else if ((rng_u32() & 3u) == 1u) c = rgb565_scale(col, 3u, 4u);
+        spark_emit((int16_t)(cx + (int8_t)((rng_u32() % 7u) - 3u)),
+                   (int16_t)(cy + (int8_t)((rng_u32() % 5u) - 2u)),
+                   vx, vy, ttl, size, c);
+    }
+
+    if (big) {
+        for (uint8_t k = 0; k < 6u; k++) {
+            spark_emit((int16_t)(cx + (int8_t)((rng_u32() % 9u) - 4u)),
+                       (int16_t)(cy + (int8_t)((rng_u32() % 3u) - 1u)),
+                       (int8_t)((rng_u32() % 7u) - 3u), (int8_t)(-1 - (int8_t)(rng_u32() % 4u)),
+                       (uint8_t)(10u + (rng_u32() % 6u)), 4u, col);
+        }
+    }
+}
+
+static void sparks_step(void) {
+    for (uint8_t i = 0; i < SPARK_N; i++) {
+        spark_t *s = &sparks[i];
+        if (!s->ttl) continue;
+        s->x  = (int16_t)(s->x + s->vx);
+        s->y  = (int16_t)(s->y + s->vy);
+        s->vy = (int8_t)(s->vy + 1);
+        if (s->size >= 4u && s->ttl < 10u) s->size = 3u;
+        else if (s->size >= 3u && s->ttl < 7u) s->size = 2u;
+        s->ttl--;
+    }
+}
+
+static void trail_clear(void) {
+    for (uint8_t b = 0; b < BALL_MAX; b++)
+        for (uint8_t t = 0; t < TRAIL_LEN; t++) ball_trail[b][t].age = 0;
+}
+
+static void trail_push(uint8_t bi, int16_t x, int16_t y) {
+    trail_pt_t *tr = ball_trail[bi];
+    for (uint8_t t = TRAIL_LEN - 1u; t > 0u; t--) {
+        tr[t].x   = tr[t - 1u].x;
+        tr[t].y   = tr[t - 1u].y;
+        tr[t].age = tr[t - 1u].age;
+    }
+    tr[0].x   = x;
+    tr[0].y   = y;
+    tr[0].age = TRAIL_LEN;
+    for (uint8_t t = 1; t < TRAIL_LEN; t++)
+        if (tr[t].age) tr[t].age--;
+}
+
 static void powerups_clear(void) {
     for (uint8_t i = 0; i < PU_MAX; i++) powerups[i].active = false;
 }
@@ -555,34 +811,14 @@ static void effects_clear(void) {
 
 static void level_build(void) {
     prng ^= (uint32_t)(level + 1u) * 0x9E3779B9u;
-    /* Silver used to start at row 4..6 (half the wall). Keep it to the bottom
-     * 1–2 rows so most of the board is still one-hit colour. */
-    uint8_t silver_rows = (uint8_t)(1u + (rng_u32() % 2u));
-    if (level >= 10u) silver_rows = (uint8_t)(2u + (rng_u32() % 2u)); /* 2–3 late */
-    if (silver_rows > BRICK_ROWS) silver_rows = BRICK_ROWS;
-    level_silver_from = (uint8_t)(BRICK_ROWS - silver_rows);
     level_color_rot   = (uint8_t)(rng_u32() % 6u);
+    level_color_mode  = (uint8_t)(rng_u32() & 1u);
+    level_silver_from = BRICK_ROWS;
 
-    bricks_alive = 0;
-    for (uint8_t r = 0; r < BRICK_ROWS; r++) {
-        uint8_t type = brick_row_type(r);
-        for (uint8_t c = 0; c < BRICK_COLS; c++) {
-            brick_t *b = &bricks[r * BRICK_COLS + c];
-            b->x       = (int16_t)(BRICK_OX + c * (BRICK_W + BRICK_GAPX));
-            b->y       = (int16_t)(BRICK_OY + r * (BRICK_H + BRICK_GAPY));
-            b->type    = type;
-            b->hits    = (type == BT_SILVER) ? 2u : 1u;
-            b->color   = brick_color_for(type, r, b->hits);
-            b->alive   = true;
-            if (type != BT_GOLD) bricks_alive++;
-        }
-    }
+    level_pick_paradigm(level_layout);
+    level_apply_layout(level_layout);
+    level_apply_silver();
     level_place_gold();
-
-    uint8_t holes = (uint8_t)((level / 2u) + 1u + (rng_u32() % 2u));
-    if (level == 0u) holes = (uint8_t)(rng_u32() % 3u);
-    if (holes > 10u) holes = 10u;
-    if (bricks_alive > holes + BRICK_COLS) level_punch_holes(holes);
 }
 
 static void try_spawn_powerup(int16_t cx, int16_t cy) {
@@ -634,6 +870,7 @@ static void round_reset(bool new_level) {
     if (new_level) level++;
     prng ^= (uint32_t)(level + 1u) * 0x85EBCA6Bu;
     powerups_clear();
+    sparks_clear();
     effects_clear();
     aim_valid = false;
     level_build();
@@ -649,6 +886,8 @@ static void round_start(void) {
     prng  = g_api->rng() ^ (g_api->now_ms() << 1);
     level = 0;
     powerups_clear();
+    sparks_clear();
+    trail_clear();
     effects_clear();
     aim_valid = false;
     level_build();
@@ -991,6 +1230,8 @@ static void brick_hit(ball_t *b, brick_t *br) {
 
     if (fire) {
         try_spawn_powerup(br->x, br->y);
+        sparks_burst((int16_t)(br->x + BRICK_W / 2), (int16_t)(br->y + BRICK_H / 2), br->color,
+                     b->vx, b->vy, true);
         br->alive = false;
         bricks_alive--;
         return;
@@ -1000,12 +1241,16 @@ static void brick_hit(ball_t *b, brick_t *br) {
 
     if (br->type == BT_SILVER && br->hits > 1u) {
         br->hits--;
-        br->color = brick_color_for(BT_SILVER, 0, br->hits);
+        br->color = brick_color_for(BT_SILVER, 0, 0, br->hits);
+        sparks_burst((int16_t)(br->x + BRICK_W / 2), (int16_t)(br->y + BRICK_H / 2), br->color,
+                     b->vx, b->vy, false);
         ball_clamp_speed(b, ball_speed_nominal());
         return;
     }
 
     try_spawn_powerup(br->x, br->y);
+    sparks_burst((int16_t)(br->x + BRICK_W / 2), (int16_t)(br->y + BRICK_H / 2), br->color,
+                 b->vx, b->vy, true);
     br->alive = false;
     bricks_alive--;
     ball_clamp_speed(b, ball_speed_nominal());
@@ -1131,6 +1376,7 @@ static void physics_step(void) {
     uint32_t now = g_api->now_ms();
     ai_move_paddle();
     powerups_step();
+    sparks_step();
     stall_watchdog(now);
 
     for (uint8_t bi = 0; bi < BALL_MAX; bi++) {
@@ -1146,6 +1392,7 @@ static void physics_step(void) {
             continue;
         }
 
+        trail_push(bi, FP2I(b->x), FP2I(b->y));
         b->prev_x = FP2I(b->x);
         b->prev_y = FP2I(b->y);
         ball_move_tick(b);
@@ -1202,12 +1449,44 @@ static void draw_powerup(uint8_t *fb, const powerup_t *p) {
     }
 }
 
+static void draw_sparks(uint8_t *fb) {
+    for (uint8_t i = 0; i < SPARK_N; i++) {
+        const spark_t *s = &sparks[i];
+        if (!s->ttl) continue;
+        int16_t  px       = (int16_t)s->size;
+        if (px < 2) px = 2;
+        uint8_t  ttl_max  = (uint8_t)(px >= 4 ? 16u : 20u);
+        uint16_t base     = s->color;
+        uint16_t col      = spark_fade_color(base, s->ttl, ttl_max);
+        uint16_t core_col = spark_core_color(base);
+        int16_t  core     = (int16_t)(px / 2);
+        if (core < 2) core = 2;
+        g_api->fill_rect(fb, s->x, s->y, px, px, col);
+        if (s->ttl > 8u)
+            g_api->fill_rect(fb, (int16_t)(s->x + (px - core) / 2),
+                             (int16_t)(s->y + (px - core) / 2), core, core, core_col);
+    }
+}
+
+static void draw_ball_trail(uint8_t *fb, uint8_t bi, uint16_t bcol) {
+    static const uint16_t ghost[] = { 0x0841u, 0x1082u, 0x18C3u, 0x2104u };
+    const trail_pt_t *tr = ball_trail[bi];
+    for (uint8_t t = TRAIL_LEN; t-- > 0u;) {
+        if (!tr[t].age) continue;
+        uint8_t gi = (uint8_t)(TRAIL_LEN - 1u - t);
+        if (gi >= TRAIL_LEN) gi = TRAIL_LEN - 1u;
+        uint16_t col = ghost[gi];
+        if (bcol == COL_FIRE) col = 0x4208u;
+        g_api->ring(fb, tr[t].x, tr[t].y, 1, true, col);
+    }
+}
+
 static void brick_draw(void) {
     uint8_t *fb = g_api->fb;
     uint32_t now = g_api->now_ms();
     if (hud_active && now >= hud_until) hud_active = false;
 
-    g_api->clear(fb, 0x0008u);
+    g_api->clear(fb, 0x0010u);
     g_api->wire_rect(fb, PLAY_L, PLAY_T, (int16_t)(PLAY_R - PLAY_L + 1),
                      (int16_t)(PLAY_B - PLAY_T + 1), 0x0841u);
 
@@ -1215,26 +1494,36 @@ static void brick_draw(void) {
         const brick_t *b = &bricks[i];
         if (!b->alive) continue;
         g_api->fill_rect(fb, b->x, b->y, BRICK_W, BRICK_H, b->color);
+        g_api->wire_rect(fb, b->x, b->y, BRICK_W, BRICK_H, 0x0000u);
         if (b->type == BT_GOLD) {
-            g_api->wire_rect(fb, b->x, b->y, BRICK_W, BRICK_H, 0xFFFFu);
-        } else {
-            g_api->wire_rect(fb, b->x, b->y, BRICK_W, BRICK_H, 0x0000u);
+            /* Inset gleam — same outer size as other bricks (no white halo). */
+            g_api->hline(fb, (int16_t)(b->x + 1), (int16_t)(b->y + 1),
+                         (int16_t)(BRICK_W - 2), COL_GOLD_HI);
+            g_api->vline(fb, (int16_t)(b->x + 1), (int16_t)(b->y + 1),
+                         (int16_t)(BRICK_H - 2), COL_GOLD_HI);
+            g_api->fill_rect(fb, (int16_t)(b->x + BRICK_W / 2 - 1),
+                             (int16_t)(b->y + BRICK_H / 2 - 1), 2, 2, COL_GOLD);
         }
     }
+
+    draw_sparks(fb);
 
     for (uint8_t i = 0; i < PU_MAX; i++)
         if (powerups[i].active) draw_powerup(fb, &powerups[i]);
 
     int16_t pw = paddle_width();
     uint16_t pcol = 0xFFFFu;
-    if (now < catch_until) pcol = 0xFFE0u;
-    else if (now < wide_until) pcol = 0x07FFu;
-    else if (now < narrow_until) pcol = 0xF81Fu;
+    if (now < catch_until) pcol = COL_AMBER;
+    else if (now < wide_until) pcol = COL_SLATE;
+    else if (now < narrow_until) pcol = COL_PLUM;
     g_api->fill_rect(fb, paddle_x, PADDLE_Y, pw, PADDLE_H, pcol);
+    g_api->hline(fb, paddle_x, PADDLE_Y, pw, COL_STEEL);
 
     for (uint8_t i = 0; i < BALL_MAX; i++) {
         if (!balls[i].active) continue;
-        uint16_t bcol = (now < fire_until) ? 0xFD20u : 0xFFFFu;
+        uint16_t bcol = (now < fire_until) ? COL_FIRE : 0xFFFFu;
+        draw_ball_trail(fb, i, bcol);
+        g_api->ring(fb, FP2I(balls[i].x), FP2I(balls[i].y), BALL_R + 1, false, 0x4208u);
         g_api->ring(fb, FP2I(balls[i].x), FP2I(balls[i].y), BALL_R, true, bcol);
     }
 
@@ -1243,11 +1532,11 @@ static void brick_draw(void) {
     if (phase == PHASE_CLEAR) {
         const char *msg = "CLEAR!";
         text_outlined(fb, (int16_t)((PANEL - g_api->text_width(msg)) / 2),
-                      (int16_t)((PANEL - g_api->line_height()) / 2), msg, 0x07FFu);
+                      (int16_t)((PANEL - g_api->line_height()) / 2), msg, COL_SLATE);
     } else if (phase == PHASE_LOST) {
         const char *msg = "SERVE";
         text_outlined(fb, (int16_t)((PANEL - g_api->text_width(msg)) / 2),
-                      (int16_t)((PANEL - g_api->line_height()) / 2), msg, 0xFFE0u);
+                      (int16_t)((PANEL - g_api->line_height()) / 2), msg, COL_AMBER);
     }
 
     g_api->present(fb);

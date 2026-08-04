@@ -56,7 +56,7 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 
 ## 预置 slot app（源码在 `src/app/`）
 
-预览由仿真器 headless 录制（`bash tools/sim_record.sh <app>`，128×128 ×2 缩放、12 fps），归档在 `docs/apps/`。
+预览由仿真器 headless 录制（`bash tools/sim_record.sh <app>`，128×128 ×2 缩放，默认 40 ms/帧 ≈ 25 fps 以适配 GitHub 等预览器），归档在 `docs/apps/`。
 
 | App | 说明 |
 |-----|------|
@@ -65,7 +65,7 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 | **MATRIX**<br><img src="docs/apps/matrix.gif" width="256" alt="MATRIX"> | 数字雨 + 可选时钟水印。Enter/Space → SPEED / DENSITY / CLOCK；`host_tool synctime` 对时。 |
 | **LIFE**<br><img src="docs/apps/life.gif" width="256" alt="LIFE"> | Conway **环面**生命游戏，屏保图案与自动扰动。Enter → **PATTERN**（SAVER / GUN / SWARM / MIX）。 |
 | **MAZE**<br><img src="docs/apps/maze.gif" width="256" alt="MAZE"> | 16×16 完美迷宫自动寻路（中心 32×32 封闭区）。Enter → SPEED；走完自动重开。 |
-| **BRICK**<br><img src="docs/apps/brick.gif" width="256" alt="BRICK"> | Breakout 屏保：10×10 砖、AI 挡板、随机胶囊与关卡布局。↑↓ 调速，Enter → SPEED，Space 重开。 |
+| **BRICK**<br><img src="docs/apps/brick.gif" width="256" alt="BRICK"> | Breakout 屏保：7×7 大砖、AI 挡板、随机胶囊与关卡布局。↑↓ 调速，Enter → SPEED，Space 重开。 |
 | **FISH**<br><img src="docs/apps/fish.gif" width="256" alt="FISH"> | Reynolds 鱼群（boids + 池壁力场，体色即速度，可选 WPM 加速与投饵）。Enter → 滑条菜单；Space 重放，↑↓ ←→ `-`/`=` 快捷调参。TYPING 需固件 ≥ 260731。 |
 
 所有 app 的参数都存在自己 slot 末尾那 4 KiB save 区，并且**只在退出 app 时落盘一次**：菜单里改、直接按键改，都只是把结构体交给固件暂存（`cfg_save`），由固件在退出（或重载前，例如休眠唤醒）比较一次、需要才擦写。以前菜单是改一下就写一次 flash（长按连发时每一次重复都写一次），一个 sector 的擦写寿命经不起这么用。SETTINGS 改的 RGB、CapsLock 颜色、SLEEP 等属于 QMK 自己的 EEPROM，走的还是 eeconfig，不在此列。

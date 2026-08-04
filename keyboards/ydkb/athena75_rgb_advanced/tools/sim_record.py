@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record a slot app running in athena_sim as an animated GIF.
 
-    python3 tools/sim_record.py fish --seconds 10 --fps 12
+    python3 tools/sim_record.py fish --seconds 10 --frame-ms 16
     python3 tools/sim_record.py fish --save-from-device 0x10C40000
 
 Boots the emulator with a blank flash, installs <app>.app, optionally drops a
@@ -10,6 +10,12 @@ host_tool), launches the app and shoots the panel through the control socket.
 
 Frames are paced on the machine's *virtual* clock, not the wall clock, so the
 GIF plays at a true 1x however fast or slow the host happens to emulate.
+
+By default the capture interval matches each app's LCD tick (usually 16 ms).
+Use --gif-ms for the delay baked into the GIF file — README viewers (GitHub
+included) often clamp below ~20 fps, so packing 500×16 ms frames makes playback
+feel sluggish even though wall time is 1× in a local viewer. 40 ms → 25 fps is
+a good README default.
 
 Output: build/sim-record/<app>/<app>.gif plus the raw frames beside it.
 """
@@ -23,6 +29,19 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# How often the app calls present() under normal play (ms).
+APP_FRAME_MS = {
+    "ace": 16,
+    "brick": 16,
+    "fish": 16,
+    "life": 16,
+    "matrix": 16,
+    "maze": 16,
+    "settings": 16,
+}
+DEFAULT_FRAME_MS = 16
+README_GIF_MS = 40       # 25 fps — survives most web GIF viewers
 
 SLOT_SIZE = 0x40000     # 256 KiB reserved per app slot
 SAVE_OFF = 0x3F000      # the save sector is the slot's last 4 KiB
@@ -145,9 +164,24 @@ class Ctl:
         self.sock.close()
 
 
-def make_gif(frames: list, out: Path, scale: int, fps: int) -> None:
+def resolve_frame_ms(app: str, fps, frame_ms):
+    if frame_ms is not None:
+        return max(1, frame_ms)
+    if fps is not None:
+        return max(1, round(1000 / fps))
+    return APP_FRAME_MS.get(app.lower(), DEFAULT_FRAME_MS)
+
+
+def gif_delay_ms(period_ms: int) -> int:
+    """Quantise to GIF centiseconds (viewers ignore sub-10 ms delays)."""
+    cs = max(2, round(period_ms / 10.0))
+    return cs * 10
+
+
+def make_gif(frames: list, out: Path, scale: int, period_ms: int) -> None:
     from PIL import Image
     imgs = []
+    duration = gif_delay_ms(period_ms)
     for f in frames:
         im = Image.open(f).convert("RGB")
         if scale != 1:
@@ -156,7 +190,7 @@ def make_gif(frames: list, out: Path, scale: int, fps: int) -> None:
     if not imgs:
         sys.exit("error: no frames captured")
     imgs[0].save(out, save_all=True, append_images=imgs[1:],
-                 duration=round(1000 / fps), loop=0, optimize=True)
+                 duration=duration, loop=0, optimize=False)
 
 
 def main() -> None:
@@ -164,7 +198,12 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("app")
     ap.add_argument("--seconds", type=float, default=10.0)
-    ap.add_argument("--fps", type=int, default=12)
+    ap.add_argument("--fps", type=int, default=None,
+                    help="capture rate override (default: 1000 / app frame ms)")
+    ap.add_argument("--frame-ms", type=int, default=None,
+                    help="sim capture interval in virtual ms (default: per-app, usually 16)")
+    ap.add_argument("--gif-ms", type=int, default=None,
+                    help=f"GIF frame period / capture step (default: {README_GIF_MS} for README)")
     ap.add_argument("--scale", type=int, default=2, help="nearest-neighbour zoom")
     ap.add_argument("--warmup-ms", type=int, default=1500,
                     help="virtual ms between launching the app and the first frame")
@@ -192,6 +231,16 @@ def main() -> None:
     flash = out_dir / "flash.bin"
     state = out_dir / "settled.state"
     gif = Path(args.out) if args.out else out_dir / f"{args.app}.gif"
+    capture_ms = resolve_frame_ms(args.app, args.fps, args.frame_ms)
+    if args.gif_ms is not None:
+        gif_ms = max(1, args.gif_ms)
+    elif args.out and str(args.out).startswith(str(kbd / "docs/apps")):
+        gif_ms = README_GIF_MS
+    else:
+        gif_ms = capture_ms
+    step_ms = gif_ms
+    eff_fps = 1000.0 / step_ms
+    gif_delay = gif_delay_ms(step_ms)
 
     save = None
     if args.save_from_device:
@@ -219,7 +268,8 @@ def main() -> None:
                   "--run-ms", SETTLE_MS, "--save-state", state])
 
     total = SETTLE_MS + args.warmup_ms + int(args.seconds * 1000) + 2000
-    print(f">> recording {args.seconds:g}s at {args.fps} fps")
+    print(f">> recording {args.seconds:g}s at {eff_fps:.1f} fps "
+          f"({step_ms} ms capture, {gif_delay} ms GIF delay)")
     proc = subprocess.Popen(
         [str(sim), "--uf2", str(fw), "--flash", str(flash), "--load-state", str(state),
          "--ctl-port", str(args.port), "--log", "*=error", "--run-ms", str(total)],
@@ -235,8 +285,9 @@ def main() -> None:
         start = t0 + 500 + args.warmup_ms
         ctl.wait_until(start)
 
-        step = 1000.0 / args.fps
-        for i in range(int(args.seconds * args.fps)):
+        step = float(step_ms)
+        n_frames = max(1, int(args.seconds * 1000 / step))
+        for i in range(n_frames):
             ctl.wait_until(start + i * step)
             png = frame_dir / f"f{i:04d}.png"
             r = ctl.cmd(f"shot {png}")
@@ -251,9 +302,9 @@ def main() -> None:
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    make_gif(frames, gif, args.scale, args.fps)
+    make_gif(frames, gif, args.scale, step_ms)
     size = gif.stat().st_size
-    print(f">> {gif} ({len(frames)} frames, {size // 1024} KiB)")
+    print(f">> {gif} ({len(frames)} frames @ {gif_delay} ms, {size // 1024} KiB)")
 
 
 if __name__ == "__main__":

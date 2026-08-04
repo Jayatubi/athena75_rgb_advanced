@@ -3,7 +3,7 @@
 # sim_record.sh — record a slot app running in the emulator as a GIF.
 #
 #   bash tools/sim_record.sh fish
-#   bash tools/sim_record.sh fish --seconds 10 --fps 12 --scale 2
+#   bash tools/sim_record.sh fish --seconds 10 --frame-ms 16 --scale 2
 #   bash tools/sim_record.sh fish --save-from-device 0x10C40000
 #
 # Thin launcher; everything else lives in sim_record.py.
