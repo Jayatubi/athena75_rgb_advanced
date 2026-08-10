@@ -2,3 +2,8 @@
 #   <app>/build/  intermediate ELF/map, <app>/<app>.app packaged image.
 */build/
 *.app
+
+# ACE is local-only: it is built from private keyframe PNGs, so neither the app
+# nor its data builder belongs in git.
+ace/
+tools/build_ace_data.py

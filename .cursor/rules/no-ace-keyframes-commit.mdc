@@ -1,12 +1,26 @@
 ---
-description: Never git-add or commit ACE keyframes PNG tree
+description: ACE is local-only — never git-add or commit any of it
 globs:
-  - keyboards/ydkb/athena75_rgb_advanced/src/app/ace/keyframes/**
+  - keyboards/ydkb/athena75_rgb_advanced/src/app/ace/**
 alwaysApply: true
 ---
 
-# Do not commit `ace/keyframes/`
+# ACE is local-only
 
-- **`keyboards/ydkb/athena75_rgb_advanced/src/app/ace/keyframes/`** holds local `Icon_*.png` inputs for ACE. **Never** `git add`, commit, or push this directory or any file under it (including bulk `git add -A` without excluding it).
-- **`keyboards/ydkb/athena75_rgb_advanced/artifacts/apps/ace.app`** embeds the built QGF (~3MB) derived from those PNGs. **Do not commit** — same sensitivity as the PNG tree; build locally with `build_app.sh ace`.
-- Docs only: `src/README.md`, `readme.md`, `src/app/ace/keyframes/README.md` (local readme is gitignored with the folder).
+ACE was removed from git (source, icon, preview GIF and data builder) because it
+is built from private `Icon_*.png` keyframes. The files still live on disk and
+are gitignored; keep them that way.
+
+- **Never** `git add`, commit, or push (including via bulk `git add -A`, or
+  `git add -f` on an ignored path):
+  - `keyboards/ydkb/athena75_rgb_advanced/src/app/ace/` — program, icon and the
+    `keyframes/` PNG inputs.
+  - `keyboards/ydkb/athena75_rgb_advanced/src/app/tools/build_ace_data.py`.
+  - `keyboards/ydkb/athena75_rgb_advanced/artifacts/apps/ace.app` (and
+    `apps/hidden/`) — embeds the ~3 MB QGF derived from those PNGs.
+  - `keyboards/ydkb/athena75_rgb_advanced/docs/apps/ace.gif`.
+- Building/flashing ACE locally is fine: `build_app.sh ace` still works, it just
+  produces ignored output.
+- Do not reintroduce ACE into tracked docs or scripts (`readme.md`,
+  `docs/*.md`, `artifacts/apps/readme.txt`, `tools/record_readme_gifs.sh`,
+  `tools/sim_record.py`).

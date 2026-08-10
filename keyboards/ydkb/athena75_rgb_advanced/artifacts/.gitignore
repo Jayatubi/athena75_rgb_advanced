@@ -10,6 +10,7 @@
 !apps/*.app
 
 # Local-only apps: ACE embeds the keyframe QGF built from private PNGs.
+apps/ace.app
 apps/hidden/
 
 # athena_sim binaries (tools/build_sim.sh writes sim/<os>/). Committed like

@@ -90,6 +90,8 @@ tags
 !keyboards/ydkb/athena75_rgb_advanced/apps/**/icon.png
 !keyboards/ydkb/athena75_rgb_advanced/src/app/**/icon.png
 !keyboards/ydkb/athena75_rgb_advanced/docs/apps/*.gif
+# ACE is local-only (see src/app/.gitignore), so its preview stays local too.
+keyboards/ydkb/athena75_rgb_advanced/docs/apps/ace.gif
 *.apng
 *.mng
 *.svg

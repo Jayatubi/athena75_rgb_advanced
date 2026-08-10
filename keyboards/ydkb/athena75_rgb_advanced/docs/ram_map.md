@@ -24,7 +24,7 @@
 | 起始 | 结束 | 大小 | 段 | 作用 |
 |---|---|---|---|---|
 | `0x2000_0000` | `0x2002_C000` | 176 KiB | **firmware ram0** | 固件 `.data` + `.bss` + heap。 |
-| `0x2002_C000` | `0x2004_0000` | 80 KiB | **slot-app arena** | 当前 app 的固定 `.data/.bss`；ACE 使用约 64 KiB。 |
+| `0x2002_C000` | `0x2004_0000` | 80 KiB | **slot-app arena** | 当前 app 的固定 `.data/.bss`；关键帧动画类 app 可用到约 64 KiB。 |
 | `0x2004_0000` | `0x2004_1000` | 4 KiB | **SRAM4**（core0 栈） | core0 的异常栈(MSP) + 线程栈(PSP) + core-local 数据。 |
 | `0x2004_1000` | `0x2004_2000` | 4 KiB | **SRAM5**（core1 栈） | core1 的异常栈 + 线程栈 + core-local 数据 + boot。 |
 
@@ -40,7 +40,7 @@
 `0x2002_C000..0x2004_0000`（80 KiB）。两段均为共享 SRAM，只是由链接器隔离。
 
 当前构建 `size` 报告的 BSS/NOLOAD 合计为 182936 B（其中包含链接器扩展后的 heap）；
-删除内置 ANIMATION/MATRIX 后，关键帧双缓冲改由运行中的 ACE 放在 app arena，
+删除内置 ANIMATION/MATRIX 后，关键帧双缓冲改由运行中的 slot app 放在 app arena，
 不会与固件静态 BSS 同时占据同一段 RAM。
 
 ---
@@ -94,7 +94,7 @@ core1 复用同样尺寸（`rules_stacks_c1.ld`：`__c1_*_stack_size__ = __*_sta
 
 - **占位基址 `0x2004_0000` 不可用**：它正是 SRAM4（core0 主栈）起点，其后 8 KiB
   还会盖到 SRAM5（core1 栈）。直接加载会踩栈崩溃。
-- **实测 app 需求**：MATRIX 988 B；ACE 65568 B（两个 128×128 RGB565 帧）。
+- **实测 app 需求**：MATRIX 988 B；关键帧动画 app 65568 B（两个 128×128 RGB565 帧）。
 - **当前方案**：从 SRAM0–3 顶部切出 **80 KiB**
   (`0x2002_C000..0x2004_0000`)；固件 ram0 缩为 176 KiB。
 - 三处 source of truth 必须同步：

@@ -18,10 +18,6 @@ crc = binascii.crc32(head) & 0xFFFFFFFF
 p.write_bytes(head + struct.pack('<I', crc))
 PY
 
-if [[ ! -f "${KBD}/artifacts/apps/ace.app" && -f "${KBD}/artifacts/apps/hidden/ace.app" ]]; then
-    cp "${KBD}/artifacts/apps/hidden/ace.app" "${KBD}/artifacts/apps/ace.app"
-fi
-
 record() {
     local app=$1 sec=$2
     shift 2
@@ -31,7 +27,6 @@ record() {
 }
 
 record settings 6
-record ace 8
 record matrix 5
 record life 8
 record maze 8

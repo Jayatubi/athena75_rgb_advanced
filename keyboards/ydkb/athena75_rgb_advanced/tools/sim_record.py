@@ -32,7 +32,6 @@ from pathlib import Path
 
 # How often the app calls present() under normal play (ms).
 APP_FRAME_MS = {
-    "ace": 16,
     "brick": 16,
     "fish": 16,
     "life": 16,

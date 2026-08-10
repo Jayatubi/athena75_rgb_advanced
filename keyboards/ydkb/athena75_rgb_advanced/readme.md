@@ -18,9 +18,9 @@ YDKB / KBDFans **Athena75 RGB**：RP2040 双核 + 128×128 GC9107 SPI LCD + Vial
 
 | 方面 | 原版 | 本 fork |
 |------|------|---------|
-| 屏幕内容 | 内置固定 GIF 槽 | **Flash app 槽**（8 MiB，32×256 KiB）+ 可更换的 slot app（ACE 关键帧、MATRIX 雨、LIFE 等） |
-| 动画与特效 | 逐帧播放 | **ACE** app：关键帧 + MCU 实时补间（SLIDE / DISSOLVE / SHAKE / WHIRL / RANDOM） |
-| 屏上设置 | 无 / 极少 | 共享 **菜单引擎** + 各 app 自带菜单树（SETTINGS、ACE、MATRIX、LIFE） |
+| 屏幕内容 | 内置固定 GIF 槽 | **Flash app 槽**（8 MiB，32×256 KiB）+ 可更换的 slot app（MATRIX 雨、LIFE、WFC 等） |
+| 动画与特效 | 逐帧播放 | slot app 在 core1 实时生成画面；带大数据的 app 可另占连续数据槽 |
+| 屏上设置 | 无 / 极少 | 共享 **菜单引擎** + 各 app 自带菜单树（SETTINGS、MATRIX、LIFE） |
 | 输入 | 始终当键盘 | **gif 键**切换「键盘模式 / OS 模式」；OS 模式下按键驱动启动器与 app |
 | 上位机 | Vial | Vial + 原生 **`host_tool`**（HID 刷 UF2、LCD 截图、装 app、EEPROM 备份、flash 探针等） |
 | 开机动画 | 内置 | 独立 **boot 区**（4 MiB QGF，UF2 烧录） |
@@ -61,7 +61,6 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 | App | 说明 |
 |-----|------|
 | **SETTINGS**<br><img src="docs/apps/settings.gif" width="256" alt="SETTINGS"> | 系统设置：RGB、SLEEP、已装 app 管理、LCD TEST、REBOOT。Enter 进菜单。 |
-| **ACE**<br><img src="docs/apps/ace.gif" width="256" alt="ACE"> | 关键帧动画 + MCU 实时补间；QGF 占 **13 连续 slot**。Enter → **ANIMATION** 菜单（特效见下节）。 |
 | **MATRIX**<br><img src="docs/apps/matrix.gif" width="256" alt="MATRIX"> | 数字雨 + 可选时钟水印。Enter/Space → SPEED / DENSITY / CLOCK；`host_tool synctime` 对时。 |
 | **LIFE**<br><img src="docs/apps/life.gif" width="256" alt="LIFE"> | Conway **环面**生命游戏，屏保图案与自动扰动。Enter → **PATTERN**（SAVER / GUN / SWARM / MIX）。 |
 | **MAZE**<br><img src="docs/apps/maze.gif" width="256" alt="MAZE"> | 16×16 完美迷宫自动寻路（中心 32×32 封闭区）。Enter → SPEED；走完自动重开。 |
@@ -74,7 +73,7 @@ OS 模式长时间无操作会自动退回键盘模式（与菜单 idle 一致�
 构建并归档到 `artifacts/apps/`：
 
 ```bash
-bash src/app/tools/build_app.sh settings   # 或 ace | matrix | life | maze | fish | brick | wfc
+bash src/app/tools/build_app.sh settings   # 或 matrix | life | maze | fish | brick | wfc
 ```
 
 图标（`src/app/<app>/icon.png`，32×32）缺失时回落到 SDK 默认图标；FISH 的那张是脚本画的像素图，改完重跑即可：
@@ -87,34 +86,16 @@ python3 src/app/fish/make_icon.py --zoom 8   # --zoom 另存放大预览便于�
 
 ```bash
 host_tool app install path/to/life.app              # 默认 HID PUT，键盘 LCD 确认
-host_tool app install path/to/ace.app --method uf2  # 大包装 / 多 slot 时可选 UF2 路径
+host_tool app install path/to/wfc.app --method uf2  # 大包装 / 多 slot 时可选 UF2 路径
 host_tool app update path/to/matrix.app             # 仅更新代码+图标，保留 data/save
 host_tool app info path/to/settings.app
 ```
-
-ACE 的 emoji/QGF 数据打包需本地 `tools/emojis/`（**不入 git**）+ `src/app/tools/build_ace_data.py`；详见 ACE 构建脚本注释。
-
----
-
-## ACE 动画特效（Enter 进入 ANIMATION 菜单）
-
-关键帧之间由 MCU 实时补间，可在五种特效间切换（与旧 readme 行为一致，现由 **ACE app** 实现）：
-
-| 特效 | 效果 |
-|------|------|
-| **SLIDE** | 滑入滑出，可配残影档位 |
-| **DISSOLVE** | 缩放淡入淡出 |
-| **SHAKE** | 抖动交叉淡入 |
-| **WHIRL** | 漩涡旋转 |
-| **RANDOM** | 随机特效与间隔 |
-
-在 ACE 前台运行时，仍可用方向键与 `-`/`=` 等快捷键（见 `ace_app.c`）；Enter 打开完整 ANIMATION 菜单调 HOLD/TWN/FT HUD 等。
 
 ---
 
 ## 菜单操作（引擎通用）
 
-SETTINGS / ACE / MATRIX / LIFE 共用同一套菜单引擎（`menu.c` + `ui_scene.c`）：
+SETTINGS / MATRIX / LIFE 共用同一套菜单引擎（`menu.c` + `ui_scene.c`）：
 
 | 操作 | 功能 |
 |------|------|
@@ -151,7 +132,7 @@ SETTINGS / ACE / MATRIX / LIFE 共用同一套菜单引擎（`menu.c` + `ui_scen
 | 固件 + boot2 | ≤ ~4 MiB（代码约 120 KiB 级） | QMK 镜像；**勿**用 probe 随意擦写 |
 | Vial EEPROM | 64 KiB @ `0x001F_0000` | wear-leveling；**禁写**探针测试 |
 | Boot QGF | 4 MiB @ `0x1040_0000` | 开机动画 UF2 |
-| App slots | 8 MiB @ `0x1080_0000` | 32×256 KiB，slot app + ACE 连续数据 |
+| App slots | 8 MiB @ `0x1080_0000` | 32×256 KiB，slot app + 其后的连续数据槽 |
 
 细节与 slot 内布局（代码 / icon / save / 多 slot 包）见 [`docs/flash_map.md`](docs/flash_map.md)。
 
@@ -241,7 +222,7 @@ python3 tools/png_to_uf2.py boot path/to/splash.png   # -> boot UF2，烧到 boo
 | `B` | 重启；+ LCtrl → Bootloader |
 | `O` | LCD 开/关 |
 
-（Command `G` 仍映射旧接口 `next_gif_id()`，内置 ANIMATION 移除后为空操作；切特效请用 **ACE** app / 菜单。）
+（Command `G` 仍映射旧接口 `next_gif_id()`，内置 ANIMATION 移除后为空操作；特效请在对应 slot app 的菜单里切换。）
 
 Vial bootloader 键码、SOCD / Snap Tap 等逻辑保留。
 
@@ -252,7 +233,7 @@ Vial bootloader 键码、SOCD / Snap Tap 等逻辑保留。
 | 宏 / 项 | 含义 |
 |---------|------|
 | `FW_BUILD_NUM` | 菜单标题构建戳（`rules.mk` 默认 UTC 日期） |
-| `FRAME_MS`、`LCD_HOLD_FRAMES_*`、`LCD_TWEEN_*` | ACE / 补间节奏（ACE 内亦有一套常量） |
+| `FRAME_MS`、`LCD_HOLD_FRAMES_*`、`LCD_TWEEN_*` | 关键帧动画 / 补间节奏（动画 app 内亦有一套常量） |
 | `LCD_HUD_MS`、`LCD_GHOST_*`、`LCD_SHAKE_*`、`LCD_DISSOLVE_*`、`LCD_WHIRL_*`、`LCD_RAND_*` | 特效参数档位 |
 | `LCD_IDLE_TIMEOUT` | 固件侧 idle（与 SETTINGS SLEEP 配合） |
 | `LCD_MENU_*` | 菜单动画与 auto-exit |
