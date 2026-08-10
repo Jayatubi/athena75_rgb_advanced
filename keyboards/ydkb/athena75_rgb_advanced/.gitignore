@@ -6,8 +6,14 @@ build/
 src/sim/third_party/
 
 # The root .gitignore drops every *.png; the regression goldens have to be
-# tracked or tools/sim_regress.py has nothing to compare against.
+# tracked or tools/sim_regress.py has nothing to compare against, and the same
+# goes for the source the macOS bundle's icon is built from.
 !tests/golden/*.png
+!src/sim/gui/appicon.png
+
+# And it drops every *.uf2. The macOS bundle carries the firmware it boots, so
+# without this exception the committed .app would have nothing to run.
+!artifacts/sim/macos/*.app/Contents/Resources/firmware.uf2
 
 # Likewise it drops every CMakeLists.txt (an upstream QMK rule aimed at the ones
 # CLion generates). This one is the simulator's build definition -- without it a

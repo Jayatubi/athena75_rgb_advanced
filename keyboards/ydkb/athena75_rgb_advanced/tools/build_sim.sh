@@ -16,6 +16,7 @@
 #   tools/build_sim.sh --test       build, then run the pixel regression
 #   tools/build_sim.sh --windows    MSVC build driven from WSL -> .exe
 #   tools/build_sim.sh --no-sdl     headless runner only, no SDL2 at all
+#   tools/build_sim.sh --app        also wrap the macOS build in a .app bundle
 #
 # build/sdl2/ is a cache that outlives --clean; delete it to force SDL2 to be
 # fetched and rebuilt. ATHENA_SDL2_DIR points at an SDL2 install of your own
@@ -36,12 +37,14 @@ clean=0
 test=0
 windows=0
 no_sdl=0
+app_bundle=0
 for a in "$@"; do
     case "$a" in
         --clean)   clean=1 ;;
         --test)    test=1 ;;
         --windows) windows=1 ;;
         --no-sdl)  no_sdl=1 ;;
+        --app)     app_bundle=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -51,6 +54,7 @@ done
 # directory.
 [ "$windows" = 1 ] && SIM_OS=windows
 OUT="$KB/artifacts/sim/$SIM_OS"
+APP_NAME="Athena75 Simulator"
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
 winpath() { wslpath -w "$1" | sed 's/\\/\//g'; }
@@ -159,11 +163,110 @@ else
     cmake --build "$BUILD" -j"$JOBS"
 fi
 
+# ---- the macOS bundle -------------------------------------------------------
+
+# Finder passes no arguments, and athena_sim needs a firmware image, a layout and
+# somewhere to keep its 16 MiB flash. So the bundle carries the first two, keeps
+# the third under Application Support, and puts a shell launcher in front of the
+# binary to join them up. The apps go into the flash the once, when it is created.
+package_app() {
+    local app="$OUT/$APP_NAME.app"
+    local res="$app/Contents/Resources"
+
+    if [ ! -f "$OUT/athena_sim" ]; then
+        echo "no windowed build to package (SDL2 was not available)" >&2
+        return 1
+    fi
+
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS" "$res/apps"
+    # Named for the app rather than the binary: this is the process macOS ends up
+    # running, and its name is what the Dock and the menu bar show.
+    cp "$OUT/athena_sim" "$app/Contents/MacOS/$APP_NAME"
+    cp "$KB/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2" "$res/firmware.uf2"
+    cp "$KB/keymaps/vial/vial.json" "$res/vial.json"
+    for a in "$KB"/artifacts/apps/*.app; do
+        if [ -e "$a" ]; then cp "$a" "$res/apps/"; fi
+    done
+
+    # appicon.png is the artwork at the largest size an icon is ever asked for,
+    # so every entry below is a straight reduction of it.
+    local icons="$BUILD/AppIcon.iconset"
+    rm -rf "$icons"
+    mkdir -p "$icons"
+    for px in 16 32 64 128 256 512 1024; do
+        cp "$SRC/gui/appicon.png" "$icons/px_$px.png"
+        if [ "$px" -ne 1024 ]; then
+            sips -z "$px" "$px" "$icons/px_$px.png" >/dev/null
+        fi
+    done
+    # iconutil names a file for the points it covers, not the pixels it holds, so
+    # every size appears twice: once at 1x and once as the @2x of the size below.
+    for spec in 16x16:16 16x16@2x:32 32x32:32 32x32@2x:64 128x128:128 \
+                128x128@2x:256 256x256:256 256x256@2x:512 512x512:512 512x512@2x:1024; do
+        cp "$icons/px_${spec#*:}.png" "$icons/icon_${spec%:*}.png"
+    done
+    rm -f "$icons"/px_*.png
+    iconutil -c icns "$icons" -o "$res/AppIcon.icns"
+
+    cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>               <string>$APP_NAME</string>
+    <key>CFBundleDisplayName</key>        <string>$APP_NAME</string>
+    <key>CFBundleIdentifier</key>         <string>com.jayatubi.athena75.simulator</string>
+    <key>CFBundleExecutable</key>         <string>launch</string>
+    <key>CFBundleIconFile</key>           <string>AppIcon</string>
+    <key>CFBundlePackageType</key>        <string>APPL</string>
+    <key>CFBundleVersion</key>            <string>1.0</string>
+    <key>CFBundleShortVersionString</key> <string>1.0</string>
+    <key>NSHighResolutionCapable</key>    <true/>
+    <key>LSApplicationCategoryType</key>  <string>public.app-category.developer-tools</string>
+</dict>
+</plist>
+PLIST
+
+    cat > "$app/Contents/MacOS/launch" <<'LAUNCH'
+#!/bin/bash
+# What Finder runs. athena_sim takes no defaults for the firmware or the flash,
+# and there is nowhere sensible for them to default to from inside a bundle.
+set -euo pipefail
+contents="$(cd "$(dirname "$0")/.." && pwd)"
+res="$contents/Resources"
+app="$(basename "$(dirname "$contents")" .app)"
+state="$HOME/Library/Application Support/Athena75 Simulator"
+mkdir -p "$state"
+
+# The HID bridge sits on the first port host_tool probes, so the installed app is
+# reachable the same way a repo build is. The scripting socket stays clear of that
+# 47801-47804 range, or `host_tool devices` reports it as a second emulator.
+args=(--uf2 "$res/firmware.uf2" --flash "$state/flash.bin" --vial-json "$res/vial.json"
+      --hid-port 47801 --ctl-port 47811)
+# Only into a flash image that does not exist yet: after that the apps are in it,
+# and installing them again would just fill more slots with the same thing.
+if [ ! -f "$state/flash.bin" ]; then
+    for a in "$res"/apps/*.app; do
+        if [ -e "$a" ]; then args+=(--install-app "$a"); fi
+    done
+fi
+exec "$contents/MacOS/$app" "${args[@]}" "$@"
+LAUNCH
+    chmod +x "$app/Contents/MacOS/launch"
+
+    # Ad-hoc, because an arm64 binary has to be signed to run at all and a bundle
+    # assembled by copying is not. Nothing here is distributed, so this is enough.
+    codesign --force --sign - "$app" >/dev/null 2>&1 || true
+    echo "  $app"
+}
+
 echo
 echo "built:"
 for t in athena_sim_cli athena_sim athena_sim_cli.exe athena_sim.exe; do
     [ -f "$OUT/$t" ] && echo "  $OUT/$t"
 done
+if [ "$app_bundle" = 1 ]; then package_app; fi
 
 if [ "$test" = 1 ]; then
     echo

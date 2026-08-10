@@ -56,7 +56,17 @@ bash tools/build_sim.sh                     # -> artifacts/sim/<os>/athena_sim{,
 bash tools/build_sim.sh --test              # 顺便跑像素回归
 bash tools/build_sim.sh --windows           # 从 WSL 驱动 MSVC，产出 .exe
 bash tools/build_sim.sh --windows --no-sdl  # 只要 CLI
+bash tools/build_sim.sh --app               # macOS：再包一个 .app
 ```
+
+`--app` 产出 `artifacts/sim/macos/Athena75 Simulator.app`，可以直接拷进
+`/Applications`；这个包连同它带的固件一起提交在仓库里，所以固件或 app 变了之后要
+重跑一次 `--app` 才会跟上。Finder 不传参数，而 `athena_sim` 的固件、布局、flash 三样都没有
+默认值，所以固件与布局装进 `Contents/Resources/`，`Contents/MacOS/launch` 这个壳
+把它们和 `~/Library/Application Support/Athena75 Simulator/flash.bin` 接起来；
+`artifacts/apps/*.app` 只在这个 flash 尚不存在、即第一次启动时装入。图标是
+`src/sim/gui/appicon.png`——真机旋钮的照片裁成方形，按 macOS 的圆角方形网格
+（1024 画布里 824 的方块、185 的圆角）连同 alpha 一起存成成品，打包时只是逐档缩小。
 
 `src/sim/CMakeLists.txt` 的要点：
 
