@@ -14,4 +14,5 @@ Build firmware: `bash tools/build_mac.sh` → UF2 in `artifacts/firmware/`.
 Build host: `cmake -S src/host -B src/host/build && cmake --build src/host/build --config Release`.  
 Build app: `bash src/app/tools/build_app.sh life` → `artifacts/apps/life.app`.  
 Build simulator: `bash tools/build_sim.sh` → `artifacts/sim/<os>/athena_sim` (GUI) and `athena_sim_cli`.  
-Preview an app headless: `bash tools/sim_app_preview.sh fish 5000 20000` → PNGs in `build/sim-preview/`.
+Preview an app headless: `bash tools/sim_app_preview.sh fish 5000 20000` → PNGs in `build/sim-preview/`.  
+Re-record the docs: `bash tools/record_readme_gifs.sh` (app GIFs), `bash tools/sim_screenshot.sh` (`docs/sim.png`).

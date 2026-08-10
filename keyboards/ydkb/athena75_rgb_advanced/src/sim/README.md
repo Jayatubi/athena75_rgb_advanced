@@ -44,6 +44,11 @@ your real keyboard — either way it closes a matrix intersection and the firmwa
 finds it by walking the GP6/GP7 shift chain, exactly as on hardware. Keycaps are
 tinted with the live WS2812 colour under them.
 
+![The athena_sim window, showing the launcher on the panel](../../docs/sim.png)
+
+That picture is itself emulator output: `tools/sim_screenshot.sh` boots a machine,
+drives the launcher, and has the window write itself out with `--shot`.
+
     artifacts/sim/macos/athena_sim --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 \
                          --flash flash.bin
 

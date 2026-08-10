@@ -2,7 +2,7 @@
 
 **YDKB / KBDFans Athena75 RGB 的第三方固件。**
 
-这块键盘上有一片 128×128 的彩色 LCD。原厂固件用它循环播放几段内置 GIF——屏幕上会出现什么，出厂时就定死了。
+这块键盘上有一片 128×128 的彩色 LCD。原厂固件把它当作一个 GIF 播放器：几个固定的槽位，每个槽放一段由 GIF 转换来的动画，循环播放——内容可以自己换，但它能做的事就只有播放。
 
 这个固件把那片屏做成一个**能装、能跑自制软件的小系统**：写一个 C 程序，打包成 `.app`，通过 USB 装进键盘自己的 flash 槽里，然后在键盘的启动器里选中运行。屏幕上跑的是真正的程序——它读按键、存自己的配置、画自己的界面，而不是一段预先录好的动画。
 
@@ -97,9 +97,11 @@ OS 模式闲置约 30 秒会自动退回键盘模式，避免忘了切换而打�
 
 一台**全系统 RP2040 仿真器**，跑的是原封不动的固件 UF2 和 `.app`：固件里没有任何 `#ifdef SIMULATOR`，也不需要为仿真单独编译。UF2 被写进一个 16 MiB 的 flash 镜像，然后从 reset 向量开始被解释执行——经过真的 boot2、真的 ChibiOS 调度器、真的 USB 枚举，最后落到建模的 GC9107 屏和 WS2812 灯带上。
 
+![athena_sim 窗口：左边是 128×128 面板上的启动器，下面是虚拟键盘，右边是机器状态](keyboards/ydkb/athena75_rgb_advanced/docs/sim.png)
+
 - **两个前端**：`athena_sim` 是一个 SDL2 窗口（左边面板，下面虚拟键盘，右边状态与日志，键帽还会按当前灯色染色）；`athena_sim_cli` 是同一台机器去掉窗口，给脚本和 CI 用。
 - **能接东西**：仿真出来的 Raw HID 可以发布到 TCP 端口，所以 `host_tool` 的每条命令都能原样对着它跑；另有控制 socket（按键、截图、整机存档）和 gdb 桩（两个核就是两个线程）。
-- **可回归**：调度是确定性的，配套的像素级回归测试逐字节比对面板输出。本 readme 里的 GIF 就是它录的。
+- **可回归**：调度是确定性的，配套的像素级回归测试逐字节比对面板输出。本 readme 里的 GIF 和上面这张截图都是它自己产出的。
 
 用法见 [`src/sim/README.md`](keyboards/ydkb/athena75_rgb_advanced/src/sim/README.md)，内部实现（机器模型与三档 JIT）见 [`docs/simulator.md`](keyboards/ydkb/athena75_rgb_advanced/docs/simulator.md)。
 
