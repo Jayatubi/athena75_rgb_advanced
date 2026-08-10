@@ -6,10 +6,14 @@ build/
 src/sim/third_party/
 
 # The root .gitignore drops every *.png; the regression goldens have to be
-# tracked or tools/sim_regress.py has nothing to compare against, and the same
-# goes for the one piece of artwork both packaged builds take their icon from.
+# tracked or tools/sim_regress.py has nothing to compare against, the same goes
+# for the one piece of artwork both packaged builds take their icon from, and
+# the two pictures the root readme points at have to survive a fresh clone as
+# well. Named one by one, so that scratch renders dropped in docs/ stay ignored.
 !tests/golden/*.png
 !src/sim/gui/appicon.png
+!docs/sim.png
+!docs/sim_icon.png
 
 # And it drops every *.uf2. Both packaged builds carry the firmware they boot in
 # a Resources/ directory -- Contents/Resources inside the .app, beside the .exe in

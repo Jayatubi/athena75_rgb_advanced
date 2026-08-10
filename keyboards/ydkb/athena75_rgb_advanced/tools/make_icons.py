@@ -5,14 +5,17 @@
 
     AppIcon.icns   the macOS bundle icon
     appicon.ico    the resource linked into athena_sim.exe
+    *.png          a plain reduction, for the readme to show
 
-One source image for both, so the two platforms cannot end up wearing different
-faces. The .icns is assembled here rather than by iconutil, and the .ico without
-any Windows tool, because either build may be produced on either machine -- the
-Windows .exe is normally linked from WSL, and nothing there has iconutil.
+One source image for all of them, so the two platforms cannot end up wearing
+different faces and the readme cannot show a third. The .icns is assembled here
+rather than by iconutil, and the .ico without any Windows tool, because either
+build may be produced on either machine -- the Windows .exe is normally linked
+from WSL, and nothing there has iconutil.
 
     python3 tools/make_icons.py --icns out/AppIcon.icns
     python3 tools/make_icons.py --ico  out/appicon.ico
+    python3 tools/make_icons.py --png  docs/sim_icon.png --png-size 256
 
 Needs Pillow: python3 -m pip install pillow
 """
@@ -94,15 +97,21 @@ def main():
                     help="the source artwork (default: src/sim/gui/appicon.png)")
     ap.add_argument("--icns", type=pathlib.Path, help="write the macOS icon here")
     ap.add_argument("--ico", type=pathlib.Path, help="write the Windows icon here")
+    ap.add_argument("--png", type=pathlib.Path, help="write a plain square PNG here")
+    ap.add_argument("--png-size", type=int, default=256, metavar="PX",
+                    help="pixel size for --png (default: 256)")
     args = ap.parse_args()
 
-    if not args.icns and not args.ico:
-        ap.error("nothing to do: pass --icns, --ico or both")
+    if not args.icns and not args.ico and not args.png:
+        ap.error("nothing to do: pass --icns, --ico, --png or several")
     if not args.src.is_file():
         sys.exit(f"error: no source artwork at {args.src}")
 
     img = load_source(args.src)
-    for dest, write in ((args.icns, write_icns), (args.ico, write_ico)):
+    work = ((args.icns, write_icns),
+            (args.ico, write_ico),
+            (args.png, lambda i, d: d.write_bytes(scaled_png(i, args.png_size))))
+    for dest, write in work:
         if not dest:
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
