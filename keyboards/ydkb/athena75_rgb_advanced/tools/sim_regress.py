@@ -158,8 +158,10 @@ def run_case(sim, case, outdir, bless, keep_log, extra=()):
 
 def default_sim():
     """Where tools/build_sim.sh leaves the headless runner, else whatever is on PATH."""
-    osname = {"Darwin": "macos", "Windows": "windows"}.get(platform.system(), "linux")
-    exe = "athena_sim_cli.exe" if osname == "windows" else "athena_sim_cli"
+    # Two builds are archived, and everything that is not a Mac -- Windows itself,
+    # and WSL, where the .exe runs too -- is served by the MSVC one.
+    osname = "macos" if platform.system() == "Darwin" else "windows"
+    exe = "athena_sim_cli" if osname == "macos" else "athena_sim_cli.exe"
     built = os.path.join(KB, "artifacts", "sim", osname, exe)
     return built if os.path.exists(built) else exe
 

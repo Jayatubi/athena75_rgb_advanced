@@ -4,19 +4,25 @@
 #include "os.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
 #    include <windows.h>
+#    define SEP "\\"
 #else
+#    include <dirent.h>
 #    include <errno.h>
 #    include <fcntl.h>
 #    include <signal.h>
 #    include <sys/mman.h>
+#    include <sys/stat.h>
 #    include <time.h>
 #    include <unistd.h>
+#    define SEP "/"
 #    if defined(__APPLE__)
 #        include <libkern/OSCacheControl.h>
+#        include <mach-o/dyld.h>
 #        include <pthread.h>
 #    endif
 #endif
@@ -131,6 +137,151 @@ void os_sleep_us(uint64_t us) {
     struct timespec ts = {.tv_sec = (time_t)(us / 1000000ull),
                           .tv_nsec = (long)((us % 1000000ull) * 1000ull)};
     nanosleep(&ts, NULL);
+#endif
+}
+
+// ---- where a packaged build finds its own files -----------------------------
+
+// Truncates rather than overflows, and says which happened, so every caller below
+// can build a path in one place and check once.
+static bool path_join(char *buf, size_t n, const char *a, const char *b) {
+    int w = snprintf(buf, n, "%s%s%s", a, SEP, b);
+    return w > 0 && (size_t)w < n;
+}
+
+static void strip_last_component(char *p) {
+    char *slash = NULL;
+    for (char *c = p; *c; c++) {
+        if (*c == '/' || *c == '\\') slash = c;
+    }
+    // A path with no separator at all leaves the caller with "", which fails the
+    // exists() check ahead of it rather than silently meaning the root.
+    if (slash) *slash = '\0';
+    else p[0] = '\0';
+}
+
+bool os_exe_dir(char *buf, size_t n) {
+    if (!buf || n < 2) return false;
+    buf[0] = '\0';
+#ifdef _WIN32
+    DWORD got = GetModuleFileNameA(NULL, buf, (DWORD)n);
+    if (!got || got >= n) return false;
+#elif defined(__APPLE__)
+    char     raw[1024];
+    uint32_t sz = sizeof raw;
+    if (_NSGetExecutablePath(raw, &sz) != 0) return false;
+    // _NSGetExecutablePath hands back argv[0] as the loader saw it, which may be a
+    // symlink or hold ".." -- resolve it, or Resources/ would be looked for beside
+    // the link instead of beside the binary.
+    char real[1024];
+    const char *src = realpath(raw, real) ? real : raw;
+    if (snprintf(buf, n, "%s", src) < 0 || strlen(src) >= n) return false;
+#else
+    ssize_t got = readlink("/proc/self/exe", buf, n - 1);
+    if (got <= 0) return false;
+    buf[got] = '\0';
+#endif
+    strip_last_component(buf);
+    return buf[0] != '\0';
+}
+
+static bool mkdir_one(const char *path) {
+#ifdef _WIN32
+    return CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+#else
+    return mkdir(path, 0755) == 0 || errno == EEXIST;
+#endif
+}
+
+// Every component, not just the last one: "Library/Application Support" is two
+// deep, and $XDG_DATA_HOME may name somewhere that does not exist at all.
+static bool mkdir_p(char *path) {
+    for (char *c = path + 1; *c; c++) {
+        if (*c != '/' && *c != '\\') continue;
+        char save = *c;
+        *c = '\0';
+        // Failures partway up are ignored on purpose: a drive letter and a root
+        // are not things to create, and anything that really went wrong surfaces
+        // in the final call below.
+        mkdir_one(path);
+        *c = save;
+    }
+    return mkdir_one(path);
+}
+
+bool os_state_dir(const char *app, char *buf, size_t n) {
+    if (!app || !buf || n < 2) return false;
+    const char *base;
+    char        parent[1024];
+#ifdef _WIN32
+    base = getenv("LOCALAPPDATA");
+    if (!base || !*base) return false;
+    if (snprintf(parent, sizeof parent, "%s", base) < 0) return false;
+#elif defined(__APPLE__)
+    base = getenv("HOME");
+    if (!base || !*base) return false;
+    if (!path_join(parent, sizeof parent, base, "Library/Application Support")) return false;
+#else
+    base = getenv("XDG_DATA_HOME");
+    if (base && *base) {
+        if (snprintf(parent, sizeof parent, "%s", base) < 0) return false;
+    } else {
+        base = getenv("HOME");
+        if (!base || !*base) return false;
+        if (!path_join(parent, sizeof parent, base, ".local/share")) return false;
+    }
+#endif
+    if (!path_join(buf, n, parent, app)) return false;
+    return mkdir_p(buf);
+}
+
+unsigned os_dir_list(const char *dir, const char *suffix, char (*names)[64], unsigned max) {
+    if (!dir || !suffix || !names || !max) return 0;
+    const size_t suf_len = strlen(suffix);
+    unsigned     n       = 0;
+#ifdef _WIN32
+    char pat[1024];
+    if (!path_join(pat, sizeof pat, dir, "*")) return 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE           h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const char  *nm  = fd.cFileName;
+        const size_t len = strlen(nm);
+        // Filtered here rather than through a "*.app" pattern: Win32 wildcards
+        // still carry their 8.3 rules and match more than the extension asked for.
+        if (len < suf_len || len >= sizeof names[0]) continue;
+        if (strcmp(nm + len - suf_len, suffix) != 0) continue;
+        snprintf(names[n++], sizeof names[0], "%s", nm);
+    } while (n < max && FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    const struct dirent *e;
+    while (n < max && (e = readdir(d)) != NULL) {
+        const char  *nm  = e->d_name;
+        const size_t len = strlen(nm);
+        if (nm[0] == '.') continue;
+        if (len < suf_len || len >= sizeof names[0]) continue;
+        if (strcmp(nm + len - suf_len, suffix) != 0) continue;
+        snprintf(names[n++], sizeof names[0], "%s", nm);
+    }
+    closedir(d);
+#endif
+    return n;
+}
+
+void os_attach_console(void) {
+#ifdef _WIN32
+    // Only ever borrows a console that already exists. AllocConsole() would give a
+    // double-clicked copy the black window the GUI subsystem exists to avoid.
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    FILE *f;
+    freopen_s(&f, "CONOUT$", "w", stdout);
+    freopen_s(&f, "CONOUT$", "w", stderr);
+    freopen_s(&f, "CONIN$", "r", stdin);
 #endif
 }
 

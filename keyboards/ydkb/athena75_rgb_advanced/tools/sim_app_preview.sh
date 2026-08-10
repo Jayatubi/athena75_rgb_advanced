@@ -33,8 +33,10 @@ FW="${KBD_DIR}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
 APP_PKG="${KBD_DIR}/artifacts/apps/${APP}.app"
 OUT="${REPO_ROOT}/build/sim-preview/${APP}"
 
+# The .exe leads: it is the build that exists under WSL, and it runs there.
+CANDS=(windows/athena_sim_cli.exe macos/athena_sim_cli)
 SIM=""
-for cand in windows/athena_sim_cli.exe linux/athena_sim_cli macos/athena_sim_cli; do
+for cand in "${CANDS[@]}"; do
     if [[ -x "${KBD_DIR}/artifacts/sim/${cand}" ]]; then
         SIM="${KBD_DIR}/artifacts/sim/${cand}"
         break
@@ -42,7 +44,7 @@ for cand in windows/athena_sim_cli.exe linux/athena_sim_cli macos/athena_sim_cli
 done
 # Name one anyway when there is none, so the check below reports a missing file
 # instead of an empty path.
-[[ -n "${SIM}" ]] || SIM="${KBD_DIR}/artifacts/sim/linux/athena_sim_cli"
+[[ -n "${SIM}" ]] || SIM="${KBD_DIR}/artifacts/sim/${CANDS[0]}"
 for f in "${SIM}" "${FW}" "${APP_PKG}"; do
     if [[ ! -f "${f}" ]]; then
         echo "error: missing ${f}" >&2

@@ -5,7 +5,7 @@
     <key>CFBundleName</key>               <string>Athena75 Simulator</string>
     <key>CFBundleDisplayName</key>        <string>Athena75 Simulator</string>
     <key>CFBundleIdentifier</key>         <string>com.jayatubi.athena75.simulator</string>
-    <key>CFBundleExecutable</key>         <string>launch</string>
+    <key>CFBundleExecutable</key>         <string>Athena75 Simulator</string>
     <key>CFBundleIconFile</key>           <string>AppIcon</string>
     <key>CFBundlePackageType</key>        <string>APPL</string>
     <key>CFBundleVersion</key>            <string>1.0</string>

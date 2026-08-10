@@ -12,29 +12,29 @@ modelled GC9107 panel and WS2812 chain.
 This file is how to use it. How it is built inside — the machine model, the
 scheduler, and the three ways it runs guest code — is `docs/simulator.md`.
 
-Objects stay in `build/sim/`; only the executables are archived. They are not
-committed — see `artifacts/sim/readme.txt`. Paths below say `macos`; substitute
-your own.
+Objects stay in `build/sim/`; the executables are archived and committed — see
+`artifacts/sim/readme.txt`. Paths below say `macos`; substitute your own.
 
-macOS, Linux and Windows all build from the same sources; `core/os.h` is where
-the sockets and the monotonic clock stop being POSIX. On Windows the build is
-MSVC, driven from WSL:
+macOS and Windows are the two builds there are, from the same sources;
+`core/os.h` is where the sockets, the monotonic clock and the "where am I
+installed" questions stop being POSIX. On Windows the build is MSVC, driven from
+WSL, and that is also what to build from WSL — there is no Linux target:
 
     bash tools/build_sim.sh --windows          # -> artifacts/sim/windows/*.exe
     bash tools/build_sim.sh --windows --no-sdl # headless only, no SDL2
     bash tools/run_sim.sh   --windows          # the native window, from WSL
 
-Every platform builds its own static SDL2 rather than link whatever the machine
+Both platforms build their own static SDL2 rather than link whatever the machine
 has installed: the sources are fetched and compiled once into `build/sdl2/`,
 which is a cache that outlives `--clean`. Delete it to force a rebuild, or point
 `ATHENA_SDL2_DIR` at an SDL2 install of your own to skip the whole step. On
 Windows the MSVC runtime is static too (`ATHENA_SIM_STATIC_VCRT`, paired with
 SDL's `SDL_FORCE_STATIC_VCRT`), so `athena_sim.exe` is one self-contained file.
 
-On Linux a static SDL2 still reaches the display through the system's X11 or
-Wayland libraries. Without their development headers SDL would fall back to a
-dummy video driver, so the script builds `athena_sim_cli` only and says so;
-`apt install libx11-dev libxext-dev` is enough to get the window back.
+`--app` additionally wraps the window build in the shape its desktop expects — a
+`.app` on macOS, a program folder on Windows — each carrying the firmware and
+layout it needs so it can be double-clicked with no command line at all. See
+`artifacts/sim/readme.txt` for what goes in one and where its flash ends up.
 
 ## The two front ends
 

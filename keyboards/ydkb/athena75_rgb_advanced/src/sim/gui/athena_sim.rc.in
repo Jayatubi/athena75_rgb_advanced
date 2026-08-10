@@ -1,0 +1,13 @@
+// Copyright 2026 jayatubi
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Explorer, the taskbar and Alt-Tab all show the first icon in the executable,
+// and SDL2 goes looking for that same one when it registers the window class --
+// so this single resource is every icon the Windows build needs.
+//
+// The path is substituted by CMake because the .ico is a build product:
+// tools/make_icons.py renders it from gui/appicon.png, the one image the macOS
+// .icns comes from as well. Forward slashes are what CMake hands over and what
+// the resource compiler expects.
+
+1 ICON "@ATHENA_SIM_ICON@"

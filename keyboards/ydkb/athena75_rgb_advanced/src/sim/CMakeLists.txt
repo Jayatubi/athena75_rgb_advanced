@@ -12,6 +12,17 @@
 cmake_minimum_required(VERSION 3.16)
 project(athena_sim LANGUAGES C)
 
+# The window build embeds an icon, which means a .rc, which means a second
+# language. Nothing outside Windows compiles one.
+if(WIN32)
+  enable_language(RC)
+endif()
+
+# tools/build_sim.sh renders this from gui/appicon.png before configuring. Left
+# empty -- a bare `cmake` invocation, or a machine with no Pillow -- the build
+# still succeeds and the .exe keeps the default icon.
+set(ATHENA_SIM_ICON "" CACHE FILEPATH "Windows .ico to embed in athena_sim.exe")
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
@@ -187,6 +198,22 @@ if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/main_gui.c)
   if(NOT WIN32)
     target_link_libraries(athena_sim PRIVATE m)
   endif()
+
+  # A packaged Windows build is double-clicked, so it must not bring a console
+  # window up with it; SDL2main supplies the WinMain that the GUI subsystem then
+  # needs. Started from a shell instead, os_attach_console() takes that console
+  # back, so this costs the command line nothing.
+  if(WIN32)
+    set_target_properties(athena_sim PROPERTIES WIN32_EXECUTABLE ON)
+    if(ATHENA_SIM_ICON AND EXISTS "${ATHENA_SIM_ICON}")
+      configure_file(${SIM_ROOT}/gui/athena_sim.rc.in
+                     ${CMAKE_CURRENT_BINARY_DIR}/athena_sim.rc @ONLY)
+      target_sources(athena_sim PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/athena_sim.rc)
+    else()
+      message(STATUS "athena_sim: no ATHENA_SIM_ICON, the .exe keeps the default icon")
+    endif()
+  endif()
+
   message(STATUS "athena_sim: SDL2 found (${SIM_SDL_KIND}), GUI target enabled")
 else()
   message(WARNING "athena_sim: SDL2 not found, only athena_sim_cli will be built")

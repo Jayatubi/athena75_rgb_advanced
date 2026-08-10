@@ -16,7 +16,12 @@
 #   tools/build_sim.sh --test       build, then run the pixel regression
 #   tools/build_sim.sh --windows    MSVC build driven from WSL -> .exe
 #   tools/build_sim.sh --no-sdl     headless runner only, no SDL2 at all
-#   tools/build_sim.sh --app        also wrap the macOS build in a .app bundle
+#   tools/build_sim.sh --app        also package it as something double-clickable:
+#                                   a .app on macOS, a program folder on Windows
+#
+# macOS and Windows are the two platforms that get archived, and --app gives each
+# the shape its desktop expects, both wearing the icon rendered from the same
+# src/sim/gui/appicon.png. There is no Linux build; from WSL, use --windows.
 #
 # build/sdl2/ is a cache that outlives --clean; delete it to force SDL2 to be
 # fetched and rebuilt. ATHENA_SDL2_DIR points at an SDL2 install of your own
@@ -53,6 +58,13 @@ done
 # cmake.exe needs Windows paths and the two toolchains cannot share a build
 # directory.
 [ "$windows" = 1 ] && SIM_OS=windows
+# Which is also why landing here on Linux almost always means WSL without the
+# flag, rather than anyone actually wanting an ELF: nothing archives one.
+if [ "$SIM_OS" = linux ]; then
+    echo "there is no Linux build of athena_sim -- macOS and Windows are the two" >&2
+    echo "that get archived. From WSL, build the Windows one: --windows" >&2
+    exit 2
+fi
 OUT="$KB/artifacts/sim/$SIM_OS"
 APP_NAME="Athena75 Simulator"
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
@@ -119,20 +131,34 @@ if [ "$no_sdl" = 0 ] && [ -n "${ATHENA_SDL2_DIR:-}" ]; then
     }
 fi
 if [ "$no_sdl" = 0 ] && [ -z "$SDL_DIR" ]; then
-    # A static SDL2 still reaches the display through the system's X11 or
-    # Wayland libraries, and its build quietly falls back to a dummy video
-    # driver when their headers are missing. A window that cannot open is worse
-    # than no window at all, so stop at the headless runner instead.
-    if [ "$SIM_OS" = linux ] && [ ! -e /usr/include/X11/Xlib.h ] \
-       && [ ! -e /usr/include/wayland-client.h ]; then
-        echo "no X11 or Wayland headers here, so SDL2 would have no video driver:"
-        echo "building the headless runner only (apt install libx11-dev libxext-dev"
-        echo "to get the window build)"
-        no_sdl=1
-    else
-        build_sdl2
-        SDL_DIR="$(sdl_config_dir "$SDL_PREFIX")"
+    build_sdl2
+    SDL_DIR="$(sdl_config_dir "$SDL_PREFIX")"
+fi
+
+# ---- the icon ---------------------------------------------------------------
+#
+# One piece of artwork behind both platforms. The Windows icon has to be rendered
+# before the compile, being linked into the .exe as a resource; the macOS one is
+# only wanted when the bundle is assembled, so it waits until then.
+#
+# Pillow is in requirements.txt, but a checkout that has not installed it should
+# still get a working binary -- one with the stock icon, and a line saying why.
+ICON_SRC="$SRC/gui/appicon.png"
+ICON_DIR="$KB/build/icons"
+
+make_icon() { # <--icns|--ico> <path>
+    mkdir -p "$ICON_DIR"
+    if python3 "$KB/tools/make_icons.py" --src "$ICON_SRC" "$1" "$2" >/dev/null 2>&1; then
+        return 0
     fi
+    echo "could not render $(basename "$2") (needs Pillow: pip install pillow);" >&2
+    echo "carrying on with the stock icon" >&2
+    return 1
+}
+
+ICO=""
+if [ "$SIM_OS" = windows ] && [ "$no_sdl" = 0 ]; then
+    make_icon --ico "$ICON_DIR/appicon.ico" && ICO="$ICON_DIR/appicon.ico"
 fi
 
 # ---- the simulator ----------------------------------------------------------
@@ -143,6 +169,7 @@ if [ "$windows" = 1 ]; then
 
     cfg=()
     [ -n "$SDL_DIR" ] && cfg+=(-DSDL2_DIR="$(winpath "$SDL_DIR")")
+    [ -n "$ICO" ] && cfg+=(-DATHENA_SIM_ICON="$(winpath "$ICO")")
     cmake.exe -S "$(winpath "$SRC")" -B "$BUILD_WIN" ${cfg[@]+"${cfg[@]}"}
     cmake.exe --build "$BUILD_WIN" --config Release
 
@@ -163,51 +190,47 @@ else
     cmake --build "$BUILD" -j"$JOBS"
 fi
 
-# ---- the macOS bundle -------------------------------------------------------
+# ---- packaging --------------------------------------------------------------
+#
+# Double-clicked, athena_sim is handed no arguments at all and still needs a
+# firmware image, a layout and a flash. It finds the first two for itself, in a
+# Resources/ directory beside the binary (src/sim/gui/main_gui.c), which is why
+# the two platforms below differ only in the wrapping and neither needs a launcher
+# script in front of the executable. The flash cannot live there -- a .app is
+# read-only and Program Files worse -- so it goes to the per-user state directory
+# on first run, and the apps staged here go into it as it is created.
+#
+# APP_NAME is also the name athena_sim gives that state directory, so the two have
+# to agree; BUNDLE_NAME in main_gui.c is the other half.
 
-# Finder passes no arguments, and athena_sim needs a firmware image, a layout and
-# somewhere to keep its 16 MiB flash. So the bundle carries the first two, keeps
-# the third under Application Support, and puts a shell launcher in front of the
-# binary to join them up. The apps go into the flash the once, when it is created.
-package_app() {
-    local app="$OUT/$APP_NAME.app"
-    local res="$app/Contents/Resources"
-
-    if [ ! -f "$OUT/athena_sim" ]; then
-        echo "no windowed build to package (SDL2 was not available)" >&2
-        return 1
-    fi
-
-    rm -rf "$app"
-    mkdir -p "$app/Contents/MacOS" "$res/apps"
-    # Named for the app rather than the binary: this is the process macOS ends up
-    # running, and its name is what the Dock and the menu bar show.
-    cp "$OUT/athena_sim" "$app/Contents/MacOS/$APP_NAME"
+stage_resources() { # <resources dir>
+    local res="$1"
+    mkdir -p "$res/apps"
     cp "$KB/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2" "$res/firmware.uf2"
     cp "$KB/keymaps/vial/vial.json" "$res/vial.json"
     for a in "$KB"/artifacts/apps/*.app; do
         if [ -e "$a" ]; then cp "$a" "$res/apps/"; fi
     done
+}
 
-    # appicon.png is the artwork at the largest size an icon is ever asked for,
-    # so every entry below is a straight reduction of it.
-    local icons="$BUILD/AppIcon.iconset"
-    rm -rf "$icons"
-    mkdir -p "$icons"
-    for px in 16 32 64 128 256 512 1024; do
-        cp "$SRC/gui/appicon.png" "$icons/px_$px.png"
-        if [ "$px" -ne 1024 ]; then
-            sips -z "$px" "$px" "$icons/px_$px.png" >/dev/null
-        fi
-    done
-    # iconutil names a file for the points it covers, not the pixels it holds, so
-    # every size appears twice: once at 1x and once as the @2x of the size below.
-    for spec in 16x16:16 16x16@2x:32 32x32:32 32x32@2x:64 128x128:128 \
-                128x128@2x:256 256x256:256 256x256@2x:512 512x512:512 512x512@2x:1024; do
-        cp "$icons/px_${spec#*:}.png" "$icons/icon_${spec%:*}.png"
-    done
-    rm -f "$icons"/px_*.png
-    iconutil -c icns "$icons" -o "$res/AppIcon.icns"
+have_window_build() { # <executable>
+    [ -f "$1" ] && return 0
+    echo "no windowed build to package (SDL2 was not available)" >&2
+    return 1
+}
+
+package_macos() {
+    local app="$OUT/$APP_NAME.app"
+    local res="$app/Contents/Resources"
+    have_window_build "$OUT/athena_sim" || return 1
+
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS"
+    # Named for the app rather than the binary: this is the process macOS ends up
+    # running, and its name is what the Dock and the menu bar show.
+    cp "$OUT/athena_sim" "$app/Contents/MacOS/$APP_NAME"
+    stage_resources "$res"
+    make_icon --icns "$res/AppIcon.icns" || true
 
     cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -217,7 +240,7 @@ package_app() {
     <key>CFBundleName</key>               <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>        <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>         <string>com.jayatubi.athena75.simulator</string>
-    <key>CFBundleExecutable</key>         <string>launch</string>
+    <key>CFBundleExecutable</key>         <string>$APP_NAME</string>
     <key>CFBundleIconFile</key>           <string>AppIcon</string>
     <key>CFBundlePackageType</key>        <string>APPL</string>
     <key>CFBundleVersion</key>            <string>1.0</string>
@@ -228,37 +251,29 @@ package_app() {
 </plist>
 PLIST
 
-    cat > "$app/Contents/MacOS/launch" <<'LAUNCH'
-#!/bin/bash
-# What Finder runs. athena_sim takes no defaults for the firmware or the flash,
-# and there is nowhere sensible for them to default to from inside a bundle.
-set -euo pipefail
-contents="$(cd "$(dirname "$0")/.." && pwd)"
-res="$contents/Resources"
-app="$(basename "$(dirname "$contents")" .app)"
-state="$HOME/Library/Application Support/Athena75 Simulator"
-mkdir -p "$state"
-
-# The HID bridge sits on the first port host_tool probes, so the installed app is
-# reachable the same way a repo build is. The scripting socket stays clear of that
-# 47801-47804 range, or `host_tool devices` reports it as a second emulator.
-args=(--uf2 "$res/firmware.uf2" --flash "$state/flash.bin" --vial-json "$res/vial.json"
-      --hid-port 47801 --ctl-port 47811)
-# Only into a flash image that does not exist yet: after that the apps are in it,
-# and installing them again would just fill more slots with the same thing.
-if [ ! -f "$state/flash.bin" ]; then
-    for a in "$res"/apps/*.app; do
-        if [ -e "$a" ]; then args+=(--install-app "$a"); fi
-    done
-fi
-exec "$contents/MacOS/$app" "${args[@]}" "$@"
-LAUNCH
-    chmod +x "$app/Contents/MacOS/launch"
-
     # Ad-hoc, because an arm64 binary has to be signed to run at all and a bundle
     # assembled by copying is not. Nothing here is distributed, so this is enough.
     codesign --force --sign - "$app" >/dev/null 2>&1 || true
     echo "  $app"
+}
+
+# Windows has no bundle format, so the equivalent is a folder that can be moved
+# around whole: the executable, and Resources/ beside it. The icon is already
+# inside the .exe, linked in as a resource at compile time. The plain
+# athena_sim.exe stays where it was, since the scripts and host_tool look for it
+# by that name.
+package_windows() {
+    local app="$OUT/$APP_NAME"
+    have_window_build "$OUT/athena_sim.exe" || return 1
+
+    rm -rf "$app"
+    mkdir -p "$app"
+    cp "$OUT/athena_sim.exe" "$app/$APP_NAME.exe"
+    # Only there when ATHENA_SDL2_DIR pointed at a shared SDL2; the source build
+    # is static and the folder is self-contained without it.
+    [ -f "$OUT/SDL2.dll" ] && cp "$OUT/SDL2.dll" "$app/"
+    stage_resources "$app/Resources"
+    echo "  $app/"
 }
 
 echo
@@ -266,7 +281,12 @@ echo "built:"
 for t in athena_sim_cli athena_sim athena_sim_cli.exe athena_sim.exe; do
     [ -f "$OUT/$t" ] && echo "  $OUT/$t"
 done
-if [ "$app_bundle" = 1 ]; then package_app; fi
+if [ "$app_bundle" = 1 ]; then
+    case "$SIM_OS" in
+        macos)   package_macos ;;
+        windows) package_windows ;;
+    esac
+fi
 
 if [ "$test" = 1 ]; then
     echo

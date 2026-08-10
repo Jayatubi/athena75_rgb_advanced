@@ -6,11 +6,15 @@
 	<dict>
 		<key>Resources/AppIcon.icns</key>
 		<data>
-		oJ1+YXXEmqsdl9fdstJ19+yfBEo=
+		Mbd1RIdLtsyv35hSWUh5IEoajLA=
+		</data>
+		<key>Resources/apps/brick.app</key>
+		<data>
+		07n6Iz7dfNeEdgFz/w6MBmNuG0s=
 		</data>
 		<key>Resources/apps/fish.app</key>
 		<data>
-		TWKq5+sYmyA4cevAYSiNzjuYeSg=
+		TOTwuExnVt6Z4r02/PFVnjZulQY=
 		</data>
 		<key>Resources/apps/life.app</key>
 		<data>
@@ -28,9 +32,13 @@
 		<data>
 		KI1KY4XDjNfrUQx/guLmxzd6cj4=
 		</data>
+		<key>Resources/apps/wfc.app</key>
+		<data>
+		rOIASPfhsobtRaSYLUBTku2VfxI=
+		</data>
 		<key>Resources/firmware.uf2</key>
 		<data>
-		1O6ZUwNi3pnnPRmeDiwwUoiuT6k=
+		Jw92jyL3XaKBb60xHJaCl2wXX50=
 		</data>
 		<key>Resources/vial.json</key>
 		<data>
@@ -39,27 +47,25 @@
 	</dict>
 	<key>files2</key>
 	<dict>
-		<key>MacOS/Athena75 Simulator</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			EQ7GWK3QedjuSxsLbx/MPk0EElw=
-			</data>
-			<key>requirement</key>
-			<string>cdhash H"110ec658add079d8ee4b1b0b6f1fcc3e4d04125c"</string>
-		</dict>
 		<key>Resources/AppIcon.icns</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			z5eMgr/0/ozZh/4FxZ1yhdDAhFJ0pOhu33it/fIawWc=
+			7SlW5LF+g7ozQwZ8fcrlOPVYPwxbVYPohCN2OLXRfl4=
+			</data>
+		</dict>
+		<key>Resources/apps/brick.app</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Nu/HH133cgZsJB0WFwX+U6UfX0OIhIF5I0rlDHD51io=
 			</data>
 		</dict>
 		<key>Resources/apps/fish.app</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			pZ+RADdPNK0o2DiQfzyIa0Jcfau4Bu7KV8PBzB2Xffo=
+			WY8+2nzacLJ96+snrqLEP6JA1tlZk4z9OZLztrDe3gQ=
 			</data>
 		</dict>
 		<key>Resources/apps/life.app</key>
@@ -90,11 +96,18 @@
 			ChTbTXK3mvDqQiH2GlVGt4ML2FL68IpjzaFG6qVaa8g=
 			</data>
 		</dict>
+		<key>Resources/apps/wfc.app</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			DDcSb3/TNBGmq77BaoF80AK/h3nBso3rFqSNY9uQ8K4=
+			</data>
+		</dict>
 		<key>Resources/firmware.uf2</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			ZUZ4CGpXw1ZD6YLmwx47GeIx3DMc9RSGsjUtXNegCos=
+			9LOxu55NNX84zauQEV/ibOqgK7miT1k+OIawzEN+z7c=
 			</data>
 		</dict>
 		<key>Resources/vial.json</key>

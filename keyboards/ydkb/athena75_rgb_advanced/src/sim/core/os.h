@@ -47,6 +47,33 @@ const char *sock_lasterror(void);
 uint64_t os_now_us(void);
 void     os_sleep_us(uint64_t us);
 
+// ---- where a packaged build finds its own files -----------------------------
+//
+// Started from the Dock or from Explorer, athena_sim gets no arguments at all and
+// still has to come up with a firmware image, a layout and somewhere to keep its
+// flash. These are what it uses to find them; a build run from a shell never calls
+// them. Paths come back absolute and without a trailing separator.
+
+// The directory holding the running executable. False when the platform will not
+// say, which leaves the caller with nothing but its arguments.
+bool os_exe_dir(char *buf, size_t n);
+
+// A per-user writable directory for `app`, created if it does not exist:
+//   macOS    ~/Library/Application Support/<app>
+//   Windows  %LOCALAPPDATA%\<app>
+//   else     $XDG_DATA_HOME/<app>, or ~/.local/share/<app>
+bool os_state_dir(const char *app, char *buf, size_t n);
+
+// The names -- not the paths -- of the entries of `dir` ending in `suffix`, in the
+// order the filesystem gives them. Returns how many were written, at most `max`.
+unsigned os_dir_list(const char *dir, const char *suffix, char (*names)[64], unsigned max);
+
+// Windows only, and nothing at all elsewhere. A GUI-subsystem process starts with
+// no stdio, so the window build would print nothing when run from a terminal.
+// This hands stdout and stderr back to the console that launched it; launched
+// from the shell there is one, double-clicked there is not.
+void os_attach_console(void);
+
 // ---- executable memory ------------------------------------------------------
 //
 // For the native block backends in jit/. Emit into a region, then call

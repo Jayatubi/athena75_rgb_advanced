@@ -56,17 +56,30 @@ bash tools/build_sim.sh                     # -> artifacts/sim/<os>/athena_sim{,
 bash tools/build_sim.sh --test              # 顺便跑像素回归
 bash tools/build_sim.sh --windows           # 从 WSL 驱动 MSVC，产出 .exe
 bash tools/build_sim.sh --windows --no-sdl  # 只要 CLI
-bash tools/build_sim.sh --app               # macOS：再包一个 .app
+bash tools/build_sim.sh --app               # 再打包成桌面能双击的形态
 ```
 
-`--app` 产出 `artifacts/sim/macos/Athena75 Simulator.app`，可以直接拷进
-`/Applications`；这个包连同它带的固件一起提交在仓库里，所以固件或 app 变了之后要
-重跑一次 `--app` 才会跟上。Finder 不传参数，而 `athena_sim` 的固件、布局、flash 三样都没有
-默认值，所以固件与布局装进 `Contents/Resources/`，`Contents/MacOS/launch` 这个壳
-把它们和 `~/Library/Application Support/Athena75 Simulator/flash.bin` 接起来；
-`artifacts/apps/*.app` 只在这个 flash 尚不存在、即第一次启动时装入。图标是
-`src/sim/gui/appicon.png`——真机旋钮的照片裁成方形，按 macOS 的圆角方形网格
-（1024 画布里 824 的方块、185 的圆角）连同 alpha 一起存成成品，打包时只是逐档缩小。
+归档的只有 macOS 与 Windows 两个平台，没有 Linux 版；在 WSL 里要构建的是 `--windows`。
+
+`--app` 把窗口版包成各自桌面认识的形状——macOS 是
+`artifacts/sim/macos/Athena75 Simulator.app`，Windows 是
+`artifacts/sim/windows/Athena75 Simulator/` 这个可以整个搬走的文件夹。两者都连同
+它们自带的固件一起提交在仓库里，所以固件或 app 变了之后要重跑一次 `--app` 才会跟上。
+
+双击时没有任何命令行参数，而 `athena_sim` 的固件、布局、flash 三样都没有默认值。
+所以固件与布局装进一个 `Resources/` 目录（`.app` 里是 `Contents/Resources`，
+Windows 上就在 `.exe` 旁边），由 `athena_sim` 自己循着可执行文件的位置去找
+（`core/os.c` 的 `os_exe_dir()`），两边因此都不需要在二进制前面再垫一层启动脚本。
+16 MiB 的 flash 不能放在可能只读的包里，改为首次运行时在用户自己的数据目录下创建
+（macOS 的 Application Support、Windows 的 `%LOCALAPPDATA%`），`Resources/apps/`
+里的 `.app` 也只在这个 flash 尚不存在、即第一次启动时装入。
+
+图标两边同源：`src/sim/gui/appicon.png`——真机旋钮的照片裁成方形，按 macOS 的圆角
+方形网格（1024 画布里 824 的方块、185 的圆角）连同 alpha 一起存成成品。
+`tools/make_icons.py` 从它渲染出 `.icns` 与 `.ico`，前者进 bundle，后者在编译期作为
+资源链进 `.exe`。容器都是这个脚本自己拼的，不经 `iconutil`，所以在 WSL 上也能给
+Windows 版出图标。Windows 版同时链成 GUI 子系统，双击不弹控制台；从终端启动时
+`os_attach_console()` 再把输出接回父控制台。
 
 `src/sim/CMakeLists.txt` 的要点：
 

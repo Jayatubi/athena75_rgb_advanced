@@ -42,16 +42,13 @@ ENTER_KEY=9,0       # launches the selected app
 GIF_MS=$((SETTLE_MS + 2000))
 STEP_MS=700
 
+# macOS and Windows are the two builds there are, so everything else -- which in
+# practice means WSL, where there is no Linux window to draw into anyway -- gets
+# the MSVC one, and it runs there.
 case "$(uname -s)" in
-    Darwin)               OS=macos; EXE= ;;
-    MINGW*|MSYS*|CYGWIN*) OS=windows; EXE=.exe ;;
-    *)                    OS=linux; EXE= ;;
+    Darwin) OS=macos;   EXE=     ;;
+    *)      OS=windows; EXE=.exe ;;
 esac
-# Under WSL there is no Linux window to draw into, but the MSVC build runs fine.
-if [[ "${OS}" == linux && ! -x "${KBD}/artifacts/sim/linux/athena_sim" \
-      && -f "${KBD}/artifacts/sim/windows/athena_sim.exe" ]]; then
-    OS=windows; EXE=.exe
-fi
 CLI="${KBD}/artifacts/sim/${OS}/athena_sim_cli${EXE}"
 GUI="${KBD}/artifacts/sim/${OS}/athena_sim${EXE}"
 for f in "${CLI}" "${GUI}" "${FW}"; do

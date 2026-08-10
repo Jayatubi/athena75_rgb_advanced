@@ -61,6 +61,14 @@ for a in "$@"; do
     esac
 done
 
+# Nothing is archived for Linux, and under WSL the MSVC build is what runs -- but
+# it has to be asked for, because only that path translates the file arguments.
+if [ "$windows" = 0 ] && [ "$SIM_OS" = linux ]; then
+    echo "there is no Linux build of athena_sim. From WSL, run the Windows one:" >&2
+    echo "  tools/run_sim.sh --windows $*" >&2
+    exit 2
+fi
+
 if [ "$windows" = 1 ]; then
     # The MSVC build launched from WSL: a native window, but the process cannot
     # read /mnt paths, so everything it opens has to be handed over as Windows.

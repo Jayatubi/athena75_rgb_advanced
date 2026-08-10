@@ -68,10 +68,10 @@ def repo_root() -> Path:
 
 
 def pick_sim(kbd: Path) -> Path:
-    # The ctl client below runs in this interpreter, so a Windows .exe listening
-    # on the Windows loopback is unreachable from WSL: prefer the native build.
-    for rel in ("sim/linux/athena_sim_cli", "sim/macos/athena_sim_cli",
-                "sim/windows/athena_sim_cli.exe"):
+    # macOS first because that is the case where this interpreter and the emulator
+    # share a loopback -- the ctl client below runs in this process. Driving the
+    # .exe from WSL means reaching the Windows loopback, which 127.0.0.1 is not.
+    for rel in ("sim/macos/athena_sim_cli", "sim/windows/athena_sim_cli.exe"):
         p = kbd / "artifacts" / rel
         if p.exists():
             return p
