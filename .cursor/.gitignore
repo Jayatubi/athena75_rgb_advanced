@@ -1,0 +1,4 @@
+# rules/ is personal working agreement -- it stays on the machine that wrote it.
+# skills/ is not: those describe how to build and flash this board, and everyone
+# working on it needs the same ones, so they stay tracked.
+rules/
