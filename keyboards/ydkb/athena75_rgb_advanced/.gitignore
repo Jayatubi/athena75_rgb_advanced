@@ -15,12 +15,7 @@ src/sim/third_party/
 !docs/sim.png
 !docs/sim_icon.png
 
-# And it drops every *.uf2. Both packaged builds carry the firmware they boot in
-# a Resources/ directory -- Contents/Resources inside the .app, beside the .exe in
-# the Windows folder -- and without this the committed copies have nothing to run.
-!artifacts/sim/**/Resources/firmware.uf2
-
-# Likewise it drops every CMakeLists.txt (an upstream QMK rule aimed at the ones
+# It also drops every CMakeLists.txt (an upstream QMK rule aimed at the ones
 # CLion generates). This one is the simulator's build definition -- without it a
 # fresh clone cannot build athena_sim at all.
 !src/sim/CMakeLists.txt

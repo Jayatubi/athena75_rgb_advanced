@@ -33,10 +33,10 @@ RGB、CapsLock 颜色、SLEEP 属于 QMK 自己的 EEPROM，走 eeconfig，不�
 
 ## 构建与安装
 
-以下命令在 `keyboards/ydkb/athena75_rgb_advanced/` 下执行：
+以下命令在仓库根目录下执行（`KB=keyboards/ydkb/athena75_rgb_advanced`）：
 
 ```bash
-bash src/app/tools/build_app.sh settings          # -> artifacts/apps/settings.app
+bash $KB/src/app/tools/build_app.sh settings          # -> artifacts/apps/settings.app
 host_tool app install artifacts/apps/settings.app
 ```
 

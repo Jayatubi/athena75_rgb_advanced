@@ -6,23 +6,27 @@ executed from reset by an ARMv6-M interpreter, through the real bootrom entry
 points, the real ChibiOS scheduler, the real USB enumeration, and out to a
 modelled GC9107 panel and WS2812 chain.
 
-    bash tools/build_sim.sh          # -> artifacts/sim/<os>/athena_sim{,_cli}
-    bash tools/build_sim.sh --test   # ... and run the pixel regression
+Commands run from the repo root, which is where `artifacts/` is, with
+`KB=keyboards/ydkb/athena75_rgb_advanced`:
+
+    bash $KB/tools/build_sim.sh          # -> artifacts/sim/<os>/athena_sim{,_cli}
+    bash $KB/tools/build_sim.sh --test   # ... and run the pixel regression
 
 This file is how to use it. How it is built inside — the machine model, the
 scheduler, and the three ways it runs guest code — is `docs/simulator.md`.
 
-Objects stay in `build/sim/`; the executables are archived and committed — see
-`artifacts/sim/readme.txt`. Paths below say `macos`; substitute your own.
+Objects stay in the keyboard's `build/sim/`; the executables are archived and
+committed — see `artifacts/sim/readme.txt`. Paths below say `macos`; substitute
+your own.
 
 macOS and Windows are the two builds there are, from the same sources;
 `core/os.h` is where the sockets, the monotonic clock and the "where am I
 installed" questions stop being POSIX. On Windows the build is MSVC, driven from
 WSL, and that is also what to build from WSL — there is no Linux target:
 
-    bash tools/build_sim.sh --windows          # -> artifacts/sim/windows/*.exe
-    bash tools/build_sim.sh --windows --no-sdl # headless only, no SDL2
-    bash tools/run_sim.sh   --windows          # the native window, from WSL
+    bash $KB/tools/build_sim.sh --windows          # -> artifacts/sim/windows/*.exe
+    bash $KB/tools/build_sim.sh --windows --no-sdl # headless only, no SDL2
+    bash $KB/tools/run_sim.sh   --windows          # the native window, from WSL
 
 Both platforms build their own static SDL2 rather than link whatever the machine
 has installed: the sources are fetched and compiled once into `build/sdl2/`,
@@ -172,7 +176,7 @@ itself: a breakpoint, a watchpoint, `--trace`, `--prof-blocks`, and GDB single-s
 all fall back for as long as they are armed. Two ways to check the rest:
 
     athena_sim_cli ... --jit-verify      # re-read the guest bytes under every block
-    tools/sim_regress.py --extra=--no-jit && tools/sim_regress.py --extra=--jit-native
+    $KB/tools/sim_regress.py --extra=--no-jit && $KB/tools/sim_regress.py --extra=--jit-native
 
 ## Regression tests
 
@@ -182,6 +186,6 @@ than approximate, so any difference is a real behaviour change. The emulator's
 RGB565→RGB888 conversion is identical to `src/host/common/`'s, which means a
 golden can also be recorded from real hardware with `host_tool snapshot`.
 
-    tools/sim_regress.py                    # check
-    tools/sim_regress.py --bless            # re-record
-    tools/sim_regress.py --case launcher    # one case
+    $KB/tools/sim_regress.py                    # check
+    $KB/tools/sim_regress.py --bless            # re-record
+    $KB/tools/sim_regress.py --case launcher    # one case

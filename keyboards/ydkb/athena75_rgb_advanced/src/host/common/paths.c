@@ -25,7 +25,9 @@ char *default_uf2_path(char *out, size_t outlen) {
     char path[1024];
     snprintf(path, sizeof path, "%s%cartifacts%cfirmware%c%s", exe, SEP, SEP, SEP, DEFAULT_UF2_NAME);
     if (file_exists(path)) { snprintf(out, outlen, "%s", path); return out; }
-    for (int up = 1; up <= 4; up++) {
+    // artifacts/ is at the repo root: three levels up from the archived binary in
+    // artifacts/host/<os>/, but seven from a CMake build in src/host/build/<cfg>/.
+    for (int up = 1; up <= 8; up++) {
         char pref[1024];
         int n = snprintf(pref, sizeof pref, "%s", exe);
         for (int i = 0; i < up && n < (int)sizeof pref - 4; i++) {

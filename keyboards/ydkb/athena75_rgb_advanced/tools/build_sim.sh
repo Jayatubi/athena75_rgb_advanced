@@ -29,6 +29,7 @@
 set -euo pipefail
 
 KB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$KB/../../.." && pwd)"   # artifacts/ lives at the repo root
 SRC="$KB/src/sim"
 BUILD="${ATHENA_SIM_BUILD:-$KB/build/sim}"
 
@@ -65,7 +66,7 @@ if [ "$SIM_OS" = linux ]; then
     echo "that get archived. From WSL, build the Windows one: --windows" >&2
     exit 2
 fi
-OUT="$KB/artifacts/sim/$SIM_OS"
+OUT="$ROOT/artifacts/sim/$SIM_OS"
 APP_NAME="Athena75 Simulator"
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
@@ -206,9 +207,9 @@ fi
 stage_resources() { # <resources dir>
     local res="$1"
     mkdir -p "$res/apps"
-    cp "$KB/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2" "$res/firmware.uf2"
+    cp "$ROOT/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2" "$res/firmware.uf2"
     cp "$KB/keymaps/vial/vial.json" "$res/vial.json"
-    for a in "$KB"/artifacts/apps/*.app; do
+    for a in "$ROOT"/artifacts/apps/*.app; do
         if [ -e "$a" ]; then cp "$a" "$res/apps/"; fi
     done
 }

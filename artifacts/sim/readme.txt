@@ -1,6 +1,10 @@
 athena_sim — full-system emulator binaries
 ==========================================
 
+Paths beginning artifacts/ are from the repo root, which is where the commands
+below run; everything else is inside the keyboard directory, and KB below stands
+for keyboards/ydkb/athena75_rgb_advanced.
+
 tools/build_sim.sh writes the executables here, under a per-OS subdirectory
 matching artifacts/host/. macOS and Windows are the two platforms archived;
 there is no Linux build, and from WSL the one to make is the Windows one.
@@ -16,10 +20,10 @@ SDL2 is linked statically, so athena_sim depends only on what the OS itself
 ships and runs on a machine that has no SDL2 installed — same deal as host_tool,
 and the reason these are committed. athena_sim_cli needs nothing beyond libc.
 
-    bash tools/build_sim.sh             # both targets, or just the CLI without SDL2
-    bash tools/build_sim.sh --test      # ... and run the pixel regression
-    bash tools/build_sim.sh --windows   # MSVC build from WSL -> sim/windows/*.exe
-    bash tools/build_sim.sh --app       # ... and package it for the desktop
+    bash $KB/tools/build_sim.sh             # both targets, or just the CLI without SDL2
+    bash $KB/tools/build_sim.sh --test      # ... and run the pixel regression
+    bash $KB/tools/build_sim.sh --windows   # MSVC build from WSL -> sim/windows/*.exe
+    bash $KB/tools/build_sim.sh --app       # ... and package it for the desktop
 
 The desktop packages
 --------------------

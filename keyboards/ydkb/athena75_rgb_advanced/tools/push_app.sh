@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 BOARD="${ROOT}/keyboards/ydkb/athena75_rgb_advanced"
-TOOL="${BOARD}/artifacts/host/windows/host_tool.exe"
+TOOL="${ROOT}/artifacts/host/windows/host_tool.exe"
 APP="${1:?usage: push_app.sh <app path under the board dir> [update|install] [device]}"
 MODE="${2:-update}"
 DEVICE="${3:-usb1}"

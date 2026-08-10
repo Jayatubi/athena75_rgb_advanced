@@ -52,15 +52,15 @@ tile 美术是 `make_tiles.py` 直接画出来的 16×16 像素画，每次构�
 
 ## 构建与验证
 
-以下命令在 `keyboards/ydkb/athena75_rgb_advanced/` 下执行：
+以下命令在仓库根目录下执行（`KB=keyboards/ydkb/athena75_rgb_advanced`）：
 
 ```bash
-bash src/app/tools/build_app.sh wfc          # -> artifacts/apps/wfc.app（顺带重画 tile）
+bash $KB/src/app/tools/build_app.sh wfc          # -> artifacts/apps/wfc.app（顺带重画 tile）
 host_tool app install artifacts/apps/wfc.app
 
-python3 src/app/wfc/make_tiles.py            # 每套主题的接缝检查
-bash src/app/tools/test_wfc.sh 300 400       # 五档 PLAN 都能收敛，并报告与方案的吻合度
-bash src/app/tools/preview_wfc.sh 12 build/grids 4   # 用真实 C 求解器离线画整盘，两秒出图
+python3 $KB/src/app/wfc/make_tiles.py            # 每套主题的接缝检查
+bash $KB/src/app/tools/test_wfc.sh 300 400       # 五档 PLAN 都能收敛，并报告与方案的吻合度
+bash $KB/src/app/tools/preview_wfc.sh 12 $KB/build/grids 4   # 用真实 C 求解器离线画整盘，两秒出图
 ```
 
 ---

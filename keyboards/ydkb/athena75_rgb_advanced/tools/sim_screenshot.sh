@@ -25,7 +25,7 @@ KBD="$(cd "${HERE}/.." && pwd)"
 ROOT="$(git -C "${KBD}" rev-parse --show-toplevel)"
 OUT="${ROOT}/build/sim-shot"
 
-FW="${KBD}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
+FW="${ROOT}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
 # Install order is slot order, which is the order the launcher shows them in.
 APPS=(settings matrix life maze brick fish wfc)
 
@@ -49,8 +49,8 @@ case "$(uname -s)" in
     Darwin) OS=macos;   EXE=     ;;
     *)      OS=windows; EXE=.exe ;;
 esac
-CLI="${KBD}/artifacts/sim/${OS}/athena_sim_cli${EXE}"
-GUI="${KBD}/artifacts/sim/${OS}/athena_sim${EXE}"
+CLI="${ROOT}/artifacts/sim/${OS}/athena_sim_cli${EXE}"
+GUI="${ROOT}/artifacts/sim/${OS}/athena_sim${EXE}"
 for f in "${CLI}" "${GUI}" "${FW}"; do
     [[ -f "${f}" ]] || { echo "error: missing ${f} (tools/build_sim.sh)" >&2; exit 1; }
 done
@@ -72,7 +72,7 @@ echo ">> settling (install ${#APPS[@]} apps, boot to interactive)"
 head -c $((16 * 1024 * 1024)) /dev/zero | tr '\000' '\377' > "${FLASH}"
 INSTALL=()
 for a in "${APPS[@]}"; do
-    INSTALL+=(--install-app "$(winpath "${KBD}/artifacts/apps/${a}.app")")
+    INSTALL+=(--install-app "$(winpath "${ROOT}/artifacts/apps/${a}.app")")
 done
 "${CLI}" --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
     "${INSTALL[@]}" --log '*=warn' --run-ms "${SETTLE_MS}" \

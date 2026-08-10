@@ -5,6 +5,16 @@
 # ANIMATION keyframe UF2s stay local (tools/builds/ or flash partitions).
 !firmware/ydkb_athena75_rgb_advanced_vial.uf2
 
+# Beside it, uf2_common keeps the last ten builds under a timestamp. That is a
+# local undo buffer, not something to ship, and the rule is on the directory so
+# it holds for whatever else ends up in there.
+firmware/history/
+
+# Both packaged sim builds carry the firmware they boot in a Resources/ directory
+# -- Contents/Resources inside the .app, beside the .exe in the Windows folder --
+# and without this the committed copies have nothing to run.
+!sim/**/Resources/firmware.uf2
+
 # Slot apps (src/app/.gitignore ignores *.app under src/app/<name>/).
 !apps/
 !apps/*.app

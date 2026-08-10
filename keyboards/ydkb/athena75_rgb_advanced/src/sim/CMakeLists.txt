@@ -63,7 +63,9 @@ elseif(WIN32)
 else()
   set(SIM_OS linux)
 endif()
-set(SIM_OUT ${SIM_ROOT}/../../artifacts/sim/${SIM_OS})
+# artifacts/ sits at the repo root, five directories above src/sim.
+get_filename_component(SIM_REPO_ROOT ${SIM_ROOT}/../../../../.. ABSOLUTE)
+set(SIM_OUT ${SIM_REPO_ROOT}/artifacts/sim/${SIM_OS})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${SIM_OUT})
 # Multi-config generators otherwise bury the result in a per-config subdirectory.
 foreach(cfg ${CMAKE_CONFIGURATION_TYPES} Debug Release RelWithDebInfo MinSizeRel)

@@ -58,13 +58,13 @@
 
 ## 构建与安装
 
-以下命令在 `keyboards/ydkb/athena75_rgb_advanced/` 下执行：
+以下命令在仓库根目录下执行（`KB=keyboards/ydkb/athena75_rgb_advanced`）：
 
 ```bash
-bash src/app/tools/build_app.sh fish        # -> artifacts/apps/fish.app
+bash $KB/src/app/tools/build_app.sh fish        # -> artifacts/apps/fish.app
 host_tool app install artifacts/apps/fish.app
 
-python3 src/app/fish/make_icon.py --zoom 8  # 图标是脚本画的像素图
+python3 $KB/src/app/fish/make_icon.py --zoom 8  # 图标是脚本画的像素图
 ```
 
 ---

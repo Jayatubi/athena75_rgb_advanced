@@ -33,12 +33,12 @@
 
 ## 构建与安装
 
-以下命令在 `keyboards/ydkb/athena75_rgb_advanced/` 下执行：
+以下命令在仓库根目录下执行（`KB=keyboards/ydkb/athena75_rgb_advanced`）：
 
 ```bash
-bash src/app/tools/build_app.sh matrix        # -> artifacts/apps/matrix.app
+bash $KB/src/app/tools/build_app.sh matrix        # -> artifacts/apps/matrix.app
 host_tool app install artifacts/apps/matrix.app
-host_tool synctime                            # 对时，时钟水印才有内容
+host_tool synctime                                # 对时，时钟水印才有内容
 ```
 
 ---

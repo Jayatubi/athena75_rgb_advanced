@@ -67,12 +67,12 @@ def repo_root() -> Path:
     return here.parents[4]
 
 
-def pick_sim(kbd: Path) -> Path:
+def pick_sim(root: Path) -> Path:
     # macOS first because that is the case where this interpreter and the emulator
     # share a loopback -- the ctl client below runs in this process. Driving the
     # .exe from WSL means reaching the Windows loopback, which 127.0.0.1 is not.
     for rel in ("sim/macos/athena_sim_cli", "sim/windows/athena_sim_cli.exe"):
-        p = kbd / "artifacts" / rel
+        p = root / "artifacts" / rel
         if p.exists():
             return p
     sys.exit("error: no athena_sim_cli in artifacts/sim/")
@@ -106,11 +106,11 @@ def find_slot(flash: bytes, name: str) -> int:
     return -1
 
 
-def pull_save(kbd: Path, slot_addr: int) -> bytes:
+def pull_save(root: Path, slot_addr: int) -> bytes:
     """Read an installed app's save sector off a real keyboard."""
-    tool = kbd / "artifacts" / "host" / "windows" / "host_tool.exe"
+    tool = root / "artifacts" / "host" / "windows" / "host_tool.exe"
     if not tool.exists():
-        tool = kbd / "artifacts" / "host" / "macos" / "host_tool"
+        tool = root / "artifacts" / "host" / "macos" / "host_tool"
     addr = slot_addr + SAVE_OFF
     out = subprocess.run([str(tool), "probe", "read", hex(addr), str(SAVE_SIZE)],
                          capture_output=True, text=True)
@@ -217,9 +217,9 @@ def main() -> None:
 
     root = repo_root()
     kbd = root / "keyboards/ydkb/athena75_rgb_advanced"
-    sim = pick_sim(kbd)
-    fw = kbd / "artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
-    pkg = kbd / "artifacts/apps" / f"{args.app}.app"
+    sim = pick_sim(root)
+    fw = root / "artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
+    pkg = root / "artifacts/apps" / f"{args.app}.app"
     for f in (fw, pkg):
         if not f.exists():
             sys.exit(f"error: missing {f}")
@@ -245,7 +245,7 @@ def main() -> None:
     save = None
     if args.save_from_device:
         print(">> pulling the save sector off the keyboard")
-        save = pull_save(kbd, int(args.save_from_device, 0))
+        save = pull_save(root, int(args.save_from_device, 0))
     elif args.save_data:
         save = Path(args.save_data).read_bytes().ljust(SAVE_SIZE, b"\xFF")[:SAVE_SIZE]
 

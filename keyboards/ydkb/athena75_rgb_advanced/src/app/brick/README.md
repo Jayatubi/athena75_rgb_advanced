@@ -38,14 +38,14 @@
 
 ## 构建与测试
 
-以下命令在 `keyboards/ydkb/athena75_rgb_advanced/` 下执行：
+以下命令在仓库根目录下执行（`KB=keyboards/ydkb/athena75_rgb_advanced`）：
 
 ```bash
-bash src/app/tools/build_app.sh brick        # -> artifacts/apps/brick.app
+bash $KB/src/app/tools/build_app.sh brick        # -> artifacts/apps/brick.app
 host_tool app install artifacts/apps/brick.app
 
-bash src/app/tools/test_brick.sh             # 离线重放长局，卡死就报错（球冻住 / 飞出面板 / 一局不再推进）
-python3 src/app/brick/make_icon.py           # 图标是脚本画的像素图（--zoom 8 另存放大预览）
+bash $KB/src/app/tools/test_brick.sh             # 离线重放长局，卡死就报错（球冻住 / 飞出面板 / 一局不再推进）
+python3 $KB/src/app/brick/make_icon.py           # 图标是脚本画的像素图（--zoom 8 另存放大预览）
 ```
 
 ---

@@ -29,9 +29,10 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KB = os.path.dirname(HERE)
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(KB)))
 GOLDEN = os.path.join(KB, "tests", "golden")
-FIRMWARE = os.path.join(KB, "artifacts", "firmware", "ydkb_athena75_rgb_advanced_vial.uf2")
-APPS = os.path.join(KB, "artifacts", "apps")
+FIRMWARE = os.path.join(ROOT, "artifacts", "firmware", "ydkb_athena75_rgb_advanced_vial.uf2")
+APPS = os.path.join(ROOT, "artifacts", "apps")
 
 # Booting from blank flash spends seconds initialising the EEPROM, and the
 # launcher is not up until that settles. Every case pays that once, up front.
@@ -162,7 +163,7 @@ def default_sim():
     # and WSL, where the .exe runs too -- is served by the MSVC one.
     osname = "macos" if platform.system() == "Darwin" else "windows"
     exe = "athena_sim_cli" if osname == "macos" else "athena_sim_cli.exe"
-    built = os.path.join(KB, "artifacts", "sim", osname, exe)
+    built = os.path.join(ROOT, "artifacts", "sim", osname, exe)
     return built if os.path.exists(built) else exe
 
 

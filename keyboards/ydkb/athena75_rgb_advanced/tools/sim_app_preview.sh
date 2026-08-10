@@ -29,22 +29,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KBD_DIR="$(cd "${HERE}/.." && pwd)"
 REPO_ROOT="$(git -C "${KBD_DIR}" rev-parse --show-toplevel)"
 
-FW="${KBD_DIR}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
-APP_PKG="${KBD_DIR}/artifacts/apps/${APP}.app"
+FW="${REPO_ROOT}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
+APP_PKG="${REPO_ROOT}/artifacts/apps/${APP}.app"
 OUT="${REPO_ROOT}/build/sim-preview/${APP}"
 
 # The .exe leads: it is the build that exists under WSL, and it runs there.
 CANDS=(windows/athena_sim_cli.exe macos/athena_sim_cli)
 SIM=""
 for cand in "${CANDS[@]}"; do
-    if [[ -x "${KBD_DIR}/artifacts/sim/${cand}" ]]; then
-        SIM="${KBD_DIR}/artifacts/sim/${cand}"
+    if [[ -x "${REPO_ROOT}/artifacts/sim/${cand}" ]]; then
+        SIM="${REPO_ROOT}/artifacts/sim/${cand}"
         break
     fi
 done
 # Name one anyway when there is none, so the check below reports a missing file
 # instead of an empty path.
-[[ -n "${SIM}" ]] || SIM="${KBD_DIR}/artifacts/sim/${CANDS[0]}"
+[[ -n "${SIM}" ]] || SIM="${REPO_ROOT}/artifacts/sim/${CANDS[0]}"
 for f in "${SIM}" "${FW}" "${APP_PKG}"; do
     if [[ ! -f "${f}" ]]; then
         echo "error: missing ${f}" >&2

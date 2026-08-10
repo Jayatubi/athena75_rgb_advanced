@@ -16,6 +16,7 @@
 set -euo pipefail
 
 KB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$KB/../../.." && pwd)"   # artifacts/ lives at the repo root
 CALLER_PWD="$PWD"
 cd "$KB"
 
@@ -36,7 +37,7 @@ case "$(uname -s)" in
 esac
 
 FLASH="$(abspath "${ATHENA_SIM_FLASH:-$KB/build/flash.bin}")"
-FW="$KB/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
+FW="$ROOT/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
 CTL_PORT="${ATHENA_SIM_CTL_PORT:-47800}"
 HID_PORT="${ATHENA_SIM_HID_PORT:-47801}"
 
@@ -74,7 +75,7 @@ if [ "$windows" = 1 ]; then
     # read /mnt paths, so everything it opens has to be handed over as Windows.
     SIM_OS=windows
     exe="$exe.exe"
-    BIN="$KB/artifacts/sim/$SIM_OS/$exe"
+    BIN="$ROOT/artifacts/sim/$SIM_OS/$exe"
     [ -f "$BIN" ] || bash "$KB/tools/build_sim.sh" --windows
     if [ ! -f "$BIN" ]; then
         echo "$exe was not built; see tools/build_sim.sh --windows" >&2
@@ -102,7 +103,7 @@ if [ "$windows" = 1 ]; then
     done
     args=(${converted[@]+"${converted[@]}"})
 else
-    BIN="$KB/artifacts/sim/$SIM_OS/$exe"
+    BIN="$ROOT/artifacts/sim/$SIM_OS/$exe"
     [ -x "$BIN" ] || bash "$KB/tools/build_sim.sh"
     if [ ! -x "$BIN" ]; then
         echo "$exe was not built (SDL2 missing? try --headless)" >&2

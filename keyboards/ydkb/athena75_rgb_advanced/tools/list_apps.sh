@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-TOOL="${ROOT}/keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe"
+TOOL="${ROOT}/artifacts/host/windows/host_tool.exe"
 DEVICE="${1:-usb1}"
 
 AREA_BEGIN=$((0x10800000))

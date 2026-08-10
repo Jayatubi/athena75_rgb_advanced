@@ -2,7 +2,8 @@
 
 > 面向开发者的实现文档。用户向的用法说明在 `src/sim/README.md`；
 > 本文讲的是"里面是怎么做的"，尤其是客户机代码的三档执行路径。
-> 代码位置全部相对 `keyboards/ydkb/athena75_rgb_advanced/`。
+> 代码位置全部相对 `keyboards/ydkb/athena75_rgb_advanced/`；命令则在仓库根执行
+>（`KB=keyboards/ydkb/athena75_rgb_advanced`），产物目录 `artifacts/` 也在仓库根。
 
 ## 0. 它是什么，不是什么
 
@@ -52,11 +53,11 @@ ChibiOS 调度器、真正的 USB 枚举，最后落到建模的 GC9107 屏和 W
 ## 2. 构建与两个前端
 
 ```bash
-bash tools/build_sim.sh                     # -> artifacts/sim/<os>/athena_sim{,_cli}
-bash tools/build_sim.sh --test              # 顺便跑像素回归
-bash tools/build_sim.sh --windows           # 从 WSL 驱动 MSVC，产出 .exe
-bash tools/build_sim.sh --windows --no-sdl  # 只要 CLI
-bash tools/build_sim.sh --app               # 再打包成桌面能双击的形态
+bash $KB/tools/build_sim.sh                     # -> artifacts/sim/<os>/athena_sim{,_cli}
+bash $KB/tools/build_sim.sh --test              # 顺便跑像素回归
+bash $KB/tools/build_sim.sh --windows           # 从 WSL 驱动 MSVC，产出 .exe
+bash $KB/tools/build_sim.sh --windows --no-sdl  # 只要 CLI
+bash $KB/tools/build_sim.sh --app               # 再打包成桌面能双击的形态
 ```
 
 归档的只有 macOS 与 Windows 两个平台，没有 Linux 版；在 WSL 里要构建的是 `--windows`。
@@ -637,8 +638,8 @@ slot app 是**可重定位的原生 ARM Thumb 模块**，不是脚本、不是�
 
 ```bash
 # 构建
-bash tools/build_sim.sh
-bash tools/build_sim.sh --windows
+bash $KB/tools/build_sim.sh
+bash $KB/tools/build_sim.sh --windows
 
 # GUI
 artifacts/sim/<os>/athena_sim --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 \
@@ -660,8 +661,8 @@ export ATHENA_HID_SIM=127.0.0.1:4711
 ... --host-mhz 4400 --prof-blocks
 
 # 回归
-tools/sim_regress.py
-tools/sim_regress.py --extra=--no-jit
-tools/sim_regress.py --case launcher
-tools/sim_regress.py --bless
+$KB/tools/sim_regress.py
+$KB/tools/sim_regress.py --extra=--no-jit
+$KB/tools/sim_regress.py --case launcher
+$KB/tools/sim_regress.py --bless
 ```

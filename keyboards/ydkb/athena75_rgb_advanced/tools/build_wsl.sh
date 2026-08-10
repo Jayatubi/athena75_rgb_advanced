@@ -70,10 +70,12 @@ sync_keyboard() {
     require_rsync
     mkdir -p "${dst}/${KB_REL}"
     echo ">> sync kb: ${src}/${KB_REL} -> ${dst}/${KB_REL}"
+    # artifacts/ sits at the repo root, so a keyboard-only sync leaves it behind.
+    # Nothing in the mirror reads it: the build writes into the mirror's .build/
+    # and build.py, which runs from this clone, archives the result back here.
     rsync -a --delete \
         --exclude '.git/' \
         --exclude '.build/' \
-        --exclude 'artifacts/firmware/history/' \
         --exclude 'src/host/build/' \
         "${src}/${KB_REL}/" "${dst}/${KB_REL}/"
 }
@@ -88,7 +90,7 @@ sync_all() {
     rsync -a --delete \
         --exclude '.git/' \
         --exclude '.build/' \
-        --exclude "${KB_REL}/artifacts/firmware/history/" \
+        --exclude 'artifacts/firmware/history/' \
         --exclude "${KB_REL}/src/host/build/" \
         --info=progress2 \
         "${src}/" "${dst}/"

@@ -22,12 +22,11 @@
 
 ## 快速开始
 
-仓库里已经提交了编译好的产物，想直接用可以跳过前两步：`keyboards/ydkb/athena75_rgb_advanced/artifacts/` 下有固件 UF2、macOS / Windows 的 `host_tool`，以及全部 `.app`。
-
+仓库里已经提交了编译好的产物，想直接用可以跳过前两步：仓库根的 `artifacts/` 下有固件 UF2、macOS / Windows 的 `host_tool`，以及全部 `.app`。
 ```bash
 KB=keyboards/ydkb/athena75_rgb_advanced
 
-# 1) 固件 —— 在固定版本的 QMK Docker 镜像里编译，产物落到 $KB/artifacts/firmware/*.uf2
+# 1) 固件 —— 在固定版本的 QMK Docker 镜像里编译，产物落到 artifacts/firmware/*.uf2
 bash $KB/tools/build_wsl.sh          # Windows + WSL
 bash $KB/tools/build_mac.sh          # macOS
 python3 $KB/tools/build.py           # 上面两个脚本都只是它的平台外壳
@@ -48,8 +47,8 @@ host_tool upload                     # 不带参数时自动挑 artifacts/firmwa
 装几个 app 试试，然后按键盘上的 **gif 键**进入 OS 模式，启动器里就能看到它们：
 
 ```bash
-host_tool app install $KB/artifacts/apps/wfc.app
-host_tool app install $KB/artifacts/apps/settings.app
+host_tool app install artifacts/apps/wfc.app
+host_tool app install artifacts/apps/settings.app
 ```
 
 ---
@@ -112,7 +111,7 @@ OS 模式闲置约 30 秒会自动退回键盘模式，避免忘了切换而打�
 
 ## 预置 app
 
-源码在 [`src/app/`](keyboards/ydkb/athena75_rgb_advanced/src/app)，打包好的 `.app` 在 [`artifacts/apps/`](keyboards/ydkb/athena75_rgb_advanced/artifacts/apps)，装上就能用。点名字看它的说明。
+源码在 [`src/app/`](keyboards/ydkb/athena75_rgb_advanced/src/app)，打包好的 `.app` 在 [`artifacts/apps/`](artifacts/apps)，装上就能用。点名字看它的说明。
 
 | | | |
 |:---:|:---:|:---:|
@@ -136,9 +135,9 @@ SDK 在 [`src/app/sdk/`](keyboards/ydkb/athena75_rgb_advanced/src/app/sdk)，核
 ```bash
 KB=keyboards/ydkb/athena75_rgb_advanced
 
-bash $KB/src/app/tools/build_app.sh <name>       # -> $KB/artifacts/apps/<name>.app
-host_tool app install $KB/artifacts/apps/<name>.app   # 首次安装
-host_tool app update  $KB/artifacts/apps/<name>.app   # 只换代码和图标，保留存档与数据
+bash $KB/src/app/tools/build_app.sh <name>          # -> artifacts/apps/<name>.app
+host_tool app install artifacts/apps/<name>.app     # 首次安装
+host_tool app update  artifacts/apps/<name>.app     # 只换代码和图标，保留存档与数据
 ```
 
 需要心里有数的几条约束：
@@ -166,15 +165,16 @@ bash $KB/tools/sim_record.sh fish                   # 录成 GIF
 
 ## 目录结构
 
-这是一份完整的 QMK / Vial checkout，本固件的所有东西都收在一个键盘目录下：
+这是一份完整的 QMK / Vial checkout，本固件的源码都收在一个键盘目录下，能直接拿去用的成品则放在仓库根：
 
 ```
+artifacts/          提交的产物：固件 UF2 / host_tool / *.app / 仿真器
+
 keyboards/ydkb/athena75_rgb_advanced/
 ├── src/firmware/   固件：显示 OS、菜单引擎、app 加载器、绘图库
 ├── src/host/       host_tool（CMake）
 ├── src/app/        slot app 源码 + SDK + build_app.sh
 ├── src/sim/        athena_sim 仿真器
-├── artifacts/      提交的产物：固件 UF2 / host_tool / *.app / 仿真器
 ├── tools/          构建入口与脚本（build.py、build_*.sh、png_to_uf2.py …）
 ├── docs/           flash 与 RAM 分区、仿真器实现、app 预览 GIF
 ├── keymaps/  ld/   QMK 惯例位置

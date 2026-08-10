@@ -11,9 +11,9 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
 
 - **`KB`** = `keyboards/ydkb/athena75_rgb_advanced` (git **repository root** relative).
 - **Sources:** `${KB}/src/host/` only (CMake). **No** `tools/host/`.
-- **Exe (Windows, committed):** `${KB}/artifacts/host/windows/host_tool.exe`
+- **Exe (Windows, committed):** `artifacts/host/windows/host_tool.exe`
 - **Exe (local build):** `${KB}/src/host/build/Release/host_tool.exe`
-- **Default UF2:** `${KB}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2`
+- **Default UF2:** `artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2`
 - Never commit machine-specific absolute paths. For Windows `.exe` file args, use `${REPO_WIN}/…` inside a `.sh` (see **build-athena75**).
 
 ## How to run it — NEVER PowerShell
@@ -23,7 +23,7 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
 - From **repo root**:
 
   ```
-  wsl keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe <cmd> <args>
+  wsl artifacts/host/windows/host_tool.exe <cmd> <args>
   ```
 
 - Pipes/redirection → committed `.sh` only. Firmware builds → **build-athena75**.
@@ -31,7 +31,7 @@ description: Use host_tool to talk to the ydkb/athena75_rgb_advanced keyboard ov
 ## Choosing a device (several boards / emulators up at once)
 
 ```
-wsl keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe devices
+wsl artifacts/host/windows/host_tool.exe devices
 ```
 
 lists every target: plugged-in keyboards (`usb1`, `usb2`, …) and running
@@ -53,13 +53,13 @@ cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb/athena7
 cmake --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-- Binary: `${KB}/src/host/build/Release/host_tool` or `${KB}/artifacts/host/macos/host_tool`.
+- Binary: `${KB}/src/host/build/Release/host_tool` or `artifacts/host/macos/host_tool`.
 - **Input Monitoring** may be required on first HID access if the keyboard is visible but `9d5b:2514` is not found.
 
 ## Flashing firmware (upload)
 
 ```
-wsl keyboards/ydkb/athena75_rgb_advanced/artifacts/host/windows/host_tool.exe upload keyboards/ydkb/athena75_rgb_advanced/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2
+wsl artifacts/host/windows/host_tool.exe upload artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2
 ```
 
 (Omit UF2 path to use default resolved from exe / `artifacts/firmware/`.)
@@ -89,4 +89,4 @@ wsl cmake.exe -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb
 wsl cmake.exe --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-Copy to `${KB}/artifacts/host/windows/host_tool.exe` when publishing a new binary.
+Copy to `artifacts/host/windows/host_tool.exe` when publishing a new binary.

@@ -11,7 +11,8 @@ KEEP = 10                # 每个 base 保留的历史版本数
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 KBD_DIR = os.path.dirname(TOOLS_DIR)
-BUILDS_DIR = os.path.join(KBD_DIR, "artifacts", "firmware")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(KBD_DIR)))
+BUILDS_DIR = os.path.join(REPO_ROOT, "artifacts", "firmware")
 HISTORY_DIR = os.path.join(BUILDS_DIR, "history")
 
 

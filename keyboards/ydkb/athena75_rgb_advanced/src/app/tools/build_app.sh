@@ -21,8 +21,8 @@ HOST_TOOL="${HOST_DIR}/build/Release/host_tool.exe"
 if [[ ! -x "${HOST_TOOL}" && -f "${HOST_DIR}/build/Release/host_tool" ]]; then
     HOST_TOOL="${HOST_DIR}/build/Release/host_tool"
 fi
-if [[ ! -f "${HOST_TOOL}" && -f "${KBD_DIR}/artifacts/host/windows/host_tool.exe" ]]; then
-    HOST_TOOL="${KBD_DIR}/artifacts/host/windows/host_tool.exe"
+if [[ ! -f "${HOST_TOOL}" && -f "${REPO_ROOT}/artifacts/host/windows/host_tool.exe" ]]; then
+    HOST_TOOL="${REPO_ROOT}/artifacts/host/windows/host_tool.exe"
 fi
 ICON_SRC="${APPS_DIR}/${APP}/icon.png"
 DEFAULT_ICON="${APPS_DIR}/sdk/default_app_icon_32.png"
@@ -128,7 +128,7 @@ else
 fi
 "${HOST_TOOL}" "${PACK_ARGS[@]}"
 
-ART_DIR="${KBD_DIR}/artifacts/apps"
+ART_DIR="${REPO_ROOT}/artifacts/apps"
 # ACE embeds the keyframe QGF built from private PNGs: keep it out of the repo.
 [[ "${APP}" == "ace" ]] && ART_DIR="${ART_DIR}/hidden"
 mkdir -p "${ART_DIR}"

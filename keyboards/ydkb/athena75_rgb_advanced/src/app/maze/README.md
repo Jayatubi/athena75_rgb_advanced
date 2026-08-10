@@ -29,10 +29,10 @@
 
 ## 构建与安装
 
-以下命令在 `keyboards/ydkb/athena75_rgb_advanced/` 下执行：
+以下命令在仓库根目录下执行（`KB=keyboards/ydkb/athena75_rgb_advanced`）：
 
 ```bash
-bash src/app/tools/build_app.sh maze        # -> artifacts/apps/maze.app
+bash $KB/src/app/tools/build_app.sh maze        # -> artifacts/apps/maze.app
 host_tool app install artifacts/apps/maze.app
 ```
 

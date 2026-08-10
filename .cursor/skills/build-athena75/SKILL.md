@@ -22,7 +22,7 @@ description: Build (and prepare to flash) the ydkb/athena75_rgb_advanced firmwar
 
 - See repo rule **wsl-no-powershell**: **no PowerShell, no `.ps1` ever.** Thin `wsl …` launcher only.
 - **`tools/`** — build entrypoints only (`.sh`, `build.py`, helpers). **No** `tools/host/`; host_tool sources are **`src/host/`**.
-- **`artifacts/`** — committed UF2, `host_tool` binaries, slot `.app` files.
+- **`artifacts/`** — committed UF2, `host_tool` binaries, slot `.app` files. It sits at the **repo root**, not under `${KB}`.
 - **Windows `.exe` files are normal executables under WSL** (`git.exe`, `cmake.exe`, `docker`, …).
 - Pipes/redirection/`$()` → **committed `.sh`** only (`wsl bash path/to/script.sh`).
 - **Use ready-made scripts** — do not hand-run `docker` / `make` / `build.py` or invent new layouts:
@@ -39,7 +39,7 @@ wsl bash keyboards/ydkb/athena75_rgb_advanced/tools/build_wsl.sh
 ```
 
 - First mirror sync: `--sync all`. Clean: `-c`. Keymap: `KEYMAP=via` (default `vial`).
-- Output: `${KB}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2` (+ `history/`).
+- Output: `artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2` (+ `history/`).
 
 ## Build the host_tool (USB tool)
 
@@ -57,7 +57,7 @@ cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host -B keyboards/ydkb/athena7
 cmake --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 ```
 
-Binary: `${KB}/src/host/build/Release/host_tool` / `host_tool.exe`. Committed: `${KB}/artifacts/host/{windows,macos}/`. See **host-tool-athena75** for macOS Input Monitoring.
+Binary: `${KB}/src/host/build/Release/host_tool` / `host_tool.exe`. Committed: `artifacts/host/{windows,macos}/`. See **host-tool-athena75** for macOS Input Monitoring.
 
 ## Flashing
 
