@@ -23,6 +23,9 @@
 ## 快速开始
 
 仓库里已经提交了编译好的产物，想直接用可以跳过前两步：仓库根的 `artifacts/` 下有固件 UF2、macOS / Windows 的 `host_tool`，以及全部 `.app`。
+
+**第一次上手请先看 [`artifacts/README.md`](artifacts/README.md)**：那里有从 BOOTSEL 刷第一次固件、到之后用 `host_tool` 升级固件与装 app 的完整步骤，以及动手之前该有的心理准备——刷机会覆盖原厂内容且没有一键还原，请自行准备好原厂固件。
+
 ```bash
 KB=keyboards/ydkb/athena75_rgb_advanced
 
@@ -185,6 +188,7 @@ keyboards/ydkb/athena75_rgb_advanced/
 
 | 文档 | 内容 |
 |------|------|
+| [`artifacts/README.md`](artifacts/README.md) | 拿现成产物上手：第一次刷固件、之后用 host_tool 升级与装 app，以及风险提示 |
 | [`docs/usage.md`](keyboards/ydkb/athena75_rgb_advanced/docs/usage.md) | 操作与参考手册：各 app 的按键、菜单、Command 模式、host_tool 全部子命令、可调宏 |
 | [`src/README.md`](keyboards/ydkb/athena75_rgb_advanced/src/README.md) | 各目录的职责与全部构建入口 |
 | [`docs/flash_map.md`](keyboards/ydkb/athena75_rgb_advanced/docs/flash_map.md) | 16 MiB flash 的完整分区、slot 内部布局、多 slot 包、写入安全区 |
