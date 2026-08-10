@@ -90,7 +90,8 @@
 
 ## 4. 已废弃的历史布局：app 时代 "app slots"
 
-旧的 app 实验平台（`put`/`ls`/`read`，已在提交 `6e7766571a` 移除）在同一片 flash 上
+旧的 app 实验平台（`put`/`ls`/`read`，在 fork 之前就已移除——vial-qmk-v6 的提交
+`6e7766571a`，不在本仓库的历史里）在同一片 flash 上
 用过一套**不同且重叠**的分区，仅存在于旧固件/旧 host_tool binary 里：
 
 ```
