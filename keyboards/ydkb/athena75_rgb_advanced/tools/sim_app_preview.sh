@@ -33,8 +33,16 @@ FW="${KBD_DIR}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
 APP_PKG="${KBD_DIR}/artifacts/apps/${APP}.app"
 OUT="${REPO_ROOT}/build/sim-preview/${APP}"
 
-SIM="${KBD_DIR}/artifacts/sim/windows/athena_sim_cli.exe"
-[[ -x "${SIM}" ]] || SIM="${KBD_DIR}/artifacts/sim/linux/athena_sim_cli"
+SIM=""
+for cand in windows/athena_sim_cli.exe linux/athena_sim_cli macos/athena_sim_cli; do
+    if [[ -x "${KBD_DIR}/artifacts/sim/${cand}" ]]; then
+        SIM="${KBD_DIR}/artifacts/sim/${cand}"
+        break
+    fi
+done
+# Name one anyway when there is none, so the check below reports a missing file
+# instead of an empty path.
+[[ -n "${SIM}" ]] || SIM="${KBD_DIR}/artifacts/sim/linux/athena_sim_cli"
 for f in "${SIM}" "${FW}" "${APP_PKG}"; do
     if [[ ! -f "${f}" ]]; then
         echo "error: missing ${f}" >&2
