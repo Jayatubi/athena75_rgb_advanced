@@ -57,10 +57,9 @@ mkdir -p "${BUILD}"
 if [[ ! -f "${ICON_SRC}" ]]; then
     ICON_SRC="${DEFAULT_ICON}"
 fi
-if [[ "${APP}" == "ace" && ! -f "${DATA_BLOB}" ]]; then
-    echo "error: ACE data blob missing: ${DATA_BLOB}" >&2
-    echo "run build_ace_data.py <external-emojis-dir> first" >&2
-    exit 1
+if [[ "${APP}" == "ace" && -f "${DATA_BLOB}" ]]; then
+    echo ">> note: ACE data is installed separately via build/data.uf2 (BOOTSEL)" >&2
+    DATA_BLOB=""
 fi
 
 python3 "${APPS_DIR}/tools/icon_to_rgb565.py" "${ICON_SRC}" "${ICON_RGB}"
@@ -113,7 +112,7 @@ if [[ -n "${REPO_WIN}" ]]; then
 else
     PACK_ARGS+=("${BUILD}/${APP}.elf" --icon "${ICON_RGB}")
 fi
-if [[ -f "${DATA_BLOB}" ]]; then
+if [[ -n "${DATA_BLOB}" && -f "${DATA_BLOB}" ]]; then
     if [[ -n "${REPO_WIN}" ]]; then
         DATA_WIN="${REPO_WIN}/keyboards/ydkb/athena75_rgb_advanced/src/app/${APP}/build/data.bin"
         [[ -f "${DATA_BLOB}" && "${DATA_BLOB}" != "${BUILD}/data.bin" ]] && DATA_WIN="$(wslpath -w "${DATA_BLOB}" | sed 's/\\/\//g')"

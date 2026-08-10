@@ -68,7 +68,7 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
         SETERR("data blob needs %u slots; maximum is 31", data_slots);
         return -1;
     }
-    uint8_t slot_count = (uint8_t)(1u + data_slots);
+    uint8_t slot_count = data_blob_len ? (uint8_t)(1u + data_slots) : 0u;
     if (elf_len < 52 || memcmp(elf, "\x7f""ELF", 4) != 0) {
         SETERR("not an ELF file"); return -1;
     }
@@ -143,6 +143,10 @@ int app_pkg_from_elf(const uint8_t *elf, size_t elf_len, const char *name,
     app_wle32(image + APPH_DATA_VMA,     data_vma);
     app_wle32(image + APPH_DATA_SIZE,    data_size);
     app_wle32(image + APPH_BSS_SIZE,     bss_size);
+    if (!slot_count) {
+        slot_count = image[APPH_SLOT_COUNT];
+        if (slot_count <= 1u) slot_count = 1u;
+    }
     image[APPH_SLOT_COUNT] = slot_count;
     app_wle32(image + APPH_CRC32, 0);
     uint32_t crc = app_crc32(image, image_size);
@@ -307,6 +311,7 @@ int app_pkg_parse(const uint8_t *pkg, size_t len, app_pkg_info_t *info,
     }
     uint32_t expected_slots = 1u +
         (info->data_blob_size + APP_SLOT_SIZE - 1u) / APP_SLOT_SIZE;
+    if (info->data_blob_size == 0u) expected_slots = info->slot_count;
     if (info->slot_count != expected_slots) {
         SETERR("slot count %u does not match data size %u (%u slots expected)",
                info->slot_count, info->data_blob_size, expected_slots);

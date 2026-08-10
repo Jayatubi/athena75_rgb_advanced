@@ -128,7 +128,8 @@ void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
     uint32_t expected_slots = 1u +
         (data_size + APP_SLOT_SIZE - 1u) / APP_SLOT_SIZE;
     if (code_size == 0 || code_size > APP_SLOT_CODE_MAX ||
-        slot_count == 0 || slot_count > 32 || slot_count != expected_slots) {
+        slot_count == 0 || slot_count > 32 ||
+        (data_size != 0u && slot_count != expected_slots)) {
         s_state = APPUP_DENIED;
         return;
     }
