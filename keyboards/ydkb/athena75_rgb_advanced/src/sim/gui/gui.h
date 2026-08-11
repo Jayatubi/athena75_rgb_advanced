@@ -18,7 +18,6 @@
 typedef struct {
     float   x, y, w, h; // key units, origin top-left
     uint8_t row, col;
-    bool    decal;      // alternate-layout ghost: drawn faintly, not clickable
 } kle_key_t;
 
 typedef struct {

@@ -69,8 +69,7 @@ static int hit_test(const kbd_view_t *v, int mx, int my) {
     // Later keys win, matching draw order for the rare overlap.
     for (int i = (int)v->layout.count - 1; i >= 0; i--) {
         const kle_key_t *k = &v->layout.keys[i];
-        if (k->decal) continue;
-        SDL_Rect rc = key_rect(v, k);
+        SDL_Rect         rc = key_rect(v, k);
         if (mx >= rc.x && mx < rc.x + rc.w && my >= rc.y && my < rc.y + rc.h) return i;
     }
     return -1;
@@ -82,12 +81,6 @@ void kbd_view_draw(kbd_view_t *v, SDL_Renderer *r, SDL_Texture *atlas, sim_t *s)
     for (unsigned i = 0; i < v->layout.count; i++) {
         const kle_key_t *k  = &v->layout.keys[i];
         SDL_Rect         rc = key_rect(v, k);
-
-        if (k->decal) {
-            SDL_SetRenderDrawColor(r, 40, 40, 44, 255);
-            SDL_RenderDrawRect(r, &rc);
-            continue;
-        }
 
         const bool down = board_get_key(s, k->row, k->col);
         const bool scan = selected == (unsigned)k->row * SIM_MATRIX_COLS + k->col;

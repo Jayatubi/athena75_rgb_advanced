@@ -4,8 +4,9 @@
 // Reads the physical key positions straight out of keymaps/vial/vial.json so the
 // virtual keyboard cannot drift from the one Vial draws. Only the KLE subset that
 // file actually uses is understood: per-key x/y offsets, w/h, and the "d" decal
-// flag. Rotation (r/rx/ry) is not used by this layout and is reported if it shows
-// up rather than being silently mis-rendered.
+// flag, which marks an annotation and is dropped. Rotation (r/rx/ry) is not used
+// by this layout and is reported if it shows up rather than being silently
+// mis-rendered.
 //
 // Each key's legend carries its matrix position as "row,col" on one of the legend
 // lines, which is what VIA and Vial key off; we take the first line that looks
@@ -209,22 +210,27 @@ int kle_load(kle_layout_t *out, const char *path) {
                     }
                     char legend[128];
                     if (!read_string(&sc, legend, sizeof(legend))) break;
-                    unsigned row = 0, col = 0;
-                    if (!matrix_from_legend(legend, &row, &col)) {
-                        LOG_W(LOG_D_GUI, "key at (%.2f,%.2f) has no row,col legend", x, y);
-                    } else if (out->count < KLE_MAX_KEYS) {
-                        kle_key_t *k = &out->keys[out->count++];
-                        k->x = x;
-                        k->y = y;
-                        k->w = w;
-                        k->h = h;
-                        k->row = (uint8_t)row;
-                        k->col = (uint8_t)col;
-                        k->decal = decal;
-                        if (x + w > out->width) out->width = x + w;
-                        if (y + h > out->height) out->height = y + h;
-                    } else {
-                        LOG_W(LOG_D_GUI, "more than %u keys in the layout", KLE_MAX_KEYS);
+                    // A decal is an annotation, not a key. This layout parks
+                    // three of them half a unit over F1..F3, so drawing them at
+                    // all would put a stray box across those caps; they are read
+                    // only for the width they advance by.
+                    if (!decal) {
+                        unsigned row = 0, col = 0;
+                        if (!matrix_from_legend(legend, &row, &col)) {
+                            LOG_W(LOG_D_GUI, "key at (%.2f,%.2f) has no row,col legend", x, y);
+                        } else if (out->count < KLE_MAX_KEYS) {
+                            kle_key_t *k = &out->keys[out->count++];
+                            k->x = x;
+                            k->y = y;
+                            k->w = w;
+                            k->h = h;
+                            k->row = (uint8_t)row;
+                            k->col = (uint8_t)col;
+                            if (x + w > out->width) out->width = x + w;
+                            if (y + h > out->height) out->height = y + h;
+                        } else {
+                            LOG_W(LOG_D_GUI, "more than %u keys in the layout", KLE_MAX_KEYS);
+                        }
                     }
                     // Per KLE, w/h/decal apply to a single key then reset.
                     x += w;
