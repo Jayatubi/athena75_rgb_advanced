@@ -23,16 +23,23 @@ firmware/history/
 apps/ace.app
 apps/hidden/
 
-# athena_sim binaries (tools/build_sim.sh writes sim/<os>/). Committed like
-# host_tool: every platform links the static SDL2 the script builds from source,
-# so the only remaining dependencies are the ones the OS itself ships.
+# athena_sim (tools/build_sim.sh writes sim/<os>/). Committed like host_tool:
+# every platform links the static SDL2 the script builds from source, so the only
+# remaining dependencies are the ones the OS itself ships. What is committed is
+# the desktop package and nothing beside it -- the executable inside it is also
+# what the scripts run -- so a bare binary here is a leftover, not an output.
 !sim/
-!sim/*/athena_sim
-!sim/*/athena_sim.exe
-!sim/*/athena_sim_cli
-!sim/*/athena_sim_cli.exe
+sim/*/athena_sim
+sim/*/athena_sim.exe
+sim/*/athena_sim_cli
+sim/*/athena_sim_cli.exe
 !sim/readme.txt
 
 # Only a build pointed at a shared SDL2 of your own (ATHENA_SDL2_DIR) leaves this
 # beside the exe. Third-party binary: keep it local.
 sim/*/SDL2.dll
+
+# A window run saves the whole machine (F6) next to wherever it was started from,
+# which for a double-clicked copy is inside the package. That is one person's
+# session, not part of the package.
+sim/**/*.state

@@ -3,11 +3,12 @@
 #
 # athena_sim — full-system simulator for ydkb/athena75_rgb_advanced.
 #
-#   libathena_sim   pure C11, no third-party dependencies
-#   athena_sim_cli  headless runner (CI, PNG dumps, offline app install)
-#   athena_sim      SDL2 window with the virtual keyboard and screen
+#   athena_sim_core  the machine itself: pure C11, no third-party dependencies
+#   athena_sim       one executable, both ways to run it -- a window, and the
+#                    same machine with --headless for scripts and CI
 #
-# The GUI target is skipped when SDL2 is not installed; everything else builds.
+# Without SDL2 the window is left out and what remains still builds and still
+# runs headless, which is all CI needs.
 
 cmake_minimum_required(VERSION 3.16)
 project(athena_sim LANGUAGES C)
@@ -129,15 +130,11 @@ if(WIN32)
   target_link_libraries(athena_sim_core PUBLIC ws2_32)
 endif()
 
-# ---- headless runner --------------------------------------------------------
-
-add_executable(athena_sim_cli ${SIM_ROOT}/headless/main_headless.c)
-target_link_libraries(athena_sim_cli PRIVATE athena_sim_core)
-if(NOT WIN32)
-  target_link_libraries(athena_sim_cli PRIVATE m)
-endif()
-
-# ---- GUI --------------------------------------------------------------------
+# ---- the executable ---------------------------------------------------------
+#
+# One binary with both loops in it: main.c parses the command line once and hands
+# the assembled machine to whichever one is running. SDL2 decides only whether
+# the window half is there to hand it to.
 
 find_package(SDL2 QUIET)
 if(NOT SDL2_FOUND)
@@ -155,9 +152,19 @@ endif()
 # built it happened to have installed. ATHENA_SIM_STATIC_SDL=OFF opts out.
 option(ATHENA_SIM_STATIC_SDL "Link SDL2 statically into athena_sim" ON)
 
-if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/main_gui.c)
-  add_executable(athena_sim
-    ${SIM_ROOT}/gui/main_gui.c
+add_executable(athena_sim
+  ${SIM_ROOT}/main.c
+  ${SIM_ROOT}/options.c
+  ${SIM_ROOT}/headless/run_headless.c
+)
+target_link_libraries(athena_sim PRIVATE athena_sim_core)
+if(NOT WIN32)
+  target_link_libraries(athena_sim PRIVATE m)
+endif()
+
+if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/run_window.c)
+  target_sources(athena_sim PRIVATE
+    ${SIM_ROOT}/gui/run_window.c
     ${SIM_ROOT}/gui/font6x8.c
     ${SIM_ROOT}/gui/kle_layout.c
     ${SIM_ROOT}/gui/keybind.c
@@ -165,7 +172,9 @@ if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/main_gui.c)
     ${SIM_ROOT}/gui/lcd_view.c
     ${SIM_ROOT}/gui/panels.c
   )
-  target_link_libraries(athena_sim PRIVATE athena_sim_core)
+  # What main.c dispatches on, and what makes --headless a choice rather than
+  # the only thing this build can do.
+  target_compile_definitions(athena_sim PRIVATE ATHENA_SIM_WINDOW)
 
   # On Windows SDL renames main() to SDL_main; SDL2main.lib carries the real
   # entry point that sets up argv and calls it.
@@ -197,14 +206,10 @@ if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/main_gui.c)
                     "shared one; the binary will only run where SDL2 is installed")
   endif()
 
-  if(NOT WIN32)
-    target_link_libraries(athena_sim PRIVATE m)
-  endif()
-
   # A packaged Windows build is double-clicked, so it must not bring a console
   # window up with it; SDL2main supplies the WinMain that the GUI subsystem then
   # needs. Started from a shell instead, os_attach_console() takes that console
-  # back, so this costs the command line nothing.
+  # back, so --headless still prints where it was told to.
   if(WIN32)
     set_target_properties(athena_sim PROPERTIES WIN32_EXECUTABLE ON)
     if(ATHENA_SIM_ICON AND EXISTS "${ATHENA_SIM_ICON}")
@@ -216,7 +221,8 @@ if((SDL2_FOUND OR TARGET SDL2::SDL2) AND EXISTS ${SIM_ROOT}/gui/main_gui.c)
     endif()
   endif()
 
-  message(STATUS "athena_sim: SDL2 found (${SIM_SDL_KIND}), GUI target enabled")
+  message(STATUS "athena_sim: SDL2 found (${SIM_SDL_KIND}), the window is in this build")
 else()
-  message(WARNING "athena_sim: SDL2 not found, only athena_sim_cli will be built")
+  message(WARNING "athena_sim: no SDL2, so this build is headless whether or not "
+                  "--headless is passed")
 endif()

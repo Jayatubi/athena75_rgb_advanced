@@ -273,15 +273,28 @@ unsigned os_dir_list(const char *dir, const char *suffix, char (*names)[64], uns
     return n;
 }
 
+#ifdef _WIN32
+// A GUI subsystem process starts with no standard handles, so the three streams
+// have to be pointed somewhere before anything printed goes anywhere. Anywhere
+// except over a handle the shell already set up: `athena_sim --headless > log`
+// and a pipe into another program both arrive here as a valid non-character
+// handle, and reopening that on the console would throw the output away.
+static void console_stream(DWORD which, const char *dev, const char *mode, FILE *stream) {
+    HANDLE h = GetStdHandle(which);
+    if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN) return;
+    FILE *f;
+    freopen_s(&f, dev, mode, stream);
+}
+#endif
+
 void os_attach_console(void) {
 #ifdef _WIN32
     // Only ever borrows a console that already exists. AllocConsole() would give a
     // double-clicked copy the black window the GUI subsystem exists to avoid.
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
-    FILE *f;
-    freopen_s(&f, "CONOUT$", "w", stdout);
-    freopen_s(&f, "CONOUT$", "w", stderr);
-    freopen_s(&f, "CONIN$", "r", stdin);
+    console_stream(STD_OUTPUT_HANDLE, "CONOUT$", "w", stdout);
+    console_stream(STD_ERROR_HANDLE, "CONOUT$", "w", stderr);
+    console_stream(STD_INPUT_HANDLE, "CONIN$", "r", stdin);
 #endif
 }
 

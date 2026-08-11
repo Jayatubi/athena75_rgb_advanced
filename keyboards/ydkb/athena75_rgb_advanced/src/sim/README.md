@@ -9,23 +9,30 @@ modelled GC9107 panel and WS2812 chain.
 Commands run from the repo root, which is where `artifacts/` is, with
 `KB=keyboards/ydkb/athena75_rgb_advanced`:
 
-    bash $KB/tools/build_sim.sh          # -> artifacts/sim/<os>/athena_sim{,_cli}
+    bash $KB/tools/build_sim.sh          # -> artifacts/sim/<os>/Athena75 Simulator[.app]
     bash $KB/tools/build_sim.sh --test   # ... and run the pixel regression
 
 This file is how to use it. How it is built inside — the machine model, the
 scheduler, and the three ways it runs guest code — is `docs/simulator.md`.
 
-Objects stay in the keyboard's `build/sim/`; the executables are archived and
-committed — see `artifacts/sim/readme.txt`. Paths below say `macos`; substitute
-your own.
+Objects stay in the keyboard's `build/sim/`; the result is archived and committed
+— see `artifacts/sim/readme.txt`. It is a desktop package, and the one copy of
+the emulator is the executable inside it, so that is what the examples below run.
+It is worth putting in a variable; paths say `macos`, substitute your own:
+
+    SIM="artifacts/sim/macos/Athena75 Simulator.app/Contents/MacOS/Athena75 Simulator"
+    SIM="artifacts/sim/windows/Athena75 Simulator/Athena75 Simulator.exe"
+
+`tools/sim_bin.sh` is the same lookup for scripts; `tools/run_sim.sh` wraps it
+together with the arguments you would otherwise type every time.
 
 macOS and Windows are the two builds there are, from the same sources;
 `core/os.h` is where the sockets, the monotonic clock and the "where am I
 installed" questions stop being POSIX. On Windows the build is MSVC, driven from
 WSL, and that is also what to build from WSL — there is no Linux target:
 
-    bash $KB/tools/build_sim.sh --windows          # -> artifacts/sim/windows/*.exe
-    bash $KB/tools/build_sim.sh --windows --no-sdl # headless only, no SDL2
+    bash $KB/tools/build_sim.sh --windows          # -> artifacts/sim/windows/
+    bash $KB/tools/build_sim.sh --windows --no-sdl # leave the window out, no SDL2
     bash $KB/tools/run_sim.sh   --windows          # the native window, from WSL
 
 Both platforms build their own static SDL2 rather than link whatever the machine
@@ -33,44 +40,63 @@ has installed: the sources are fetched and compiled once into `build/sdl2/`,
 which is a cache that outlives `--clean`. Delete it to force a rebuild, or point
 `ATHENA_SDL2_DIR` at an SDL2 install of your own to skip the whole step. On
 Windows the MSVC runtime is static too (`ATHENA_SIM_STATIC_VCRT`, paired with
-SDL's `SDL_FORCE_STATIC_VCRT`), so `athena_sim.exe` is one self-contained file.
+SDL's `SDL_FORCE_STATIC_VCRT`), so the `.exe` is one self-contained file.
 
-`--app` additionally wraps the window build in the shape its desktop expects — a
-`.app` on macOS, a program folder on Windows — each carrying the firmware and
-layout it needs so it can be double-clicked with no command line at all. See
-`artifacts/sim/readme.txt` for what goes in one and where its flash ends up.
+The build then wraps it in the shape its desktop expects — a `.app` on macOS, a
+program folder on Windows — carrying the firmware and layout it needs so it can
+be double-clicked with no command line at all. See `artifacts/sim/readme.txt` for
+what goes in one and where its flash ends up. `--no-sdl` is the exception: with
+no window there is nothing to package, and the bare binary stays where the build
+put it.
 
-## The two front ends
+## One executable, two ways to run it
 
-`athena_sim` is one SDL2 window: the 128x128 panel on the left, the virtual
-keyboard below it, and a state/log panel on the right. Click a key or type on
-your real keyboard — either way it closes a matrix intersection and the firmware
-finds it by walking the GP6/GP7 shift chain, exactly as on hardware. Keycaps are
-tinted with the live WS2812 colour under them.
+By default `athena_sim` is one SDL2 window: the 128x128 panel on the left, the
+virtual keyboard below it, and a state/log panel on the right. Click a key or
+type on your real keyboard — either way it closes a matrix intersection and the
+firmware finds it by walking the GP6/GP7 shift chain, exactly as on hardware.
+Keycaps are tinted with the live WS2812 colour under them.
 
 ![The athena_sim window, showing the launcher on the panel](../../docs/sim.png)
 
 That picture is itself emulator output: `tools/sim_screenshot.sh` boots a machine,
-drives the launcher, and has the window write itself out with `--shot`.
+drives the launcher, and has the window write itself out with `--window-png`.
 
-    artifacts/sim/macos/athena_sim --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 \
-                         --flash flash.bin
+    "$SIM" --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 --flash flash.bin
 
 | Key | |
 |-----|---|
 | `Ctrl+Space` | pause (plain Space is a matrix key) |
 | `Ctrl+Tab` | turbo — stop pacing to real time |
 | `F5` | write the flash image back to `--flash` |
-| `F6` / `F7` | save / reload the whole machine |
+| `F6` / `F7` | save / reload the whole machine (`--state-file`) |
 | `F9` | PNG of the panel alone |
 
-The window also takes `--hid-port`, `--ctl-port` and `--gdb`, so host_tool, a
-script and a debugger can all be attached to the machine you are watching.
+`--headless` runs the same machine with no window at all, which is what scripts
+and CI want:
 
-`athena_sim_cli` is the same machine with no window, for scripting and CI:
+    "$SIM" --headless --uf2 <fw.uf2> --flash flash.bin \
+        --install-app artifacts/apps/maze.app --run-ms 4000 --panel-png screen.png
 
-    artifacts/sim/macos/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin \
-        --install-app artifacts/apps/maze.app --run-ms 4000 --png screen.png
+Both take `--hid-port`, `--ctl-port` and `--gdb`, so host_tool, a script and a
+debugger can all be attached either to the machine you are watching or to one
+running as fast as it can.
+
+There is one option table, and an option means the same thing on both sides of
+`--headless`. Three consequences worth knowing:
+
+- **Times are measured from the start of the run.** `--key 8,2,2000` presses the
+  gif key two seconds in, whether the run began at reset or at a `--load-state`
+  from halfway through a boot.
+- **The two screenshots say what they capture**: `--panel-png` is the 128x128
+  panel when the run ends, `--window-png MS PATH` is the whole window at MS.
+- **`--save-state` writes the machine when the run ends**, and is not the same
+  thing as `--state-file`, which is the file the window's F6 and F7 use.
+
+`--run-ms` bounds either one, so a window can be told to close on its own; a
+headless run defaults to 3000 ms and the window to running until it is closed.
+Likewise the window paces itself to the wall clock and a headless run does not,
+which `--turbo` and `--realtime` swap.
 
 ## What is modelled
 
@@ -95,7 +121,7 @@ set (the FIFO words are decoded directly, which is all the WS2812 program does).
 The emulated Raw HID interface can be published on a TCP port, and `host_tool`
 has a matching backend, so every command works against the emulator unchanged:
 
-    artifacts/sim/macos/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin --realtime --hid-port 4711
+    "$SIM" --headless --uf2 <fw.uf2> --flash flash.bin --realtime --hid-port 4711
     export ATHENA_HID_SIM=127.0.0.1:4711
     host_tool diag / probe jedec / snapshot -o s.png / backup -o ee.bin / app install maze.app
 
@@ -103,15 +129,16 @@ A real keyboard and several emulators can be up together: `host_tool devices`
 lists them all and `--device sim:127.0.0.1:4711` picks this one for a single
 command, which is the same thing without the exported environment variable.
 
-`--realtime` matters here: the emulator runs at roughly three quarters of real
-speed, so without it `host_tool`'s wall-clock timeouts are correspondingly
-tighter. `--host-mhz` reports what that costs per guest instruction, and
+`--realtime` matters here: a headless run goes flat out, at roughly three
+quarters of real speed, so without it `host_tool`'s wall-clock timeouts are
+correspondingly tighter. (The window is already paced and needs nothing.)
+`--host-mhz` reports what the emulation costs per guest instruction, and
 `--prof-blocks` reports the shape of the code it is spending it on.
 
 Commands that need an on-screen confirmation (`app install`, `restore`) want a
-keypress. The GUI takes `--hid-port` too, and there the nicer answer is to watch
-the firmware draw its `LOAD APP` box and click INSTALL with the mouse. Headless,
-use the control socket.
+keypress. Drop `--headless` and the nicer answer is to watch the firmware draw
+its `LOAD APP` box and click INSTALL with the mouse. Without a window, use the
+control socket.
 
 ## Control socket
 
@@ -133,7 +160,7 @@ Enter is `9,0`, which is what confirms an install dialog.
 ## Debugging
 
 - **Logging** is per-domain and per-level: `--log 'usb=debug,lcd=trace,*=info'`,
-  or `ATHENA_SIM_LOG`, or the checkboxes in the GUI panel. `--log-file` writes
+  or `ATHENA_SIM_LOG`, or the checkboxes in the window's log panel. `--log-file` writes
   JSONL. Scheduling is deterministic, so two runs of the same input produce
   logs that diff line for line.
 - **Symbols**: pass `--elf .build/*.elf` and PCs are reported as
@@ -175,7 +202,7 @@ Anything that wants to see instructions individually turns machine code off by
 itself: a breakpoint, a watchpoint, `--trace`, `--prof-blocks`, and GDB single-step
 all fall back for as long as they are armed. Two ways to check the rest:
 
-    athena_sim_cli ... --jit-verify      # re-read the guest bytes under every block
+    "$SIM" --headless ... --jit-verify   # re-read the guest bytes under every block
     $KB/tools/sim_regress.py --extra=--no-jit && $KB/tools/sim_regress.py --extra=--jit-native
 
 ## Regression tests

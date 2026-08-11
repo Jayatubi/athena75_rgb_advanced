@@ -103,10 +103,10 @@ OS 模式闲置约 30 秒会自动退回键盘模式，避免忘了切换而打�
 
 ![athena_sim 窗口：左边是 128×128 面板上的启动器，下面是虚拟键盘，右边是机器状态](keyboards/ydkb/athena75_rgb_advanced/docs/sim.png)
 
-- **两个前端**：`athena_sim` 是一个 SDL2 窗口（左边面板，下面虚拟键盘，右边状态与日志，键帽还会按当前灯色染色）；`athena_sim_cli` 是同一台机器去掉窗口，给脚本和 CI 用。
+- **一个可执行文件，两种跑法**：直接运行是一个 SDL2 窗口（左边面板，下面虚拟键盘，右边状态与日志，键帽还会按当前灯色染色）；加上 `--headless` 就是同一台机器去掉窗口，给脚本和 CI 用。参数只有一套，两边含义相同。
 - **能接东西**：仿真出来的 Raw HID 可以发布到 TCP 端口，所以 `host_tool` 的每条命令都能原样对着它跑；另有控制 socket（按键、截图、整机存档）和 gdb 桩（两个核就是两个线程）。
 - **可回归**：调度是确定性的，配套的像素级回归测试逐字节比对面板输出。本 readme 里的 GIF 和上面这张截图都是它自己产出的。
-- **能双击**：`build_sim.sh --app` 把仿真器连同固件、布局和预置 app 一起打包——macOS 得到顶上那枚图标的 `Athena75 Simulator.app`，Windows 得到一个装着 `athena_sim.exe` 与 `Resources/` 的目录，两边同一张原图。可执行文件自己在旁边找资源，双击即可，不带任何参数。
+- **能双击**：`build_sim.sh` 出来的就是打包好的形态——仿真器连同固件、布局和预置 app 一起，macOS 得到顶上那枚图标的 `Athena75 Simulator.app`，Windows 得到一个同名的程序目录，两边同一张原图。可执行文件自己在旁边找资源，双击即可，不带任何参数；脚本要用的也是包里这一个，不再另外留一份裸二进制。
 
 用法见 [`src/sim/README.md`](keyboards/ydkb/athena75_rgb_advanced/src/sim/README.md)，内部实现（机器模型与三档 JIT）见 [`docs/simulator.md`](keyboards/ydkb/athena75_rgb_advanced/docs/simulator.md)。
 

@@ -26,9 +26,9 @@ ChibiOS 调度器、真正的 USB 枚举，最后落到建模的 GC9107 屏和 W
 ## 1. 全景图
 
 ```
-   前端（二选一）
-   ├── athena_sim      gui/main_gui.c      SDL2 窗口，4 ms 一片，对齐墙上时钟
-   └── athena_sim_cli  headless/main_headless.c  无窗口，1 ms 一片，CI 用
+   athena_sim          main.c              解析一次命令行，装好机器，交给其中一个循环
+   ├── 窗口            gui/run_window.c    SDL2 窗口，4 ms 一片，对齐墙上时钟
+   └── --headless      headless/run_headless.c  无窗口，1 ms 一片，CI 用
                               │  sim_run_us()
                               ▼
    机器层  core/machine.c     sim_run_cycles()：双核轮转 + 外设 poll
@@ -50,22 +50,24 @@ ChibiOS 调度器、真正的 USB 枚举，最后落到建模的 GC9107 屏和 W
 关键的分层约束：**指令语义只有一份**。三档路径最终都调用 `cpu_armv6m.c` 里同一个
 `exec_decoded()`；本地后端不能发射的编码也回调它。所以三档不可能在语义上分叉。
 
-## 2. 构建与两个前端
+## 2. 构建与两种跑法
 
 ```bash
-bash $KB/tools/build_sim.sh                     # -> artifacts/sim/<os>/athena_sim{,_cli}
+bash $KB/tools/build_sim.sh                     # 构建并打包 -> artifacts/sim/<os>/
 bash $KB/tools/build_sim.sh --test              # 顺便跑像素回归
 bash $KB/tools/build_sim.sh --windows           # 从 WSL 驱动 MSVC，产出 .exe
-bash $KB/tools/build_sim.sh --windows --no-sdl  # 只要 CLI
-bash $KB/tools/build_sim.sh --app               # 再打包成桌面能双击的形态
+bash $KB/tools/build_sim.sh --windows --no-sdl  # 不要窗口，也就不需要 SDL2；没窗口就没得打包
 ```
+
+构建产物只有一份：桌面包（macOS 的 `.app`、Windows 的程序目录），脚本要跑的可执行文件
+就是包里那一个——`--headless` 只是同一个二进制的另一种跑法。路径由
+`tools/sim_bin.sh` 统一给出，裸二进制不再留在 `artifacts/` 里。
 
 归档的只有 macOS 与 Windows 两个平台，没有 Linux 版；在 WSL 里要构建的是 `--windows`。
 
-`--app` 把窗口版包成各自桌面认识的形状——macOS 是
-`artifacts/sim/macos/Athena75 Simulator.app`，Windows 是
-`artifacts/sim/windows/Athena75 Simulator/` 这个可以整个搬走的文件夹。两者都连同
-它们自带的固件一起提交在仓库里，所以固件或 app 变了之后要重跑一次 `--app` 才会跟上。
+包的形状随桌面而定——macOS 是 `artifacts/sim/macos/Athena75 Simulator.app`，
+Windows 是 `artifacts/sim/windows/Athena75 Simulator/` 这个可以整个搬走的文件夹。
+两者都连同它们自带的固件一起提交在仓库里，所以固件或 app 变了之后要重跑一次构建才会跟上。
 
 双击时没有任何命令行参数，而 `athena_sim` 的固件、布局、flash 三样都没有默认值。
 所以固件与布局装进一个 `Resources/` 目录（`.app` 里是 `Contents/Resources`，
@@ -80,15 +82,16 @@ Windows 上就在 `.exe` 旁边），由 `athena_sim` 自己循着可执行文�
 `tools/make_icons.py` 从它渲染出 `.icns` 与 `.ico`，前者进 bundle，后者在编译期作为
 资源链进 `.exe`。容器都是这个脚本自己拼的，不经 `iconutil`，所以在 WSL 上也能给
 Windows 版出图标。Windows 版同时链成 GUI 子系统，双击不弹控制台；从终端启动时
-`os_attach_console()` 再把输出接回父控制台。
+`os_attach_console()` 再把输出接回父控制台——但只接管 shell 没有安排过的那几个句柄，
+否则 `athena_sim --headless > log` 这类重定向会被抢走（同一个可执行文件既是窗口
+也是命令行工具，这一点就变得要紧了）。
 
 `src/sim/CMakeLists.txt` 的要点：
 
 | 目标 | 内容 |
 |---|---|
 | `athena_sim_core` | 静态库：`core/ jit/ periph/ board/ image/ net/ dbg/` 全部，外加 `host/common/png.c` 与 `app_pkg.c`（与 host_tool 共用，避免 PNG 写出和 `.app` 解析两边漂移） |
-| `athena_sim_cli` | `headless/main_headless.c` |
-| `athena_sim` | `gui/*.c` + SDL2；**找不到 SDL2 就跳过**，只出 CLI |
+| `athena_sim` | `main.c` + `options.c` + `headless/run_headless.c`；有 SDL2 时再加上 `gui/*.c` 并定义 `ATHENA_SIM_WINDOW`。**找不到 SDL2 也照样出这一个可执行文件**，只是里面没有窗口，`--headless` 与否都无头 |
 
 两件值得知道的构建事实：
 
@@ -98,8 +101,12 @@ Windows 版出图标。Windows 版同时链成 GUI 子系统，双击不弹控�
 - **JIT 没有编译期开关**。`jit_x64.c` 和 `jit_a64.c` 永远参与编译，用哪个由宿主机架构
   的预处理宏决定，用不用由**运行期命令行**决定。
 
-前端只是不同的驱动循环：GUI 每帧按 `dt` 预算调用 `sim_run_us()`（`Ctrl+Tab` turbo 时
-不再对齐墙上时钟），CLI 按 `--slice-us`（默认 1000）步进到 `--run-ms` 为止。
+两个前端只是同一台机器上的两个驱动循环，共用 `main.c` 装好的机器和 `options.c`
+解析出的同一张参数表：窗口每帧按 `dt` 预算调用 `sim_run_us()`（`Ctrl+Tab` turbo 时
+不再对齐墙上时钟），`--headless` 按 `--slice-us`（默认 1000）步进到 `--run-ms` 为止。
+参数在两边含义一致——时间都从**本次运行**起算（`--load-state` 恢复出来的也一样），
+`--panel-png` 出面板、`--window-png` 出整窗，`--save-state` 是运行结束时落盘、
+窗口里 F6/F7 用的那个文件叫 `--state-file`。
 
 ## 3. 机器模型
 
@@ -192,7 +199,7 @@ while (还有预算) {
 | `--jit-native` | true | true | 块编译成宿主机码 —— **默认** |
 | `--jit-verify` | true | 不变 | 每条块内指令重读客户机字节校验 |
 
-默认值在 `headless/main_headless.c` 的 `main()` 开头就写死（`cfg.jit = cfg.jit_native = true`）。
+默认值在 `options.c` 的 `sim_opts_parse()` 开头就写死（`cfg.jit = cfg.jit_native = true`）。
 `sim_create()` 里只有 `cfg.jit` 为真才 `jit_attach(s)`；否则 `s->jit` 恒为 NULL，
 `cpu_run()` 永远走解释器。
 
@@ -598,14 +605,14 @@ slot app 是**可重定位的原生 ARM Thumb 模块**，不是脚本、不是�
 
 | 设施 | 用法 | 备注 |
 |---|---|---|
-| 分域日志 | `--log 'usb=debug,lcd=trace,*=info'`、`ATHENA_SIM_LOG`、GUI 勾选框 | `--log-file` 出 JSONL；调度确定性 ⇒ 两次运行可逐行 diff |
+| 分域日志 | `--log 'usb=debug,lcd=trace,*=info'`、`ATHENA_SIM_LOG`、窗口里的勾选框 | `--log-file` 出 JSONL；调度确定性 ⇒ 两次运行可逐行 diff |
 | 符号 | `--elf .build/*.elf` | PC 在日志/trace/断点/profiler 里显示成 `matrix_scan+0x1a` |
 | GDB | `--gdb 3333`（`--gdb-wait` 复位即停） | 两核 = thread 1/2 |
 | 指令 trace | `--trace` / `--trace-file` | 环形缓冲 4096；会强制解释器 |
 | watchpoint | `--watch ADDR[,LEN]`、`--watch-after MS` | 会关掉本地码 |
 | 采样 profiler | 每次运行结束自动打印；`--prof-top N` | 一片采一次 PC |
 | 块普查 | `--prof-blocks` | 长度直方图 + 最热块头 |
-| 存档 | `--save-state` / `--load-state`、GUI 的 F6/F7 | 含 flash，位精确 |
+| 存档 | `--save-state`（运行结束时写）/ `--load-state`、窗口里 F6/F7 存取 `--state-file` | 含 flash，位精确 |
 | 控制 socket | `--ctl-port N`：`key 9,0` / `down` / `up` / `shot f.png` / `leds` / `state` / `log` / `save` / `load` / `quit` | Enter 是 `9,0`，用来确认安装对话框 |
 | Raw HID 桥 | `--hid-port N` + `export ATHENA_HID_SIM=127.0.0.1:N` | 真 `host_tool` 的每条命令都能对仿真器原样跑 |
 | 死锁提示 | 自动 | 两核 stall 计数都过 10 万时报双核疑似死锁 |
@@ -614,6 +621,9 @@ slot app 是**可重定位的原生 ARM Thumb 模块**，不是脚本、不是�
 
 | 文件 | 职责 |
 |---|---|
+| `src/sim/main.c` | 入口：命令行 → 日志/符号 → 装机器（`sim_open()`）→ 选一个循环；打包后双击时自己找 `Resources/` 和可写的 flash 目录 |
+| `src/sim/options.c` / `options.h` | 唯一一张参数表与 `sim_opts_t`，两个循环共用 |
+| `src/sim/gui/run_window.c` / `headless/run_headless.c` | 两个驱动循环本身 |
 | `src/sim/core/sim.h` | 几何常量、`sim_t` / `cpu_t` / `sim_config_t`、全部对外 API |
 | `src/sim/core/cpu_armv6m.c` | ARMv6-M 语义、`exec_decoded`、`cpu_run_interp`、`cpu_run_blocked`、`jit_ld*/st*`、`jit_exec_one` |
 | `src/sim/core/machine.c` | 生命周期、启动、双核调度、自旋节流、采样 profiler、块普查 |
@@ -632,7 +642,8 @@ slot app 是**可重定位的原生 ARM Thumb 模块**，不是脚本、不是�
 | `src/sim/image/app_install.c` | 离线 `.app` 装槽（复用 host_tool 的重定位） |
 | `src/sim/board/athena75_board.c` | 88 级矩阵移位链、按键注入、背光 |
 | `src/sim/README.md` | 用户向使用说明 |
-| `tools/build_sim.sh` / `tools/run_sim.sh` / `tools/sim_regress.py` | 构建 / 启动 / 像素回归 |
+| `tools/build_sim.sh` / `tools/run_sim.sh` / `tools/sim_regress.py` | 构建打包 / 启动 / 像素回归 |
+| `tools/sim_bin.sh` | 包里那个可执行文件的路径，脚本共用 |
 
 ## 8. 常用命令
 
@@ -641,16 +652,18 @@ slot app 是**可重定位的原生 ARM Thumb 模块**，不是脚本、不是�
 bash $KB/tools/build_sim.sh
 bash $KB/tools/build_sim.sh --windows
 
-# GUI
-artifacts/sim/<os>/athena_sim --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 \
-                              --flash flash.bin
+# 可执行文件在包里（macOS 换成 .app/Contents/MacOS/Athena75 Simulator）
+SIM="artifacts/sim/windows/Athena75 Simulator/Athena75 Simulator.exe"
+
+# 窗口
+"$SIM" --uf2 artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2 --flash flash.bin
 
 # 无头 + 装 app + 出图
-artifacts/sim/<os>/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin \
-    --install-app artifacts/apps/maze.app --run-ms 4000 --png screen.png
+"$SIM" --headless --uf2 <fw.uf2> --flash flash.bin \
+    --install-app artifacts/apps/maze.app --run-ms 4000 --panel-png screen.png
 
 # 让真 host_tool 对着仿真器说话
-artifacts/sim/<os>/athena_sim_cli --uf2 <fw.uf2> --flash flash.bin --realtime --hid-port 4711
+"$SIM" --headless --uf2 <fw.uf2> --flash flash.bin --realtime --hid-port 4711
 export ATHENA_HID_SIM=127.0.0.1:4711
 
 # 三档对比 / 排查 JIT 差异

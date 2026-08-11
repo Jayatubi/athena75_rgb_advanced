@@ -7,12 +7,13 @@
 #   bash tools/sim_screenshot.sh                 # launcher + fish
 #   bash tools/sim_screenshot.sh wfc             # launcher + one named app
 #
-# The window screenshots itself: `--shot MS PATH` reads the render target back at
-# a given point on the *virtual* clock and exits, so the result does not depend on
-# a display server, a window manager, or how fast the host emulates.
+# The window screenshots itself: `--window-png MS PATH` reads the render target
+# back at a given point on the *virtual* clock and exits, so the result does not
+# depend on a display server, a window manager, or how fast the host emulates.
 #
 # Boot is the slow part (matrix_scan() only comes up around nine virtual seconds
-# in), so it happens once headless and is saved; each shot resumes that machine.
+# in), so it happens once with --headless and is saved; each shot is the window
+# resuming that machine -- the same executable both times.
 #
 # Output: build/sim-shot/{launcher,<app>}.png, and the launcher one re-encoded
 # into docs/sim.png, which is what the readmes show.
@@ -33,13 +34,12 @@ SETTLE_MS=14000
 GIF_KEY=8,2         # gif: keyboard mode -> OS mode
 RIGHT_KEY=8,3       # moves the launcher selection
 ENTER_KEY=9,0       # launches the selected app
-# Key times here are absolute on the virtual clock, because that is what the
-# window compares them against -- unlike the headless front end, where they are
-# relative to the run. Two things decide them: a press is held for 40 virtual
-# ms and only lands if a rendered frame falls inside it (so no --turbo, where
-# one frame can be worth two seconds), and the firmware ignores input for a
+# Every time below is measured from where the restored machine starts, not from
+# the cold boot that produced it. Two things decide them: a press is held for 40
+# virtual ms and only lands if a rendered frame falls inside it (so no --turbo,
+# where one frame can be worth two seconds), and the firmware ignores input for a
 # moment after the machine is restored (so the gif key waits).
-GIF_MS=$((SETTLE_MS + 2000))
+GIF_MS=2000
 STEP_MS=700
 
 # macOS and Windows are the two builds there are, so everything else -- which in
@@ -49,9 +49,9 @@ case "$(uname -s)" in
     Darwin) OS=macos;   EXE=     ;;
     *)      OS=windows; EXE=.exe ;;
 esac
-CLI="${ROOT}/artifacts/sim/${OS}/athena_sim_cli${EXE}"
-GUI="${ROOT}/artifacts/sim/${OS}/athena_sim${EXE}"
-for f in "${CLI}" "${GUI}" "${FW}"; do
+. "${KBD}/tools/sim_bin.sh"
+SIM="$(sim_bin "${OS}" "${ROOT}")"
+for f in "${SIM}" "${FW}"; do
     [[ -f "${f}" ]] || { echo "error: missing ${f} (tools/build_sim.sh)" >&2; exit 1; }
 done
 
@@ -74,7 +74,7 @@ INSTALL=()
 for a in "${APPS[@]}"; do
     INSTALL+=(--install-app "$(winpath "${ROOT}/artifacts/apps/${a}.app")")
 done
-"${CLI}" --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
+"${SIM}" --headless --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
     "${INSTALL[@]}" --log '*=warn' --run-ms "${SETTLE_MS}" \
     --save-state "$(winpath "${STATE}")"
 
@@ -82,10 +82,10 @@ shot() { # <name> <shot_ms> [key args...]
     local name=$1 at=$2
     shift 2
     echo ">> ${name}.png at ${at} ms"
-    "${GUI}" --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
+    "${SIM}" --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
         --load-state "$(winpath "${STATE}")" --log '*=warn' \
         --vial-json "$(winpath "${KBD}/keymaps/vial/vial.json")" \
-        "$@" --shot "${at}" "$(winpath "${OUT}/${name}.png")"
+        "$@" --window-png "${at}" "$(winpath "${OUT}/${name}.png")"
 }
 
 shot launcher $((GIF_MS + 2000)) --key "${GIF_KEY},${GIF_MS}"

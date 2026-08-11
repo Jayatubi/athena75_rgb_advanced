@@ -6,9 +6,9 @@
 # the shipped firmware, a flash image that persists between runs, and the
 # control and Raw HID sockets. Builds first if the binary is missing.
 #
-#   tools/run_sim.sh                 GUI on build/flash.bin
+#   tools/run_sim.sh                 the window, on build/flash.bin
 #   tools/run_sim.sh --fresh         wipe the flash image first (cold boot)
-#   tools/run_sim.sh --headless ...  athena_sim_cli instead, same defaults
+#   tools/run_sim.sh --headless ...  the same machine with no window
 #   tools/run_sim.sh --windows ...   run the .exe build from WSL (native window)
 #
 # Anything else is passed straight through, and overrides the defaults because
@@ -19,6 +19,9 @@ KB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$KB/../../.." && pwd)"   # artifacts/ lives at the repo root
 CALLER_PWD="$PWD"
 cd "$KB"
+
+# The one copy of the emulator lives inside the desktop package.
+. "$KB/tools/sim_bin.sh"
 
 # A relative path in the arguments means "relative to where you typed it", not to
 # $KB, which is where this script has just cd'd and where the simulator would
@@ -41,21 +44,30 @@ FW="$ROOT/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
 CTL_PORT="${ATHENA_SIM_CTL_PORT:-47800}"
 HID_PORT="${ATHENA_SIM_HID_PORT:-47801}"
 
-exe=athena_sim
 windows=0
 args=()
+# --window-png is the one option whose path is not the next argument -- the
+# timestamp comes first -- so a path argument is counted down to rather than
+# taken on sight.
 want_path=0
 for a in "$@"; do
+    if [ "$want_path" -gt 1 ]; then
+        want_path=$((want_path - 1))
+        args+=("$a")
+        continue
+    fi
     if [ "$want_path" = 1 ]; then
         args+=("$(abspath "$a")")
         want_path=0
         continue
     fi
     case "$a" in
-        --headless) exe=athena_sim_cli ;;
         --windows)  windows=1 ;;
         --fresh)    rm -f "$FLASH" ;;
-        --install-app|--elf|--png|--vial-json|--log-file|--trace-file|--load-state|--save-state)
+        --window-png)
+            want_path=2
+            args+=("$a") ;;
+        --install-app|--elf|--panel-png|--vial-json|--log-file|--trace-file|--load-state|--save-state|--state-file)
             want_path=1
             args+=("$a") ;;
         *)          args+=("$a") ;;
@@ -74,11 +86,10 @@ if [ "$windows" = 1 ]; then
     # The MSVC build launched from WSL: a native window, but the process cannot
     # read /mnt paths, so everything it opens has to be handed over as Windows.
     SIM_OS=windows
-    exe="$exe.exe"
-    BIN="$ROOT/artifacts/sim/$SIM_OS/$exe"
+    BIN="$(sim_bin windows "$ROOT")"
     [ -f "$BIN" ] || bash "$KB/tools/build_sim.sh" --windows
     if [ ! -f "$BIN" ]; then
-        echo "$exe was not built; see tools/build_sim.sh --windows" >&2
+        echo "athena_sim was not built; see tools/build_sim.sh --windows" >&2
         exit 1
     fi
     mkdir -p "$(dirname "$FLASH")"
@@ -90,23 +101,29 @@ if [ "$windows" = 1 ]; then
     converted=()
     want_path=0
     for a in ${args[@]+"${args[@]}"}; do
+        if [ "$want_path" -gt 1 ]; then
+            want_path=$((want_path - 1))
+            converted+=("$a")
+            continue
+        fi
         if [ "$want_path" = 1 ]; then
             converted+=("$(wslpath -w "$a" | sed 's/\\/\//g')")
             want_path=0
             continue
         fi
         case "$a" in
-            --install-app|--elf|--png|--vial-json|--log-file|--trace-file|--load-state|--save-state)
+            --window-png) want_path=2 ;;
+            --install-app|--elf|--panel-png|--vial-json|--log-file|--trace-file|--load-state|--save-state|--state-file)
                 want_path=1 ;;
         esac
         converted+=("$a")
     done
     args=(${converted[@]+"${converted[@]}"})
 else
-    BIN="$ROOT/artifacts/sim/$SIM_OS/$exe"
+    BIN="$(sim_bin "$SIM_OS" "$ROOT")"
     [ -x "$BIN" ] || bash "$KB/tools/build_sim.sh"
     if [ ! -x "$BIN" ]; then
-        echo "$exe was not built (SDL2 missing? try --headless)" >&2
+        echo "athena_sim was not built; see tools/build_sim.sh" >&2
         exit 1
     fi
     mkdir -p "$(dirname "$FLASH")"

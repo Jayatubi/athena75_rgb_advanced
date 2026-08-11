@@ -33,18 +33,20 @@ FW="${REPO_ROOT}/artifacts/firmware/ydkb_athena75_rgb_advanced_vial.uf2"
 APP_PKG="${REPO_ROOT}/artifacts/apps/${APP}.app"
 OUT="${REPO_ROOT}/build/sim-preview/${APP}"
 
-# The .exe leads: it is the build that exists under WSL, and it runs there.
-CANDS=(windows/athena_sim_cli.exe macos/athena_sim_cli)
+# The one copy of the emulator lives inside the desktop package; the .exe leads,
+# being the build that exists under WSL, and it runs there.
+. "${KBD_DIR}/tools/sim_bin.sh"
 SIM=""
-for cand in "${CANDS[@]}"; do
-    if [[ -x "${REPO_ROOT}/artifacts/sim/${cand}" ]]; then
-        SIM="${REPO_ROOT}/artifacts/sim/${cand}"
+for os in windows macos; do
+    cand="$(sim_bin "${os}" "${REPO_ROOT}")"
+    if [[ -x "${cand}" ]]; then
+        SIM="${cand}"
         break
     fi
 done
 # Name one anyway when there is none, so the check below reports a missing file
 # instead of an empty path.
-[[ -n "${SIM}" ]] || SIM="${REPO_ROOT}/artifacts/sim/${CANDS[0]}"
+[[ -n "${SIM}" ]] || SIM="$(sim_bin windows "${REPO_ROOT}")"
 for f in "${SIM}" "${FW}" "${APP_PKG}"; do
     if [[ ! -f "${f}" ]]; then
         echo "error: missing ${f}" >&2
@@ -73,7 +75,7 @@ head -c $((16 * 1024 * 1024)) /dev/zero | tr '\000' '\377' > "${FLASH}"
 # matrix_scan() only comes up around nine virtual seconds in, so keys pressed
 # before that are simply not seen; boot that far once and save the machine.
 echo ">> settling (install ${APP}.app, boot to interactive)"
-"${SIM}" --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
+"${SIM}" --headless --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
     --install-app "$(winpath "${APP_PKG}")" \
     --log '*=warn' --run-ms 14000 --save-state "$(winpath "${STATE}")"
 
@@ -88,10 +90,10 @@ done
 for ms in "${SHOTS[@]}"; do
     png="${OUT}/${APP}_${ms}.png"
     echo ">> run ${ms} ms -> ${png}"
-    "${SIM}" --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
+    "${SIM}" --headless --uf2 "$(winpath "${FW}")" --flash "$(winpath "${FLASH}")" \
         --load-state "$(winpath "${STATE}")" \
         "${KEY_ARGS[@]}" \
-        --log '*=warn' --run-ms "${ms}" --png "$(winpath "${png}")"
+        --log '*=warn' --run-ms "${ms}" --panel-png "$(winpath "${png}")"
 done
 
 echo ">> done: ${OUT}"

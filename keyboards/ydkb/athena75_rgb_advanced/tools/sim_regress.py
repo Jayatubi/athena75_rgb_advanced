@@ -9,7 +9,7 @@ in tests/golden/. Because the scheduler is deterministic, a passing run is
 byte-exact, not "close enough" -- so any diff at all is a real behaviour change.
 
 The goldens can come from the real keyboard: `host_tool snapshot` writes the
-same 128x128 RGB888 PNG that --png does, and the emulator's RGB565 conversion
+same 128x128 RGB888 PNG that --panel-png does, and the emulator's RGB565 conversion
 was matched to host/snapshot.c precisely so the two are directly comparable.
 
     tools/sim_regress.py                 run every case
@@ -111,7 +111,8 @@ def run_case(sim, case, outdir, bless, keep_log, extra=()):
     with open(flash, "r+b") as f:
         f.write(b"\xff" * (16 * 1024 * 1024))
 
-    common = [sim, "--uf2", FIRMWARE, "--flash", flash, "--log", "*=warn"] + list(extra)
+    common = [sim, "--headless", "--uf2", FIRMWARE, "--flash", flash,
+              "--log", "*=warn"] + list(extra)
     setup = []
     for app in case.get("apps", []):
         setup += ["--install-app", os.path.join(APPS, app)]
@@ -138,7 +139,7 @@ def run_case(sim, case, outdir, bless, keep_log, extra=()):
             return "warm-up exited %d\n%s" % (warm.returncode, warm.stderr[-800:])
         measured = common + setup + drive
 
-    proc = subprocess.run(measured + ["--png", png],
+    proc = subprocess.run(measured + ["--panel-png", png],
                           capture_output=True, text=True)
     if keep_log:
         open(log, "w").write(proc.stderr)
@@ -158,29 +159,34 @@ def run_case(sim, case, outdir, bless, keep_log, extra=()):
 
 
 def default_sim():
-    """Where tools/build_sim.sh leaves the headless runner, else whatever is on PATH."""
+    """Where tools/build_sim.sh leaves the simulator, else whatever is on PATH."""
     # Two builds are archived, and everything that is not a Mac -- Windows itself,
-    # and WSL, where the .exe runs too -- is served by the MSVC one.
-    osname = "macos" if platform.system() == "Darwin" else "windows"
-    exe = "athena_sim_cli" if osname == "macos" else "athena_sim_cli.exe"
-    built = os.path.join(ROOT, "artifacts", "sim", osname, exe)
-    return built if os.path.exists(built) else exe
+    # and WSL, where the .exe runs too -- is served by the MSVC one. There is one
+    # copy of each and it lives inside the desktop package; tools/sim_bin.sh says
+    # the same thing for the shell scripts.
+    app = "Athena75 Simulator"
+    if platform.system() == "Darwin":
+        built = os.path.join(ROOT, "artifacts", "sim", "macos",
+                             app + ".app", "Contents", "MacOS", app)
+    else:
+        built = os.path.join(ROOT, "artifacts", "sim", "windows", app, app + ".exe")
+    return built if os.path.exists(built) else "athena_sim"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sim", default=os.environ.get("ATHENA_SIM", default_sim()),
-                    help="path to athena_sim_cli")
+                    help="path to athena_sim")
     ap.add_argument("--bless", action="store_true", help="record goldens instead of checking")
     ap.add_argument("--case", action="append", help="run only these cases")
     ap.add_argument("--keep", metavar="DIR", help="keep the run artifacts here")
     ap.add_argument("--extra", action="append", default=[], metavar="ARG",
-                    help="extra athena_sim_cli argument, e.g. --extra=--jit")
+                    help="extra athena_sim argument, e.g. --extra=--jit")
     args = ap.parse_args()
 
     sim = shutil.which(args.sim) or args.sim
     if not os.path.exists(sim):
-        print("cannot find athena_sim_cli (%s); pass --sim or set ATHENA_SIM" % args.sim)
+        print("cannot find athena_sim (%s); pass --sim or set ATHENA_SIM" % args.sim)
         return 2
     if not os.path.exists(FIRMWARE):
         print("missing firmware artifact %s" % FIRMWARE)

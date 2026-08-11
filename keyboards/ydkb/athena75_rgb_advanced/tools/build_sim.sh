@@ -2,26 +2,30 @@
 # Copyright 2026 jayatubi
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# Builds athena_sim. The GUI target needs SDL2, and every platform gets it the
-# same way: the sources are fetched and compiled once into build/sdl2/ as a
-# static library, so the executable does not depend on whatever SDL2 the machine
-# that produced it happened to have. Without a usable SDL2 only the headless
-# runner is built, which is all CI needs.
+# Builds athena_sim -- one executable holding both ways to run it, the window and
+# --headless. The window needs SDL2, and every platform gets it the same way: the
+# sources are fetched and compiled once into build/sdl2/ as a static library, so
+# the executable does not depend on whatever SDL2 the machine that produced it
+# happened to have. Without a usable SDL2 the binary is still built and still
+# runs headless, which is all CI needs.
 #
-# Objects land in build/sim (scratch); the executables land in
-# artifacts/sim/<os>/ alongside host_tool.
+# Objects land in build/sim (scratch); the result lands in artifacts/sim/<os>/
+# alongside host_tool, in the shape its desktop double-clicks -- a .app on macOS,
+# a program folder on Windows -- and nothing beside it. That package is the only
+# copy there is: the executable inside it is also what the scripts run, since
+# --headless is just a way of running the same binary. tools/sim_bin.sh is where
+# they look it up.
 #
-#   tools/build_sim.sh              configure + build
+#   tools/build_sim.sh              configure, build, package
 #   tools/build_sim.sh --clean      throw the build directory away first
 #   tools/build_sim.sh --test       build, then run the pixel regression
 #   tools/build_sim.sh --windows    MSVC build driven from WSL -> .exe
-#   tools/build_sim.sh --no-sdl     headless runner only, no SDL2 at all
-#   tools/build_sim.sh --app        also package it as something double-clickable:
-#                                   a .app on macOS, a program folder on Windows
+#   tools/build_sim.sh --no-sdl     leave the window out; nothing to package then,
+#                                   so the bare binary stays where the build put it
 #
-# macOS and Windows are the two platforms that get archived, and --app gives each
-# the shape its desktop expects, both wearing the icon rendered from the same
-# src/sim/gui/appicon.png. There is no Linux build; from WSL, use --windows.
+# macOS and Windows are the two platforms that get archived, and both packages
+# wear the icon rendered from the same src/sim/gui/appicon.png. There is no Linux
+# build; from WSL, use --windows.
 #
 # build/sdl2/ is a cache that outlives --clean; delete it to force SDL2 to be
 # fetched and rebuilt. ATHENA_SDL2_DIR points at an SDL2 install of your own
@@ -43,14 +47,12 @@ clean=0
 test=0
 windows=0
 no_sdl=0
-app_bundle=0
 for a in "$@"; do
     case "$a" in
         --clean)   clean=1 ;;
         --test)    test=1 ;;
         --windows) windows=1 ;;
         --no-sdl)  no_sdl=1 ;;
-        --app)     app_bundle=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -67,7 +69,8 @@ if [ "$SIM_OS" = linux ]; then
     exit 2
 fi
 OUT="$ROOT/artifacts/sim/$SIM_OS"
-APP_NAME="Athena75 Simulator"
+# SIM_APP_NAME, and where the packaged executable ends up.
+. "$KB/tools/sim_bin.sh"
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
 winpath() { wslpath -w "$1" | sed 's/\\/\//g'; }
@@ -195,14 +198,14 @@ fi
 #
 # Double-clicked, athena_sim is handed no arguments at all and still needs a
 # firmware image, a layout and a flash. It finds the first two for itself, in a
-# Resources/ directory beside the binary (src/sim/gui/main_gui.c), which is why
-# the two platforms below differ only in the wrapping and neither needs a launcher
+# Resources/ directory beside the binary (src/sim/main.c), which is why the two
+# platforms below differ only in the wrapping and neither needs a launcher
 # script in front of the executable. The flash cannot live there -- a .app is
 # read-only and Program Files worse -- so it goes to the per-user state directory
 # on first run, and the apps staged here go into it as it is created.
 #
-# APP_NAME is also the name athena_sim gives that state directory, so the two have
-# to agree; BUNDLE_NAME in main_gui.c is the other half.
+# SIM_APP_NAME is also the name athena_sim gives that state directory, so the two
+# have to agree; BUNDLE_NAME in main.c is the other half.
 
 stage_resources() { # <resources dir>
     local res="$1"
@@ -214,22 +217,15 @@ stage_resources() { # <resources dir>
     done
 }
 
-have_window_build() { # <executable>
-    [ -f "$1" ] && return 0
-    echo "no windowed build to package (SDL2 was not available)" >&2
-    return 1
-}
-
 package_macos() {
-    local app="$OUT/$APP_NAME.app"
+    local app="$OUT/$SIM_APP_NAME.app"
     local res="$app/Contents/Resources"
-    have_window_build "$OUT/athena_sim" || return 1
 
     rm -rf "$app"
     mkdir -p "$app/Contents/MacOS"
     # Named for the app rather than the binary: this is the process macOS ends up
     # running, and its name is what the Dock and the menu bar show.
-    cp "$OUT/athena_sim" "$app/Contents/MacOS/$APP_NAME"
+    cp "$OUT/athena_sim" "$app/Contents/MacOS/$SIM_APP_NAME"
     stage_resources "$res"
     make_icon --icns "$res/AppIcon.icns" || true
 
@@ -238,10 +234,10 @@ package_macos() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>               <string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key>        <string>$APP_NAME</string>
+    <key>CFBundleName</key>               <string>$SIM_APP_NAME</string>
+    <key>CFBundleDisplayName</key>        <string>$SIM_APP_NAME</string>
     <key>CFBundleIdentifier</key>         <string>com.jayatubi.athena75.simulator</string>
-    <key>CFBundleExecutable</key>         <string>$APP_NAME</string>
+    <key>CFBundleExecutable</key>         <string>$SIM_APP_NAME</string>
     <key>CFBundleIconFile</key>           <string>AppIcon</string>
     <key>CFBundlePackageType</key>        <string>APPL</string>
     <key>CFBundleVersion</key>            <string>1.0</string>
@@ -260,16 +256,13 @@ PLIST
 
 # Windows has no bundle format, so the equivalent is a folder that can be moved
 # around whole: the executable, and Resources/ beside it. The icon is already
-# inside the .exe, linked in as a resource at compile time. The plain
-# athena_sim.exe stays where it was, since the scripts and host_tool look for it
-# by that name.
+# inside the .exe, linked in as a resource at compile time.
 package_windows() {
-    local app="$OUT/$APP_NAME"
-    have_window_build "$OUT/athena_sim.exe" || return 1
+    local app="$OUT/$SIM_APP_NAME"
 
     rm -rf "$app"
     mkdir -p "$app"
-    cp "$OUT/athena_sim.exe" "$app/$APP_NAME.exe"
+    cp "$OUT/athena_sim.exe" "$app/$SIM_APP_NAME.exe"
     # Only there when ATHENA_SDL2_DIR pointed at a shared SDL2; the source build
     # is static and the folder is self-contained without it.
     [ -f "$OUT/SDL2.dll" ] && cp "$OUT/SDL2.dll" "$app/"
@@ -279,17 +272,27 @@ package_windows() {
 
 echo
 echo "built:"
-for t in athena_sim_cli athena_sim athena_sim_cli.exe athena_sim.exe; do
-    [ -f "$OUT/$t" ] && echo "  $OUT/$t"
-done
-if [ "$app_bundle" = 1 ]; then
+SIM="$OUT/athena_sim"
+[ "$SIM_OS" = windows ] && SIM="$SIM.exe"
+if [ -n "$SDL_DIR" ]; then
     case "$SIM_OS" in
         macos)   package_macos ;;
         windows) package_windows ;;
     esac
+    # One copy only. The bare binary has just been packaged, and leaving it here
+    # would be a second one to keep in step; the executables an older layout left
+    # behind -- including the separate headless runner from before the two were
+    # merged -- go with it.
+    rm -f "$OUT/athena_sim" "$OUT/athena_sim.exe" \
+          "$OUT/athena_sim_cli" "$OUT/athena_sim_cli.exe"
+    SIM="$(sim_bin "$SIM_OS" "$ROOT")"
+else
+    # No window in it, so there is no package to put it in and nothing to
+    # double-click; what is left is a headless binary for CI.
+    echo "  $SIM"
 fi
 
 if [ "$test" = 1 ]; then
     echo
-    python3 "$KB/tools/sim_regress.py" --sim "$OUT/athena_sim_cli"
+    python3 "$KB/tools/sim_regress.py" --sim "$SIM"
 fi

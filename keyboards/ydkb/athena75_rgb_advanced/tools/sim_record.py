@@ -71,15 +71,20 @@ def pick_sim(root: Path) -> Path:
     # macOS first because that is the case where this interpreter and the emulator
     # share a loopback -- the ctl client below runs in this process. Driving the
     # .exe from WSL means reaching the Windows loopback, which 127.0.0.1 is not.
-    for rel in ("sim/macos/athena_sim_cli", "sim/windows/athena_sim_cli.exe"):
+    # There is one copy of the emulator and it lives inside the desktop package
+    # (tools/sim_bin.sh says the same thing for the shell scripts).
+    app = "Athena75 Simulator"
+    for rel in (f"sim/macos/{app}.app/Contents/MacOS/{app}", f"sim/windows/{app}/{app}.exe"):
         p = root / "artifacts" / rel
         if p.exists():
             return p
-    sys.exit("error: no athena_sim_cli in artifacts/sim/")
+    sys.exit("error: no athena_sim in artifacts/sim/ (tools/build_sim.sh)")
 
 
 def run_sim(sim: Path, args: list, quiet=True) -> None:
-    out = subprocess.run([str(sim)] + [str(a) for a in args],
+    # Always --headless: this is a recording, and a window would only slow the
+    # machine down to the speed of the screen it was being drawn on.
+    out = subprocess.run([str(sim), "--headless"] + [str(a) for a in args],
                          capture_output=quiet, text=True)
     if out.returncode != 0:
         if quiet:
@@ -271,7 +276,8 @@ def main() -> None:
     print(f">> recording {args.seconds:g}s at {eff_fps:.1f} fps "
           f"({step_ms} ms capture, {gif_delay} ms GIF delay)")
     proc = subprocess.Popen(
-        [str(sim), "--uf2", str(fw), "--flash", str(flash), "--load-state", str(state),
+        [str(sim), "--headless",
+         "--uf2", str(fw), "--flash", str(flash), "--load-state", str(state),
          "--ctl-port", str(args.port), "--log", "*=error", "--run-ms", str(total)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
