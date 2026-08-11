@@ -91,8 +91,13 @@ tags
 !keyboards/ydkb/athena75_rgb_advanced/src/app/**/icon.png
 !keyboards/ydkb/athena75_rgb_advanced/docs/apps/*.gif
 !keyboards/ydkb/athena75_rgb_advanced/docs/sim.png
-# ACE is local-only (see src/app/.gitignore), so its preview stays local too.
+# Previews of the two stock boot splashes in artifacts/boot/, rendered by
+# tools/qgf_preview.py. A splash built from your own artwork lives in
+# artifacts/boot/private/, and so does its preview.
+!keyboards/ydkb/athena75_rgb_advanced/docs/boot/*.gif
+# ACE is local-only (see src/app/.gitignore), so its previews stay local too.
 keyboards/ydkb/athena75_rgb_advanced/docs/apps/ace.gif
+keyboards/ydkb/athena75_rgb_advanced/docs/boot/ace.gif
 *.apng
 *.mng
 *.svg

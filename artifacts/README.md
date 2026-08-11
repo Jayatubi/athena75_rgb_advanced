@@ -18,6 +18,7 @@
 |------|------|
 | [`firmware/`](firmware) | `ydkb_athena75_rgb_advanced_vial.uf2` —— 最终版固件，第一次刷的就是它 |
 | [`apps/`](apps) | 打包好的 slot app（`.app`），装进键盘后在 OS 模式的启动器里出现 |
+| [`boot/`](boot) | 开机动画（`.qgf`），从原厂固件里分离出来的两段，详见 [`boot/readme.txt`](boot/readme.txt) |
 | [`host/`](host) | `host_tool`：macOS 原生二进制、Windows `.exe`。刷固件、装 app、截图、对时都靠它 |
 | [`sim/`](sim) | 仿真器 `athena_sim`。没有键盘也能把整套固件跑起来，详见 [`sim/readme.txt`](sim/readme.txt) |
 
@@ -78,6 +79,21 @@ MATRIX）还需要对一次时间：
 ```bash
 host_tool synctime         # 或 host_tool daemon 常驻对时
 ```
+
+### 换开机动画
+
+`boot/` 里放着从原厂固件分离出来的两段动画，装哪个都行；自己做的放
+`boot/private/`（这个目录不进 git），也一样能按名字装：
+
+```bash
+host_tool boot list                # 有哪些可选，各自多少帧
+host_tool boot install kbdfans     # 原厂 vial 键位实际播放的那段
+host_tool boot install athena      # 原厂固件内置的 Athena 字样
+host_tool boot info                # 键盘现在装的是什么
+```
+
+同样要在 LCD 上确认，写完下次开机生效。做新的见
+[`docs/usage.md`](../keyboards/ydkb/athena75_rgb_advanced/docs/usage.md#开机动画)。
 
 ### 键位配置的备份与恢复
 

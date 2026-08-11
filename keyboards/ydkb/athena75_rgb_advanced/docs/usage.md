@@ -21,6 +21,11 @@ OS 模式闲置 30 秒（`APP_OS_IDLE_MS`）自动退回键盘模式。
 
 开机顺序：boot 动画（flash `0x1040_0000` 起的 QGF，无效或空白则跳过）→ 启动器。
 
+固件不内置任何开机动画，播的完全是 boot 区里现有的那份数据：整帧、只重画一个矩形的
+delta 帧、字节 RLE 压缩都认，按每帧自带的 delay 播一遍就交给启动器。原厂那两段动画
+`host_tool boot list` 里就有（`artifacts/boot/`），换成自己的怎么做、怎么装，见
+[§9 构建与安装](#9-构建与安装)。
+
 | 操作 | 功能 |
 |------|------|
 | 方向键 | 在 2×2 图标网格里移动 |
@@ -113,6 +118,8 @@ Command `G` 仍映射旧接口 `next_gif_id()`，内置 ANIMATION 移除后是�
 | `backup [-o file.bin]` / `restore file.bin` | Vial、VIA 的 EEPROM 备份与恢复 |
 | `probe read ADDR [len]` / `erase` / `prog` | JEDEC 识别 + 探针读写 |
 | `app pack / info / relocate / install / update / launch` | 打包、检查、重定位、安装、升级、直接启动 slot app |
+| `boot list` | 列出 `artifacts/boot/` 与 `artifacts/boot/private/` 里的开机动画 |
+| `boot install <名字\|file.qgf> [--method put\|uf2]` / `boot info` / `boot erase` | 写、查、删开机动画；`put` 走 USB 并在 LCD 上确认，`uf2` 改走 BOOTSEL |
 
 不带参数时默认的 UF2 路径由 `src/host/common/paths.c` 解析，优先
 `artifacts/firmware/`。
@@ -155,9 +162,49 @@ host_tool app install  path/to/wfc.app --method uf2  # 大包 / 多 slot 时可�
 host_tool app update   path/to/matrix.app            # 只换代码和图标，保留 data 与 save
 host_tool app info     path/to/settings.app
 
-# 开机动画
-python3 tools/png_to_uf2.py boot path/to/splash.png  # -> boot UF2，烧到 boot 区
+# 开机动画：现成的两段（从原厂固件分离出来，见 artifacts/boot/readme.txt）
+host_tool boot list                          # 可选的名字，各自多少帧
+host_tool boot install kbdfans               # 原厂 vial 键位实际播放的那段
+host_tool boot install athena                # 原厂固件内置的 Athena 字样
+
+# 自己做：GIF / 视频 / PNG 序列 / 单张图 -> 128x128 QGF
+python3 tools/make_boot_anim.py demo.gif -o boot.qgf          # GIF 自带时序
+python3 tools/make_boot_anim.py clip.mp4 --fps 20 --duration 4 -o boot.qgf
+python3 tools/make_boot_anim.py frames/ --fps 24 -o boot.qgf  # PNG 序列
+python3 tools/make_boot_anim.py logo.png --hold 2000 -o boot.qgf         # 静态开机图
+python3 tools/make_boot_anim.py logo.png --hold 900 --fade 500 \
+        -o ../../../artifacts/boot/private/ace.qgf                       # 淡入-停留-淡出
+
+python3 tools/qgf_preview.py boot.qgf -o boot.gif   # 装之前先在电脑上看一眼
+
+host_tool boot install boot.qgf              # USB 直传，键盘上按 WRITE 确认
+host_tool boot install ace                   # 名字也行：artifacts/boot[/private]/<名字>.qgf
+host_tool boot install boot.qgf --method uf2 # 大文件走 BOOTSEL，快一个数量级
+host_tool boot info                          # 现在装的是什么
+host_tool boot erase                         # 删掉，之后开机直接进启动器
 ```
+
+`artifacts/boot/` 里跟踪着两段原厂动画（预览图见 [`docs/boot/`](boot)），
+`artifacts/boot/private/` 不进 git——自己做的放那儿，`boot list` 一样列得出来，
+`boot install <名字>` 一样装得上。`qgf_preview.py` 按固件同一套规则解码，
+所以 GIF 里是什么样，屏上就是什么样。`--fade MS` 会在
+首尾各接一段与黑色的混合帧（`--fade-in` / `--fade-out` 可分开给），末帧收在全黑上，
+切到启动器时不会跳一下。
+
+开机动画区有 4 MiB。转换器对每一帧都会在「整帧 / 只存变化矩形」和「原样 / RLE」之间
+挑最小的那种，画面越静省得越多——实拍视频通常能压到原始体积的几个百分点。超出预算
+时默认自动折半降帧率并把时长补回留下的帧（播放速度不变），过程会打印出来；
+`--no-fit-budget` 则改成直接报错。`--fit cover|contain|stretch` 决定非正方形素材怎么
+装进 128×128。视频需要 `ffmpeg`（没有会明确提示，可以先自己转成 GIF 或 PNG 序列）；
+脚本本身需要 Pillow，装了 numpy 会快很多。
+
+传输速度：raw HID 大约 20 KB/s，所以 2 MB 的动画走 `put` 要几分钟，`--method uf2`
+重启进 BOOTSEL 拷贝只要几秒——host_tool 在文件偏大时会主动提醒。
+
+每次安装都要把动画覆盖的每个 4 KiB 扇区擦一遍（4 MiB 就是 1024 次），扇区寿命有限，
+所以先在仿真器上把效果调满意再写进键盘：`bash tools/sim_boot_check.sh demo.gif` 会把
+转换、烧进仿真 flash、开机播放跑一遍，产出面板截图。
+单张 PNG 的 alpha 淡入淡出开机图是另一条老路径：`python3 tools/png_to_uf2.py boot x.png`。
 
 图标（`src/app/<app>/icon.png`，32×32）缺失时回落到 SDK 默认图标。有几个 app 的图标是
 脚本画出来的，重画方式见各自的说明。

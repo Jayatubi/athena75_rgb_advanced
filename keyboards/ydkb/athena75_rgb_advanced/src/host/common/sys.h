@@ -19,6 +19,11 @@ void sys_msleep(int ms);
 // on failure. Returns out.
 char *sys_exe_dir(char *out, size_t outlen);
 
+// Call fn(name, ctx) once per regular file in dir, name being the bare file name
+// in whatever order the OS hands them over. Returns the number of files visited,
+// or -1 if the directory cannot be read.
+int sys_list_dir(const char *dir, void (*fn)(const char *name, void *ctx), void *ctx);
+
 // Detach the current process into the background (for a resident daemon).
 //   returns 1  -> we are the surviving background process; keep running.
 //   returns 0  -> we are the foreground/parent; caller should exit(0).

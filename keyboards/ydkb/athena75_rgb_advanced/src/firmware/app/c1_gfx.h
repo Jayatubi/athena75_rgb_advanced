@@ -27,6 +27,7 @@
 // renderer is removed from the OS (see os-launcher); the address now points into the
 // boot region and holds no valid keyframe data.
 #define ANIM_QGF_ADDR ((const uint8_t *)(0x1060u << 16)) // legacy keyframe base (pending removal)
+#define ANIM_QGF_BYTES 0x200000u // what is left of the boot region after that address
 #define MAX_ANIM_FRAMES 319 // legacy sanity bound (pending removal)
 
 // ---- Shared state -----------------------------------------------------------
@@ -47,16 +48,8 @@ void     c1_lcd_apply_persisted(void);
 // when this changes. Panel wake via lcd_switch restores fbShow to GRAM instead.
 uint32_t c1_wake_seq(void);
 
-// ---- QGF frame access (boot splash + keyframe renderer) ---------------------
-// QGF layout (see tools/host png_to_uf2): a graphics descriptor, a frame-offset
-// table at +28, then per-frame blocks. Payload is big-endian RGB565 (fbShow's
-// byte order). Implemented in c1_display.c.
-uint16_t       qgf_frame_count(const uint8_t *q);
-const uint8_t *qgf_frame_ptr(const uint8_t *q, uint16_t i);
-uint8_t        qgf_frame_comp(const uint8_t *q, uint16_t i);
-uint16_t       qgf_frame_delay(const uint8_t *q, uint16_t i);
-uint32_t       qgf_frame_len(const uint8_t *q, uint16_t i);
-void           qgf_rle_decode(const uint8_t *src, uint32_t src_len, uint8_t *dst, uint32_t out_len);
+// Images stored in flash are read through app/qgf.h, which walks the QGF block
+// structure; payload pixels are big-endian RGB565, i.e. fbShow's byte order.
 
 // ---- Low-level RGB565 pixel math (header-only, shared by the UI blitter and
 // the animation compositors) -------------------------------------------------

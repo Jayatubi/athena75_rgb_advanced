@@ -1,11 +1,15 @@
 // Copyright 2026 jayatubi
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Slot-app upload (raw-HID 0xFD 0x64). Loads an independently compiled .app into
-// a flash slot in the last-8MB app area. Mirrors the firmware-flash prompt: the
-// host asks (BEGIN), the board raises the generic "Install app?" dialog and the
-// write only proceeds once the user accepts; while erasing/programming the LCD
-// shows a progress bar (rendered on core1 between the per-page flash writes).
+// Host-driven flash upload (raw-HID 0xFD 0x64). Mirrors the firmware-flash
+// prompt: the host asks (BEGIN), the board raises a confirm dialog and the write
+// only proceeds once the user accepts; while erasing/programming the LCD shows a
+// progress bar (rendered on core1 between the per-page flash writes).
+//
+// Two things can be uploaded, and they differ only in where the accepted session
+// is allowed to write: a slot app goes into its slot in the last-8MB app area, a
+// boot animation goes to the start of the boot region. Erase/write/end are the
+// same operations either way.
 //
 // core0 owns the state machine (HID handler + dialog action); core1 only reads
 // it to render (app_upload_render_tick in c1_display.c).
@@ -25,10 +29,21 @@ enum {
     APPUP_EXITING = 6,  // accepted; slot app tearing down before flash
 };
 
+// What an upload is aimed at (wire values, must match host proto.h).
+enum {
+    APPUP_TGT_SLOT = 0, // a slot app, placed in the app area
+    APPUP_TGT_BOOT = 1, // the boot animation, at the start of the boot region
+};
+
 // Allowed flash window for slot apps: the last 8 MB (never firmware/EEPROM/boot).
 // Matches apps/sdk/app.ld and tools/host proto.h ATHENA_APP_AREA_*.
 #define APP_AREA_BEGIN 0x10800000u
 #define APP_AREA_END   0x11000000u
+
+// The boot animation region, the 4 MB between the firmware and the app slots. An
+// image starts at the beginning of it; the splash player reads it from there.
+#define BOOT_AREA_BEGIN 0x10400000u
+#define BOOT_AREA_END   0x10800000u
 
 // Slot geometry (must match app.ld + host proto/app_pkg). The tail is fixed:
 //   0x3E800..0x3F000  32x32 big-endian RGB565 icon (2048 B)
@@ -45,8 +60,12 @@ enum {
 // slot is rejected. Invalid/full requests become DENIED with no dialog.
 void     app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
                             uint8_t slot_count, bool code_only, const char *name);
+// Same, for a boot animation of `total` bytes written to BOOT_AREA_BEGIN. Sizes
+// that do not fit the region are DENIED with no dialog.
+void     app_upload_request_boot(uint32_t total);
 uint8_t  app_upload_state(void);
-uint32_t app_upload_slot(void);    // selected slot, or 0 when no slot was accepted
+uint8_t  app_upload_target(void);  // APPUP_TGT_*, what the current session writes
+uint32_t app_upload_slot(void);    // selected slot / boot base, 0 when nothing was accepted
 uint32_t app_upload_written(void);
 uint32_t app_upload_total(void);
 // Erase one 4K sector / accumulate+program one 256B page. Both require the user

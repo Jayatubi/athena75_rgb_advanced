@@ -79,8 +79,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define PROBE_ERASE   0x02 // args: data[3..6]=addr(BE32) -> data[3]=ok  (erase 4K sector)
 #define PROBE_PROG    0x03 // args: data[3..6]=addr(BE32) -> data[3]=ok  (write test page)
 
-// Slot-app upload (0xFD 0x64 <sub>): confirm on the LCD, then erase/program an
-// independently compiled .app into a flash slot. See app_upload.{c,h}.
+// Host-driven flash upload (0xFD 0x64 <sub>): confirm on the LCD, then erase and
+// program. BEGIN says what is being written -- a slot app or the boot animation;
+// everything after it is the same address-driven operations. See app_upload.{c,h}.
 #define APP_CMD    0x64
 #define APP_BEGIN  0x00 // data[3..6]=slot(BE32) data[7..10]=total(BE32) -> data[3]=state
 #define APP_STATUS 0x01 // -> data[3]=state data[4..7]=written(BE32)
@@ -91,6 +92,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define APP_LAUNCH 0x06 // data[3..6]=base(BE32; 0=look the name up) data[7]=flags
                         //   data[11..26]=name[16] -> data[3]=1 launched, data[4..7]=base(BE32)
 #define APP_LAUNCH_GRAB 0x01 // flags bit0: also grab OS input so the app is usable
+#define APP_BOOT_BEGIN 0x07 // data[3..6]=total(BE32) -> data[3]=state data[4..7]=base(BE32)
 
 // OS input-mode control (mirrors proto.h ATHENA_MODE_*): 0xFD 0x65 <sub>.
 #define MODE_CMD    0x65
@@ -287,6 +289,19 @@ static void ath_handle_app(uint8_t *data) {
             data[5] = (uint8_t)(chosen >> 16);
             data[6] = (uint8_t)(chosen >> 8);
             data[7] = (uint8_t)(chosen);
+            break;
+        }
+        case APP_BOOT_BEGIN: {
+            // Same session, aimed at the boot region instead of a slot: one run of
+            // bytes from its start, so the request is just how many.
+            app_input_release_all();
+            app_upload_request_boot(rawhid_be32(&data[3]));
+            data[3] = app_upload_state();
+            uint32_t base = app_upload_slot(); // 0 when the request was rejected
+            data[4] = (uint8_t)(base >> 24);
+            data[5] = (uint8_t)(base >> 16);
+            data[6] = (uint8_t)(base >> 8);
+            data[7] = (uint8_t)(base);
             break;
         }
         case APP_STATUS: {

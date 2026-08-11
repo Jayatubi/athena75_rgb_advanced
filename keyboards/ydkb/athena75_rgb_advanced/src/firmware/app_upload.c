@@ -23,6 +23,7 @@
 
 // core0 writes, core1 reads (render). Publish content before raising state.
 static volatile uint8_t  s_state   = APPUP_IDLE;
+static volatile uint8_t  s_target  = APPUP_TGT_SLOT;
 static volatile uint32_t s_slot    = 0;
 static volatile uint32_t s_total   = 0;
 static volatile uint32_t s_written = 0;
@@ -40,6 +41,14 @@ static bool     s_page_dirty = false;
 
 static bool in_area(uint32_t a, uint32_t len) {
     return len && a >= APP_AREA_BEGIN && (a + len) <= APP_AREA_END && (a + len) > a;
+}
+
+// The boot animation is one run of bytes from the start of the region, so an
+// accepted session may touch exactly the sectors/pages that run covers.
+static bool in_boot_upload(uint32_t addr, uint32_t len, uint32_t grain) {
+    uint32_t hi = (BOOT_AREA_BEGIN + s_total + grain - 1u) & ~(grain - 1u);
+    if (hi > BOOT_AREA_END) hi = BOOT_AREA_END;
+    return addr >= BOOT_AREA_BEGIN && (addr + len) <= hi && (addr + len) > addr;
 }
 
 // A slot is occupied as soon as it carries an app header magic. Do not require a
@@ -92,6 +101,13 @@ static bool in_upload_region(uint32_t addr, uint32_t len, uint32_t grain) {
            (s_data_size && addr >= data_lo && (addr + len) <= data_hi);
 }
 
+// Everything the accepted session is allowed to erase or program, whichever kind
+// of upload it is. Nothing outside this ever reaches probe_flash.
+static bool session_allows(uint32_t addr, uint32_t len, uint32_t grain) {
+    if (s_target == APPUP_TGT_BOOT) return in_boot_upload(addr, len, grain);
+    return in_area(addr, len) && in_upload_region(addr, len, grain);
+}
+
 // ---- dialog actions (INSTALL / CANCEL) --------------------------------------
 static void app_upload_accept(void) {
     app_input_release_all();
@@ -122,7 +138,8 @@ static char s_msg[64];
 
 void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
                         uint8_t slot_count, bool code_only, const char *name) {
-    s_slot = 0;
+    s_slot   = 0;
+    s_target = APPUP_TGT_SLOT;
 
     // Current executable images use one slot (the last 4K is its save sector).
     uint32_t expected_slots = 1u +
@@ -200,16 +217,50 @@ void app_upload_request(uint32_t slot, uint32_t code_size, uint32_t data_size,
     dialog_open(&d);
 }
 
+// The splash the user is replacing is not running, so unlike a slot app there is
+// nothing to tear down first -- but the flow stays the same one, dialog included,
+// because writing megabytes is exactly as disruptive either way.
+void app_upload_request_boot(uint32_t total) {
+    s_target    = APPUP_TGT_BOOT;
+    s_slot      = 0;
+    s_code_size = 0;
+    s_data_size = 0;
+    s_page_addr = 0;
+    s_page_dirty = false;
+
+    if (total == 0 || total > (BOOT_AREA_END - BOOT_AREA_BEGIN)) {
+        s_state = APPUP_DENIED;
+        return;
+    }
+
+    s_slot    = BOOT_AREA_BEGIN; // where the host is being told to write
+    s_total   = total;
+    s_written = 0;
+
+    snprintf(s_msg, sizeof s_msg, "boot animation\n%u KiB", (unsigned)((total + 1023u) / 1024u));
+    s_state = APPUP_PENDING;
+
+    dialog_desc_t d = {
+        .title      = "BOOT SPLASH",
+        .message    = s_msg,
+        .buttons    = { { "WRITE", app_upload_accept }, { "CANCEL", app_upload_decline } },
+        .n_buttons  = 2,
+        .def_focus  = 0,
+        .negative   = 1,
+        .timeout_ms = LCD_APP_PROMPT_MS,
+    };
+    dialog_open(&d);
+}
+
 uint8_t  app_upload_state(void)   { return s_state; }
+uint8_t  app_upload_target(void)  { return s_target; }
 uint32_t app_upload_slot(void)    { return s_slot; }
 uint32_t app_upload_written(void) { return s_written; }
 uint32_t app_upload_total(void)   { return s_total; }
 
 bool app_upload_do_erase(uint32_t addr) {
     if (s_state != APPUP_AUTH && s_state != APPUP_ACTIVE) return false;
-    if (!in_area(addr, FLASH_SECTOR_SIZE) ||
-        !in_upload_region(addr, FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE))
-        return false;
+    if (!session_allows(addr, FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE)) return false;
     if (s_state == APPUP_AUTH) app_input_release_all();
     s_state = APPUP_ACTIVE;
     return app_flash_erase_sector(addr);
@@ -218,9 +269,7 @@ bool app_upload_do_erase(uint32_t addr) {
 int app_upload_do_write(uint32_t page_addr, uint8_t poff, uint8_t len, const uint8_t *src) {
     if (s_state != APPUP_AUTH && s_state != APPUP_ACTIVE) return 0;
     if ((page_addr & (FLASH_PAGE_SIZE - 1u)) || (uint16_t)poff + len > FLASH_PAGE_SIZE) return 0;
-    if (!in_area(page_addr, FLASH_PAGE_SIZE) ||
-        !in_upload_region(page_addr, FLASH_PAGE_SIZE, FLASH_PAGE_SIZE))
-        return 0;
+    if (!session_allows(page_addr, FLASH_PAGE_SIZE, FLASH_PAGE_SIZE)) return 0;
     if (s_state == APPUP_AUTH) app_input_release_all();
     s_state = APPUP_ACTIVE;
 
@@ -249,8 +298,12 @@ void app_upload_finish(bool ok) {
         s_state   = APPUP_DONE;
         s_done_t  = timer_read32();
         app_return_to_launcher();
-        app_scan();
-        if (s_slot) app_slot_invalidate(s_slot);
+        // A boot animation is only read at the next reset, so there is no cached
+        // view of it to drop -- the slot bookkeeping is the app path's alone.
+        if (s_target == APPUP_TGT_SLOT) {
+            app_scan();
+            if (s_slot) app_slot_invalidate(s_slot);
+        }
     } else {
         s_state = APPUP_IDLE;
     }

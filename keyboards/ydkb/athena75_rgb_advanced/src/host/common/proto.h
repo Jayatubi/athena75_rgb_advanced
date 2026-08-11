@@ -85,6 +85,11 @@
                                 // data[7]=flags, data[11..26]=name[16]
                                 // reply: data[3]=1 launched, data[4..7]=base(BE32)
 #define ATHENA_APP_LAUNCH_GRAB 0x01 // flags bit0: also switch to OS input mode
+// The same session aimed at the boot animation region instead of a slot: one run
+// of bytes from BOOT_AREA_BEGIN, so the request is only how many. Everything
+// after it (STATUS/ERASE/WRITE/END/ABORT) is unchanged.
+#define ATHENA_APP_BOOT_BEGIN 0x07 // request: data[3..6]=total(BE32)
+                                   // reply: data[3]=state, data[4..7]=base(BE32; 0=refused)
 
 // app-upload state machine (returned by BEGIN/STATUS).
 #define ATHENA_APPUP_IDLE    0
@@ -100,6 +105,9 @@
 // (4MB), app slots 0x10800000..0x11000000 (8MB).
 #define ATHENA_APP_AREA_BEGIN 0x10800000u
 #define ATHENA_APP_AREA_END   0x11000000u
+// Boot animation region: the QGF the splash plays starts at its first byte.
+#define ATHENA_BOOT_AREA_BEGIN 0x10400000u
+#define ATHENA_BOOT_AREA_END   0x10800000u
 // A slot is 256 KiB (32 slots in 8 MB). Fixed tail layout:
 // 250 KiB code, 2 KiB icon (32x32 RGB565), 4 KiB save sector.
 #define ATHENA_APP_SLOT_SIZE        0x40000u

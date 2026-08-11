@@ -40,6 +40,10 @@ static int usage(const char *argv0) {
         "  restore file.bin                         write a saved Vial/VIA config back\n"
         "  probe   [read ADDR [len]]                JEDEC flash size + XIP readability map\n"
         "          [erase ADDR] [prog ADDR]         erase a 4K sector / program a test page\n"
+        "  boot     list                            the splashes in artifacts/boot/\n"
+        "           install <name|file.qgf|.uf2>    confirm + write the boot animation\n"
+        "           [--method put|uf2]              put = over USB, uf2 = via BOOTSEL\n"
+        "           info | erase                    what is installed / remove it\n"
         "  app      pack <elf> --icon icon.rgb565   build a relocatable app + fixed icon\n"
         "           info <file.app>                 inspect a packaged app\n"
         "           relocate <file.app> <slot>      patch an app for a target slot (preview)\n"
@@ -71,6 +75,7 @@ static int dispatch(int argc, char **argv) {
     if (!strcmp(cmd, "restore"))  return cmd_eeprom_restore(subargc, subargv);
     if (!strcmp(cmd, "probe"))    return cmd_probe(subargc, subargv);
     if (!strcmp(cmd, "app"))      return cmd_app(subargc, subargv);
+    if (!strcmp(cmd, "boot"))     return cmd_boot(subargc, subargv);
     if (!strcmp(cmd, "-h") || !strcmp(cmd, "--help") || !strcmp(cmd, "help")) { usage(prog); return 0; }
 
     printf("unknown command: %s\n\n", cmd);

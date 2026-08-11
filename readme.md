@@ -76,7 +76,13 @@ RP2040 的两个核分工固定：
 
 OS 模式闲置约 30 秒会自动退回键盘模式，避免忘了切换而打不出字。LCD 与 RGB 共用一套熄屏超时（可设 1/5/10/15 分钟或常亮），任意键唤醒，并与电脑的 USB 挂起 / 恢复同步。面板被外壳挡住一圈时，可以用固件自带的校准屏定义一个"虚拟屏幕"，之后所有内容都相对这个窗口绘制。
 
-16 MiB flash 分三段：固件区、4 MiB 开机动画区、8 MiB app 槽区。开机动画是一张独立烧录的 QGF，换成自己的图只要 `python3 tools/png_to_uf2.py boot my_splash.png` 打一个 boot UF2 再刷进去。片内 264 KiB SRAM 的顶部切出 80 KiB 固定窗口，专给当前运行的 app 放 `.data/.bss`。完整分区见 [`docs/flash_map.md`](keyboards/ydkb/athena75_rgb_advanced/docs/flash_map.md) 与 [`docs/ram_map.md`](keyboards/ydkb/athena75_rgb_advanced/docs/ram_map.md)。
+16 MiB flash 分三段：固件区、4 MiB 开机动画区、8 MiB app 槽区。片内 264 KiB SRAM 的顶部切出 80 KiB 固定窗口，专给当前运行的 app 放 `.data/.bss`。完整分区见 [`docs/flash_map.md`](keyboards/ydkb/athena75_rgb_advanced/docs/flash_map.md) 与 [`docs/ram_map.md`](keyboards/ydkb/athena75_rgb_advanced/docs/ram_map.md)。
+
+开机动画不在固件里，固件只是把 boot 区里那份 QGF 照着播一遍——整帧、只重画一个矩形的 delta 帧、RLE 压缩都认。原厂那两段从原厂固件里分离了出来，放在 [`artifacts/boot/`](artifacts/boot)，`host_tool boot install kbdfans` 就能装回去（下面两张预览由 `tools/qgf_preview.py` 按固件同一套规则解出来）：
+
+<img src="keyboards/ydkb/athena75_rgb_advanced/docs/boot/athena.gif" width="180" alt="athena 开机动画"> <img src="keyboards/ydkb/athena75_rgb_advanced/docs/boot/kbdfans.gif" width="180" alt="kbdfans 开机动画">
+
+换成自己的也是一条命令的事：`python3 tools/make_boot_anim.py demo.gif -o boot.qgf`（GIF、视频、PNG 序列或单张图都行，`--fade` 加淡入淡出），然后 `host_tool boot install boot.qgf` 直接写进去，键盘上确认一下。
 
 ### host_tool — `src/host/`
 
@@ -87,6 +93,7 @@ OS 模式闲置约 30 秒会自动退回键盘模式，避免忘了切换而打�
 | `devices` | 列出所有可操作对象：插着的键盘、正在跑的仿真器，以及各自的固件版本 |
 | `upload [uf2]` | 刷固件（LCD 确认 → BOOTSEL → 拷贝 UF2） |
 | `app pack / info / install / update / launch` | 打包、检查、安装、升级、直接启动 slot app |
+| `boot list / install / info / erase` | 列出、换、查、删开机动画（同样在 LCD 上确认） |
 | `snapshot [-o s.png]` | 把 LCD 当前画面抓成 PNG |
 | `synctime` / `daemon` | 把电脑的时间推给键盘（带时钟的 app 用），或常驻对时 |
 | `backup` / `restore` | Vial / VIA 配置（EEPROM）的备份与恢复 |

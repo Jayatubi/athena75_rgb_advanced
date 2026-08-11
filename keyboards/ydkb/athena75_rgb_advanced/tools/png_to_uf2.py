@@ -7,9 +7,11 @@
          注意: keyframe 独立分区已废弃, SLIDES 改为 slot app 自带数据槽 (0x10800000+);
          anim 子命令仅为历史保留, 目标地址现已落在 boot 区内, 不再被固件使用。
 
-每帧在黑底上合成为大端 RGB565, 组成 QGF (可选 RLE 压缩, 与固件
-qp_drawimage_byte_rle_decoder 对应), 由固件的 qp_animate 播放。产物统一
+每帧在黑底上合成为大端 RGB565, 交给 qgf_build 组成 QGF (可选 RLE 压缩)。产物统一
 归档到 builds/ (见 uf2_common): builds/<base>.uf2 + 时间戳历史。
+
+做开机动画一般用 make_boot_anim.py: 它吃 GIF / 视频 / PNG 序列, 还会用 delta 帧
+只存变化的矩形。这里留下的是另一件事——把单张图做成 alpha 淡入淡出。
 
 需要 Pillow: python3 -m pip install pillow   (anim --align-text 还需 numpy)
 
@@ -22,10 +24,10 @@ qp_drawimage_byte_rle_decoder 对应), 由固件的 qp_animate 播放。产物�
 import argparse
 import glob
 import os
-import struct
 
 from PIL import Image
 
+import qgf_build
 import uf2_common
 
 SIZE = 128
@@ -60,97 +62,12 @@ B_EASE = 1.0             # 飞入缓出指数 (1.0=线性)
 # ============================================================================
 def frame_to_rgb565(rgba):
     """RGBA -> 在黑底上合成 -> 大端 RGB565 字节 (无调色盘, 65K 色)。"""
-    bg = Image.new("RGBA", rgba.size, BG + (255,))
-    bg.alpha_composite(rgba)
-    rgb = bg.convert("RGB")
-    px = rgb.load()
-    buf = bytearray(SIZE * SIZE * 2)
-    k = 0
-    for y in range(SIZE):
-        for x in range(SIZE):
-            r, g, b = px[x, y]
-            v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-            buf[k] = (v >> 8) & 0xFF
-            buf[k + 1] = v & 0xFF
-            k += 2
-    return bytes(buf)
-
-
-def rle_encode(data):
-    """字节级 RLE, 与固件 qp_drawimage_byte_rle_decoder 完全对应:
-      - 重复段: [计数 N(1..127)][值]     -> 值重复 N 次
-      - 直出段: [标记 L+127(128..255)][L 个字面字节] -> L 个原样字节 (L 1..128)
-    """
-    out = bytearray()
-    i, n = 0, len(data)
-    while i < n:
-        run = 1
-        while i + run < n and data[i + run] == data[i] and run < 127:
-            run += 1
-        if run >= 2:
-            out.append(run)                 # repeating count 1..127
-            out.append(data[i])
-            i += run
-        else:
-            lit = bytearray()
-            while i < n and len(lit) < 128:
-                if i + 1 < n and data[i + 1] == data[i]:
-                    break                    # 下一处是重复段, 结束直出段
-                lit.append(data[i]); i += 1
-            out.append(127 + len(lit))       # 128..255
-            out += lit
-    return bytes(out)
-
-
-def rle_decode(data, expected_len):
-    """镜像固件解码逻辑, 仅用于往返自检 (压缩正确性验证)。"""
-    out = bytearray(); i = 0
-    while len(out) < expected_len:
-        c = data[i]; i += 1
-        if c >= 128:
-            L = c - 127
-            out += data[i:i + L]; i += L
-        else:
-            v = data[i]; i += 1
-            out += bytes([v]) * c
-    return bytes(out)
-
-
-def _frame_block(pixels, delay, compress):
-    payload = rle_encode(pixels) if compress else pixels
-    if compress:  # 往返自检: 解错一位就会花屏, 必须验证
-        assert rle_decode(payload, len(pixels)) == pixels, "RLE round-trip mismatch"
-    comp = 0x01 if compress else 0x00
-    blk = bytearray()
-    # qgf_frame_v1_t (11B): header(5) + format + flags + compression + transp_idx + delay(2)
-    blk += bytes([0x02, 0xFD]); blk += (6).to_bytes(3, "little")
-    blk += bytes([0x08, 0x00, comp, 0xFF])
-    blk += struct.pack("<H", delay & 0xFFFF)
-    # qgf_data_v1_t header(5) + payload
-    blk += bytes([0x05, 0xFA]); blk += len(payload).to_bytes(3, "little")
-    blk += payload
-    return bytes(blk)
+    return qgf_build.to_rgb565(rgba)
 
 
 def build_qgf(frames, compress=False):
-    n = len(frames)
-    blocks = [_frame_block(px, d, compress) for px, d in frames]
-    master_header = n * 4 + 28          # graphics desc(23) + frame-offset header(5) + n*4
-    total = master_header + sum(len(bl) for bl in blocks)
-
-    b = bytearray()
-    b += bytes([0x00, 0xFF, 0x12, 0x00, 0x00, 0x51, 0x47, 0x46, 0x01])  # graphics descriptor
-    b += struct.pack("<I", total)
-    b += struct.pack("<I", (~total) & 0xFFFFFFFF)
-    b += struct.pack("<H", SIZE); b += struct.pack("<H", SIZE); b += struct.pack("<H", n)
-    b += bytes([0x01, 0xFE]); b += (n * 4).to_bytes(3, "little")        # frame-offset descriptor
-    off = master_header
-    for bl in blocks:
-        b += struct.pack("<I", off); off += len(bl)
-    for bl in blocks:
-        b += bl
-    assert len(b) == total
-    return bytes(b)
+    """整帧 QGF。这里不用 delta: 淡入淡出每帧全变, 关键帧渲染器又要求整帧未压缩。"""
+    return qgf_build.build_qgf(frames, SIZE, SIZE, delta=False, rle=compress)
 
 
 # ============================================================================

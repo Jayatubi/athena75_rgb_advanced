@@ -49,6 +49,8 @@ SRC +=  $(FW)/gfx/menu_font.c \
 # Core1 OS runtime. The former built-in ANIMATION/MATRIX renderers are slot apps
 # now; removing their ~100 KiB BSS makes the fixed 96 KiB app arena possible.
 SRC +=  $(FW)/app/app.c $(FW)/app/boot.c $(FW)/app/menu.c $(FW)/app/blank.c $(FW)/app/launcher.c
+# QGF reader: the boot splash plays whatever image was flashed to the boot region.
+SRC +=  $(FW)/app/qgf.c
 # Slot-app loader + adapter: load a relocated .app from a flash slot and run it.
 SRC +=  $(FW)/app/app_loader.c
 

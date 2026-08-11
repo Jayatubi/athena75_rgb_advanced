@@ -1,8 +1,8 @@
-# Committed build outputs (firmware + host binaries + slot apps).
+# Committed build outputs (firmware + host binaries + slot apps + boot splashes).
 #
 # The repo-root .gitignore ignores *.uf2 globally; re-include ONLY the firmware
-# image below. User content is NOT committed here: the boot animation and the
-# ANIMATION keyframe UF2s stay local (tools/builds/ or flash partitions).
+# image below. Other user content is NOT committed here: the ANIMATION keyframe
+# UF2s stay local (tools/builds/ or flash partitions).
 !firmware/ydkb_athena75_rgb_advanced_vial.uf2
 
 # Beside it, uf2_common keeps the last ten builds under a timestamp. That is a
@@ -22,6 +22,11 @@ firmware/history/
 # Local-only apps: ACE embeds the keyframe QGF built from private PNGs.
 apps/ace.app
 apps/hidden/
+
+# Boot splashes (*.qgf is not ignored, so the two stock ones land here on their
+# own). Everything under private/ is somebody's own artwork -- that is where a
+# splash built from a picture you do not want in the repo goes.
+boot/private/
 
 # athena_sim (tools/build_sim.sh writes sim/<os>/). Committed like host_tool:
 # every platform links the static SDL2 the script builds from source, so the only

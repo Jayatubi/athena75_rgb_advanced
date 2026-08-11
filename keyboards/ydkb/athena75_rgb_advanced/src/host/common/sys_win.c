@@ -39,6 +39,22 @@ char *sys_exe_dir(char *out, size_t outlen) {
     return out;
 }
 
+int sys_list_dir(const char *dir, void (*fn)(const char *name, void *ctx), void *ctx) {
+    char pattern[1024];
+    snprintf(pattern, sizeof pattern, "%s\\*", dir);
+    WIN32_FIND_DATAA fd;
+    HANDLE           h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    int n = 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        fn(fd.cFileName, ctx);
+        n++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return n;
+}
+
 int sys_daemonize(void) {
     // The relaunched copy inherits this env marker -> it is the background child.
     if (GetEnvironmentVariableA("ATHENA_DAEMONIZED", NULL, 0) != 0) return 1;

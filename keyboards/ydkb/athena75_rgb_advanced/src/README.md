@@ -9,7 +9,7 @@ sits at the repo root, since what it holds is what the project ships.
 | `src/host/` | Native `host_tool` (CMake); USB HID, UF2 upload, app pack, snapshot |
 | `src/app/` | Slot apps + SDK + `tools/build_app.sh`. One directory each, with its own readme: [settings](app/settings/README.md), [matrix](app/matrix/README.md), [life](app/life/README.md), [maze](app/maze/README.md), [brick](app/brick/README.md), [fish](app/fish/README.md), [wfc](app/wfc/README.md) |
 | `src/sim/` | `athena_sim`, a full-system RP2040 emulator for this board ([details](sim/README.md)) |
-| `artifacts/` | Committed build outputs, at the repo root: `firmware/`, `host/`, `apps/`, `sim/` |
+| `artifacts/` | Committed build outputs, at the repo root: `firmware/`, `host/`, `apps/`, `boot/`, `sim/` |
 | `tools/` | Build entrypoints (`build.py`, `build_mac.sh`, `build_wsl.sh`, helpers) |
 | `keymaps/`, `ld/` | QMK keymap + linker scripts (keyboard root convention) |
 
@@ -18,4 +18,7 @@ Build host: `cmake -S src/host -B src/host/build && cmake --build src/host/build
 Build app: `bash src/app/tools/build_app.sh life` → `artifacts/apps/life.app`.  
 Build simulator: `bash tools/build_sim.sh` → `artifacts/sim/<os>/Athena75 Simulator[.app]` (a window, or `--headless`).  
 Preview an app headless: `bash tools/sim_app_preview.sh fish 5000 20000` → PNGs in `build/sim-preview/`.  
-Re-record the docs: `bash tools/record_readme_gifs.sh` (app GIFs), `bash tools/sim_screenshot.sh` (`docs/sim.png`).
+Build a boot animation: `python3 tools/make_boot_anim.py demo.gif -o boot.qgf` → install with `host_tool boot install`.  
+Install a stock one: `host_tool boot list` → `host_tool boot install kbdfans` (`artifacts/boot/`, lifted from the stock firmware with `tools/qgf_from_c.py`).  
+Check one plays: `bash tools/sim_boot_check.sh demo.gif` → panel PNGs in `build/boot-check/`.  
+Re-record the docs: `bash tools/record_readme_gifs.sh` (app GIFs), `bash tools/sim_screenshot.sh` (`docs/sim.png`), `python3 tools/qgf_preview.py ../../../artifacts/boot/athena.qgf -o docs/boot/athena.gif` (splash GIFs).

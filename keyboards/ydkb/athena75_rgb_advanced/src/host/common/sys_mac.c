@@ -56,6 +56,24 @@ char *sys_exe_dir(char *out, size_t outlen) {
     return out;
 }
 
+int sys_list_dir(const char *dir, void (*fn)(const char *name, void *ctx), void *ctx) {
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    struct dirent *e;
+    int            n = 0;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char probe[1024];
+        snprintf(probe, sizeof probe, "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(probe, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        fn(e->d_name, ctx);
+        n++;
+    }
+    closedir(d);
+    return n;
+}
+
 int sys_daemonize(void) {
     pid_t pid = fork();
     if (pid < 0) return -1;

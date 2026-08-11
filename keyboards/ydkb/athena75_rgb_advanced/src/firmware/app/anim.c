@@ -19,6 +19,7 @@
 
 #include "app.h"
 #include "c1_gfx.h"
+#include "qgf.h"
 #include "ui.h"
 #include "lib/fixed_math/fixed_math.h" // Q15.16 trig for Whirlpool
 
@@ -213,6 +214,17 @@ static uint8_t       *ramA = kf_ram0;    // RAM copy of *kfA
 static uint8_t       *ramB = kf_ram1;    // RAM copy of *kfB
 static uint16_t       anim_nframes = 0;
 static uint16_t       anim_kf      = 0;
+static qgf_image_t    anim_img;          // the keyframe file, opened once at AP_INIT
+
+// This renderer samples keyframes in place, so it only accepts the shape it was
+// built for: a whole frame, stored raw. Anything else (RLE, a delta rectangle)
+// would have to be expanded first, and there is no buffer here to expand it into.
+static const uint8_t *keyframe_ptr(uint16_t i) {
+    qgf_frame_t fr;
+    if (!qgf_frame(&anim_img, i, &fr)) return NULL;
+    if (fr.compressed || fr.delta || fr.data_len < ANIM_BYTES) return NULL;
+    return fr.data;
+}
 
 // Tween state machine, driven by delta-time (see anim_tick).
 enum { AP_INIT = 0, AP_HOLD, AP_TWEEN };
@@ -551,14 +563,15 @@ static void anim_tick(uint32_t dt_ms) {
     anim_render_t = now;
     if (d > 200) d = 200; // clamp after a stall / wake
 
-    const uint8_t *q = ANIM_QGF_ADDR;
-
     if (anim_phase == AP_INIT) {
-        anim_nframes = qgf_frame_count(q);
+        if (!qgf_open(ANIM_QGF_ADDR, ANIM_QGF_BYTES, ANIM_SIZE, ANIM_SIZE, &anim_img))
+            anim_img.frame_count = 0;
+        anim_nframes = anim_img.frame_count;
         if (anim_nframes == 0 || anim_nframes > MAX_ANIM_FRAMES) { present(false); return; }
         anim_kf = 0;
-        kfA = qgf_frame_ptr(q, 0);
-        kfB = qgf_frame_ptr(q, (anim_nframes > 1) ? 1 : 0);
+        kfA = keyframe_ptr(0);
+        kfB = keyframe_ptr((anim_nframes > 1) ? 1 : 0);
+        if (!kfA || !kfB) { anim_nframes = 0; present(false); return; }
         stage_keyframe(kfA);
         stage_kf_ram();
         anim_phase = AP_HOLD;
@@ -591,7 +604,8 @@ static void anim_tick(uint32_t dt_ms) {
     if (anim_acc >= dur) {                                 // tween finished: advance keyframe
         anim_kf = (anim_kf + 1) % anim_nframes;
         kfA = kfB;
-        kfB = qgf_frame_ptr(q, (anim_kf + 1) % anim_nframes);
+        kfB = keyframe_ptr((anim_kf + 1) % anim_nframes);
+        if (!kfB) { anim_nframes = 0; present(false); return; }
         stage_keyframe(kfA);
         { uint8_t *tmp = ramA; ramA = ramB; ramB = tmp; } // old ramB already holds new kfA
         memcpy(ramB, kfB, ANIM_BYTES);

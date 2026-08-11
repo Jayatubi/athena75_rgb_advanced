@@ -209,42 +209,6 @@ void display_power_toggle(void) {
     lcd_switch(!now_lcd_off); // same switch logic as idle sleep/wake
 }
 
-// ---- QGF frame access (shared by the boot player and the keyframe renderer) ---
-// QGF layout (see tools/host png_to_uf2): a graphics descriptor, a frame-offset
-// table at +28, then per-frame blocks. Each frame block: 11-byte frame descriptor
-// (format@+5, flags@+6, compression@+7, transparency@+8, delay@+9 le16) then a
-// 5-byte data descriptor (len@+13 le24) then the payload (big-endian RGB565,
-// matching fbShow's byte order).
-static inline uint16_t rd_le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
-static inline uint32_t rd_le32(const uint8_t *p) { return (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24)); }
-
-uint16_t       qgf_frame_count(const uint8_t *q)             { return rd_le16(q + 21); }
-static uint32_t qgf_frame_off(const uint8_t *q, uint16_t i)  { return rd_le32(q + 28 + i * 4); }
-static const uint8_t *qgf_frame_blk(const uint8_t *q, uint16_t i) { return q + qgf_frame_off(q, i); }
-// Raw pixel payload: 11-byte frame desc + 5-byte data desc = 16 bytes of headers.
-const uint8_t *qgf_frame_ptr(const uint8_t *q, uint16_t i)   { return qgf_frame_blk(q, i) + 16; }
-uint8_t        qgf_frame_comp(const uint8_t *q, uint16_t i)  { return qgf_frame_blk(q, i)[7]; }
-uint16_t       qgf_frame_delay(const uint8_t *q, uint16_t i) { return rd_le16(qgf_frame_blk(q, i) + 9); }
-uint32_t       qgf_frame_len(const uint8_t *q, uint16_t i)   { const uint8_t *b = qgf_frame_blk(q, i) + 13; return (uint32_t)(b[0] | (b[1] << 8) | (b[2] << 16)); }
-
-// Byte-RLE decode into dst (matches tools/host png_to_uf2 rle_encode and QP's
-// qp_drawimage_byte_rle_decoder): c in 1..127 => repeat next byte c times;
-// c in 128..255 => (c-127) literal bytes follow. Bounded by src_len/out_len.
-void qgf_rle_decode(const uint8_t *src, uint32_t src_len, uint8_t *dst, uint32_t out_len) {
-    uint32_t si = 0, di = 0;
-    while (di < out_len && si < src_len) {
-        uint8_t c = src[si++];
-        if (c >= 128) {                                  // literal run
-            uint32_t n = (uint32_t)c - 127;
-            while (n-- && di < out_len && si < src_len) dst[di++] = src[si++];
-        } else if (si < src_len) {                       // repeated byte
-            uint8_t v = src[si++];
-            while (c-- && di < out_len) dst[di++] = v;
-        }
-    }
-    while (di < out_len) dst[di++] = 0;                  // defensive: zero any shortfall
-}
-
 void display_init(void)
 {
     // LCD Power + backlight
@@ -892,8 +856,8 @@ static bool dialog_render_tick(void) {
     return false;
 }
 
-// ---- Slot-app upload progress (core1 render) --------------------------------
-// A dialog-styled screen with a progress bar, shown while a slot-app upload is
+// ---- Upload progress (core1 render) -----------------------------------------
+// A dialog-styled screen with a progress bar, shown while an upload is
 // authorized/active/just-finished (app_upload.c owns the state). The per-page
 // flash writes park core1; between them core1 resumes here and repaints, so the
 // bar advances page by page. Same force-wake/teardown contract as the dialog.
@@ -904,7 +868,9 @@ static void app_upload_render(void) {
     const bool    done = (app_upload_state() == APPUP_DONE);
     const bool    prep = (app_upload_state() == APPUP_EXITING);
 
-    const char *title = done ? "APP LOADED" : "LOADING APP";
+    const bool  boot  = (app_upload_target() == APPUP_TGT_BOOT);
+    const char *title = boot ? (done ? "SPLASH WRITTEN" : "WRITING SPLASH")
+                             : (done ? "APP LOADED" : "LOADING APP");
     ui_window_style_t win = UI_WINDOW_STYLE_MENU;
     win.title             = title;
     ui_window_draw(fb, &win);

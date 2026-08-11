@@ -6,23 +6,37 @@
 #include "hid.h"
 #include "proto.h"
 #include "app_pkg.h"
+#include "paths.h"
 #include "sys.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// One command, one reply. Handlers answer in place and leave the header bytes as
+// they arrived, so a report that does not carry them back belongs to an earlier
+// command this one had already given up waiting for -- which happens when the
+// board is busy repainting after a write. Skipping those keeps one late reply
+// from putting every exchange after it one answer behind.
+static int reply_matches(const uint8_t *reply, const uint8_t *req) {
+    // diag is the exception: it answers from data[2] on, overwriting the
+    // subcommand byte with the first byte of the flash size.
+    int hdr = req[1] == ATHENA_DIAG_CMD ? 2 : 3;
+    return memcmp(reply, req, (size_t)hdr) == 0;
+}
+
 static int xfer(hid_dev *d, const uint8_t *payload, int plen, uint8_t *reply, int timeout_ms) {
     uint8_t buf[ATHENA_REPORT_LEN] = {0};
     if (plen > ATHENA_REPORT_LEN) plen = ATHENA_REPORT_LEN;
     memcpy(buf, payload, plen);
     if (hid_write(d, buf) != 0) return -1;
-    int waited = 0;
-    while (waited < timeout_ms) {
+    int waited = 0, strays = 0;
+    while (waited < timeout_ms && strays < 64) {
         int r = hid_read(d, reply, 100);
-        if (r == 1) return 0;
         if (r < 0) return -1;
-        waited += 100;
+        if (r != 1) { waited += 100; continue; }
+        if (reply_matches(reply, buf)) return 0;
+        strays++;
     }
     return -1;
 }
@@ -894,10 +908,11 @@ static int app_upload(int argc, char **argv) {
                            data_blob, info.data_blob_size, "data") != 0)
         goto abort_dev;
 
-    // END -> keep the slot, drop the progress screen.
+    // END -> keep the slot, drop the progress screen. It lands after the last
+    // page and the repaint, so it is worth more than the usual second.
     memset(req, 0, sizeof req);
     req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_END;
-    xfer(d, req, 3, rep, 1000);
+    xfer(d, req, 3, rep, 3000);
 
     // Verify both the relocated header and the complete fixed icon resource.
     if (verify) {
@@ -992,6 +1007,419 @@ static int app_launch(int argc, char **argv) {
     printf(">> launched %s at slot 0x%08X%s\n", what, get_be32(&rep[4]),
            grab ? " (OS input grabbed)" : "");
     return 0;
+}
+
+// ---- boot animation ---------------------------------------------------------
+// The splash is a QGF at the start of the boot region, and it gets there the same
+// way a slot app does: the board confirms on its LCD, then the host erases and
+// programs. The only difference is where the accepted session may write, so all
+// of the above is reused; only BEGIN says "boot" instead of naming a slot.
+
+// The frames a player would find, or a reason it would find none. `total` is what
+// the descriptor claims the file is, which is what has to be written.
+static int qgf_describe(const uint8_t *q, size_t len, uint32_t *total, char *why, size_t whylen) {
+    size_t blank = 0;
+    while (blank < len && q[blank] == 0xFF) blank++;
+    if (blank == len) { snprintf(why, whylen, "the region is erased"); return -1; }
+    if (len < 28 || q[0] != 0x00 || q[1] != 0xFF ||
+        q[5] != 'Q' || q[6] != 'G' || q[7] != 'F' || q[8] != 0x01) {
+        snprintf(why, whylen, "not a QGF image");
+        return -1;
+    }
+    uint32_t t = (uint32_t)(q[9] | (q[10] << 8) | (q[11] << 16) | ((uint32_t)q[12] << 24));
+    uint32_t neg = (uint32_t)(q[13] | (q[14] << 8) | (q[15] << 16) | ((uint32_t)q[16] << 24));
+    if ((t ^ 0xFFFFFFFFu) != neg) { snprintf(why, whylen, "corrupt QGF header"); return -1; }
+    unsigned w = (unsigned)(q[17] | (q[18] << 8));
+    unsigned h = (unsigned)(q[19] | (q[20] << 8));
+    unsigned n = (unsigned)(q[21] | (q[22] << 8));
+    if (w != 128 || h != 128) {
+        snprintf(why, whylen, "%ux%u, but the panel is 128x128", w, h);
+        return -1;
+    }
+    if (!n) { snprintf(why, whylen, "no frames"); return -1; }
+    snprintf(why, whylen, "%u frames, %u bytes", n, t);
+    if (total) *total = t;
+    return 0;
+}
+
+// Payload of a UF2 aimed at the boot region, so `boot install` accepts the same
+// file `upload` would take. Blocks must start at the region base and be contiguous.
+static uint8_t *uf2_boot_payload(const uint8_t *uf2, size_t len, size_t *out_len,
+                                 char *err, size_t errlen) {
+    enum { BLOCK = 512 };
+    if (len < BLOCK || len % BLOCK) { snprintf(err, errlen, "not a UF2 file"); return NULL; }
+    size_t   n   = len / BLOCK;
+    uint8_t *out = (uint8_t *)malloc(n * 256);
+    if (!out) { snprintf(err, errlen, "out of memory"); return NULL; }
+    size_t got = 0;
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *b = uf2 + i * BLOCK;
+        uint32_t magic = (uint32_t)(b[0] | (b[1] << 8) | (b[2] << 16) | ((uint32_t)b[3] << 24));
+        uint32_t addr  = (uint32_t)(b[12] | (b[13] << 8) | (b[14] << 16) | ((uint32_t)b[15] << 24));
+        uint32_t plen  = (uint32_t)(b[16] | (b[17] << 8) | (b[18] << 16) | ((uint32_t)b[19] << 24));
+        if (magic != 0x0A324655u || plen > 256) {
+            snprintf(err, errlen, "block %zu is not a UF2 block", i);
+            free(out); return NULL;
+        }
+        if (addr != ATHENA_BOOT_AREA_BEGIN + (uint32_t)got) {
+            snprintf(err, errlen, "block %zu targets 0x%08X, not the next boot-region address",
+                     i, addr);
+            free(out); return NULL;
+        }
+        memcpy(out + got, b + 32, plen);
+        got += plen;
+    }
+    *out_len = got;
+    return out;
+}
+
+static int boot_write_uf2(const char *path, const uint8_t *data, size_t len) {
+    enum { PAYLOAD = 256, BLOCK = 512 };
+    uint32_t total = (uint32_t)((len + PAYLOAD - 1u) / PAYLOAD);
+    FILE    *f     = fopen(path, "wb");
+    if (!f) return -1;
+    for (uint32_t i = 0; i < total; i++) {
+        uint8_t b[BLOCK];
+        memset(b, 0, sizeof b);
+        app_wle32(b + 0, 0x0A324655u);
+        app_wle32(b + 4, 0x9E5D5157u);
+        app_wle32(b + 8, 0x00002000u);              // familyID present
+        app_wle32(b + 12, ATHENA_BOOT_AREA_BEGIN + i * PAYLOAD);
+        app_wle32(b + 16, PAYLOAD);
+        app_wle32(b + 20, i);
+        app_wle32(b + 24, total);
+        app_wle32(b + 28, 0xE48BFF56u);             // RP2040
+        memset(b + 32, 0xFF, PAYLOAD);
+        size_t off = (size_t)i * PAYLOAD;
+        size_t n   = len - off < PAYLOAD ? len - off : PAYLOAD;
+        memcpy(b + 32, data + off, n);
+        app_wle32(b + 508, 0x0AB16F30u);
+        if (fwrite(b, 1, sizeof b, f) != sizeof b) { fclose(f); return -1; }
+    }
+    return fclose(f) == 0 ? 0 : -1;
+}
+
+// What the board currently plays at boot, read back over the (free) XIP reads.
+static int boot_info(void) {
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) {
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
+        return 1;
+    }
+    uint8_t hdr[28];
+    if (probe_xipread_all(d, ATHENA_BOOT_AREA_BEGIN, hdr, sizeof hdr) != 0) {
+        printf("error: cannot read the boot region\n");
+        hid_close(d); return 1;
+    }
+    hid_close(d);
+
+    char note[80];
+    uint32_t total = 0;
+    printf(">> boot region 0x%08X..0x%08X (%u KiB)\n", ATHENA_BOOT_AREA_BEGIN,
+           ATHENA_BOOT_AREA_END, (ATHENA_BOOT_AREA_END - ATHENA_BOOT_AREA_BEGIN) / 1024u);
+    if (qgf_describe(hdr, sizeof hdr, &total, note, sizeof note) != 0) {
+        printf(">> no boot animation installed (%s) - the splash is skipped\n", note);
+        return 0;
+    }
+    printf(">> boot animation: %s (%u%% of the region)\n", note,
+           (unsigned)((uint64_t)total * 100u / (ATHENA_BOOT_AREA_END - ATHENA_BOOT_AREA_BEGIN)));
+    return 0;
+}
+
+// Drive an accepted session: erase the sectors the payload covers, program it,
+// finish. Shared by install and erase, which differ only in what they write.
+static int boot_session(hid_dev *d, const uint8_t *data, size_t len, int wait_s) {
+    uint8_t req[ATHENA_REPORT_LEN], rep[ATHENA_REPORT_LEN];
+
+    memset(req, 0, sizeof req);
+    req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_BOOT_BEGIN;
+    put_be32(&req[3], (uint32_t)len);
+    if (xfer(d, req, 7, rep, 1000) != 0) { printf("error: no BEGIN reply\n"); return -1; }
+    if (rep[3] == ATHENA_APPUP_DENIED || get_be32(&rep[4]) != ATHENA_BOOT_AREA_BEGIN) {
+        printf("error: the firmware refused a %zu-byte boot animation "
+               "(state %u, base 0x%08X); too large, another upload is in flight, "
+               "or this firmware predates boot uploads\n",
+               len, rep[3], get_be32(&rep[4]));
+        return -1;
+    }
+
+    printf(">> confirm on the keyboard: WRITE = go ahead, CANCEL = abort...\n");
+    int authorized = 0;
+    for (int t = 0; t < wait_s * 3; t++) {
+        memset(req, 0, sizeof req);
+        req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_STATUS;
+        if (xfer(d, req, 3, rep, 1000) != 0) { printf("error: no STATUS reply\n"); return -1; }
+        if (rep[3] == ATHENA_APPUP_AUTH || rep[3] == ATHENA_APPUP_ACTIVE) { authorized = 1; break; }
+        if (rep[3] == ATHENA_APPUP_DENIED || rep[3] == ATHENA_APPUP_IDLE) {
+            printf(">> cancelled on the keyboard.\n");
+            return -1;
+        }
+        sys_msleep(333);
+    }
+    if (!authorized) { printf(">> timed out waiting for confirmation.\n"); return -2; }
+
+    uint32_t end = (uint32_t)(ATHENA_BOOT_AREA_BEGIN + len + 0xFFFu) & ~0xFFFu;
+    for (uint32_t a = ATHENA_BOOT_AREA_BEGIN; a < end; a += 0x1000u) {
+        memset(req, 0, sizeof req);
+        req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_ERASE;
+        put_be32(&req[3], a);
+        if (xfer(d, req, 7, rep, 5000) != 0 || rep[3] != 1) {
+            printf("\nerror: erase failed at 0x%08X\n", a);
+            return -2;
+        }
+        printf(">> erased %u / %u KiB\r", (a - ATHENA_BOOT_AREA_BEGIN + 0x1000u) / 1024u,
+               (end - ATHENA_BOOT_AREA_BEGIN) / 1024u);
+        fflush(stdout);
+    }
+    printf("\n");
+
+    if (data && app_program_region(d, ATHENA_BOOT_AREA_BEGIN, data, len, "splash") != 0)
+        return -2;
+
+    // The board answers END once it has finished the last page and repainted, so
+    // give it room; whatever is verified next reads flash, not this reply.
+    memset(req, 0, sizeof req);
+    req[0] = ATHENA_CMD; req[1] = ATHENA_APP_CMD; req[2] = ATHENA_APP_END;
+    xfer(d, req, 3, rep, 3000);
+    return 0;
+}
+
+static void boot_abort(hid_dev *d) {
+    uint8_t req[ATHENA_REPORT_LEN] = {ATHENA_CMD, ATHENA_APP_CMD, ATHENA_APP_ABORT};
+    uint8_t rep[ATHENA_REPORT_LEN];
+    xfer(d, req, 3, rep, 1000);
+}
+
+// The splashes that ship with the repo (and anybody's own beside them) are
+// addressed by name, so `boot install athena` works from wherever host_tool was
+// copied to. Anything that names an existing file, or looks like a path, is left
+// alone -- a name is only a name when nothing else fits.
+static const char *boot_resolve(const char *arg, char *buf, size_t buflen) {
+    FILE *f = fopen(arg, "rb");
+    if (f) { fclose(f); return arg; }
+    if (strchr(arg, '/') || strchr(arg, '\\')) return arg;
+
+    const char *dirs[] = {BOOT_DIR, BOOT_PRIVATE_DIR};
+    const char *exts[] = {".qgf", ".uf2", ""};
+    for (size_t i = 0; i < sizeof dirs / sizeof *dirs; i++) {
+        for (size_t j = 0; j < sizeof exts / sizeof *exts; j++) {
+            char rel[256];
+            snprintf(rel, sizeof rel, "%s/%s%s", dirs[i], arg, exts[j]);
+            if (repo_path(rel, buf, buflen)) return buf;
+        }
+    }
+    return arg; // let the open fail with the name the caller actually typed
+}
+
+// One line per splash in a directory: what `boot install <name>` would take, and
+// what the player would make of it.
+typedef struct {
+    char names[64][64];
+    int  n;
+} boot_names;
+
+static void boot_collect(const char *name, void *vctx) {
+    boot_names *c   = (boot_names *)vctx;
+    size_t      len = strlen(name);
+    if (len < 5 || len >= sizeof c->names[0] || strcmp(name + len - 4, ".qgf") != 0) return;
+    if (c->n >= (int)(sizeof c->names / sizeof c->names[0])) return;
+    snprintf(c->names[c->n++], sizeof c->names[0], "%s", name);
+}
+
+static int boot_name_cmp(const void *a, const void *b) { return strcmp((const char *)a, (const char *)b); }
+
+static int boot_list_dir(const char *rel, const char *what) {
+    char dir[1024];
+    if (!repo_dir(rel, dir, sizeof dir)) return 0;
+
+    boot_names c = {.n = 0};
+    if (sys_list_dir(dir, boot_collect, &c) < 0) return 0;
+    qsort(c.names, (size_t)c.n, sizeof c.names[0], boot_name_cmp);
+
+    printf(">> %s -- %s\n", rel, what);
+    if (!c.n) printf("   (empty)\n");
+    for (int i = 0; i < c.n; i++) {
+        char path[1200];
+        snprintf(path, sizeof path, "%s/%s", dir, c.names[i]); // fopen takes '/' on Windows too
+        uint8_t hdr[28] = {0};
+        FILE   *f       = fopen(path, "rb");
+        size_t  got     = f ? fread(hdr, 1, sizeof hdr, f) : 0;
+        if (f) fclose(f);
+
+        char note[80] = "unreadable";
+        if (got == sizeof hdr) qgf_describe(hdr, got, NULL, note, sizeof note);
+
+        char name[64];
+        snprintf(name, sizeof name, "%s", c.names[i]);
+        name[strlen(name) - 4] = 0; // drop .qgf: that is the name to install by
+        printf("   %-16s %s\n", name, note);
+    }
+    return c.n;
+}
+
+static int boot_list(void) {
+    int n = boot_list_dir(BOOT_DIR, "shipped with the repo");
+    n += boot_list_dir(BOOT_PRIVATE_DIR, "yours, not tracked by git");
+    if (!n) {
+        printf(">> nothing found; artifacts/boot/ lives at the repo root, and "
+               "tools/make_boot_anim.py writes new ones\n");
+        return 1;
+    }
+    printf(">> install one with `host_tool boot install <name>`\n");
+    return 0;
+}
+
+static int boot_install(int argc, char **argv) {
+    const char *path = NULL, *method = "put", *out_path = NULL;
+    int wait_s = 20, verify = 1, force = 0;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--timeout") && i + 1 < argc) wait_s = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--method") && i + 1 < argc) method = argv[++i];
+        else if (!strcmp(argv[i], "-o") && i + 1 < argc) out_path = argv[++i];
+        else if (!strcmp(argv[i], "--no-verify")) verify = 0;
+        else if (!strcmp(argv[i], "--force")) force = 1;
+        else if (argv[i][0] != '-') path = argv[i];
+        else { printf("usage: boot install <name|file.qgf|file.uf2> [--method put|uf2] [-o out.uf2]\n"); return 2; }
+    }
+    if (!path) {
+        printf("usage: boot install <name|file.qgf|file.uf2> [--method put|uf2] [-o out.uf2]\n"
+               "       `boot list` shows the names\n");
+        return 2;
+    }
+    if (strcmp(method, "put") && strcmp(method, "uf2")) {
+        printf("error: --method must be put or uf2\n");
+        return 2;
+    }
+
+    char resolved[1024];
+    path = boot_resolve(path, resolved, sizeof resolved);
+
+    char     err[160] = {0};
+    size_t   flen = 0;
+    uint8_t *file = read_file(path, &flen, err, sizeof err);
+    if (!file) { printf("error: %s\n", err); return 1; }
+
+    // A UF2 is unwrapped to the bytes it would have programmed; anything else is
+    // taken as the image itself.
+    uint8_t *img = file;
+    size_t   len = flen;
+    if (flen >= 4 && file[0] == 0x55 && file[1] == 0x46 && file[2] == 0x32 && file[3] == 0x0A) {
+        img = uf2_boot_payload(file, flen, &len, err, sizeof err);
+        free(file);
+        if (!img) { printf("error: %s\n", err); return 1; }
+    }
+
+    char note[80];
+    uint32_t claimed = 0;
+    if (qgf_describe(img, len, &claimed, note, sizeof note) != 0) {
+        if (!force) {
+            printf("error: %s -- the splash player would skip it; --force writes it anyway\n", note);
+            free(img); return 1;
+        }
+        printf("!! %s; writing it anyway\n", note);
+    } else if (claimed > len) {
+        printf("error: the image says it is %u bytes but the file holds %zu\n", claimed, len);
+        free(img); return 1;
+    } else {
+        // The descriptor is what the player trusts, so write exactly that much;
+        // a UF2 rounds up to whole 256-byte pages and would otherwise send padding.
+        len = claimed;
+        printf(">> %s: %s\n", path, note);
+    }
+    if (len > ATHENA_BOOT_AREA_END - ATHENA_BOOT_AREA_BEGIN) {
+        printf("error: %zu bytes does not fit the %u KiB boot region\n", len,
+               (ATHENA_BOOT_AREA_END - ATHENA_BOOT_AREA_BEGIN) / 1024u);
+        free(img); return 1;
+    }
+
+    if (!strcmp(method, "uf2")) {
+        char out_buf[1024];
+        if (!out_path) { with_ext(path, ".boot.uf2", out_buf, sizeof out_buf); out_path = out_buf; }
+        if (boot_write_uf2(out_path, img, len) != 0) {
+            printf("error: cannot write %s\n", out_path);
+            free(img); return 1;
+        }
+        printf(">> wrote %s; rebooting to BOOTSEL to copy it over\n", out_path);
+        free(img);
+        char *upload_argv[] = { "upload", (char *)out_path };
+        return cmd_upload(2, upload_argv);
+    }
+
+    // Raw HID moves ~20 KB/s, so anything sizeable is quicker through BOOTSEL.
+    if (len > 512u * 1024u)
+        printf("!! %zu KiB over USB HID takes roughly %u minutes; "
+               "--method uf2 reboots to BOOTSEL and copies it in seconds\n",
+               len / 1024u, (unsigned)(len / (20u * 1024u * 60u) + 1u));
+
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) {
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
+        free(img); return 1;
+    }
+
+    int rc = boot_session(d, img, len, wait_s);
+    if (rc != 0) {
+        if (rc == -2) boot_abort(d);
+        hid_close(d); free(img);
+        return 1;
+    }
+
+    if (verify) {
+        uint8_t back[28];
+        if (probe_xipread_all(d, ATHENA_BOOT_AREA_BEGIN, back, sizeof back) == 0 &&
+            memcmp(back, img, sizeof back) == 0)
+            printf(">> verified the image header on the board\n");
+        else
+            printf("!! verify: the header read back differs\n");
+    }
+    printf(">> done. the new splash plays at the next reset.\n");
+    hid_close(d); free(img);
+    return 0;
+}
+
+// Erasing the first sector is enough: without a readable descriptor the player
+// finds no frames and skips the splash, and the rest of the region is unreachable
+// anyway. One sector also keeps the flash wear of "undo" to a minimum.
+static int boot_erase(int argc, char **argv) {
+    int wait_s = 20;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--timeout") && i + 1 < argc) wait_s = atoi(argv[++i]);
+        else { printf("usage: boot erase [--timeout N]\n"); return 2; }
+    }
+    hid_dev *d = hid_open(ATHENA_VID, ATHENA_PID, ATHENA_USAGE_PAGE, ATHENA_USAGE);
+    if (!d) {
+        printf("error: cannot open a device; `host_tool devices` lists the targets\n");
+        return 1;
+    }
+    int rc = boot_session(d, NULL, 0x1000u, wait_s);
+    if (rc != 0) {
+        if (rc == -2) boot_abort(d);
+        hid_close(d);
+        return 1;
+    }
+    printf(">> done. the splash is skipped from the next reset.\n");
+    hid_close(d);
+    return 0;
+}
+
+int cmd_boot(int argc, char **argv) {
+    if (argc < 2) {
+        printf("usage: boot <list|install|info|erase> ...\n"
+               "  boot list                            the splashes in artifacts/boot/\n"
+               "  boot install <name|file.qgf|.uf2>    write it and confirm on the keyboard\n"
+               "               [--method put|uf2]     put = over USB, uf2 = reboot to BOOTSEL\n"
+               "               [-o out.uf2] [--force] [--timeout N] [--no-verify]\n"
+               "  boot info                            what the board plays at boot right now\n"
+               "  boot erase                           remove it; the splash is then skipped\n"
+               "\nbuild one with tools/make_boot_anim.py (GIF, video or PNG frames -> QGF).\n");
+        return 2;
+    }
+    if (!strcmp(argv[1], "list"))    return boot_list();
+    if (!strcmp(argv[1], "install")) return boot_install(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "info"))    return boot_info();
+    if (!strcmp(argv[1], "erase"))   return boot_erase(argc - 1, argv + 1);
+    printf("unknown boot subcommand: %s\n", argv[1]);
+    return 2;
 }
 
 int cmd_app(int argc, char **argv) {

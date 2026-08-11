@@ -27,7 +27,7 @@
 | `0x00_0000` | `0x1F_0000` | `0x1000_0000` | ≈ 1.94 MiB | **固件镜像区** | boot2 + 固件代码/只读数据（LD 管理）。实际约 110 KiB，其余为余量。 |
 | `0x1F_0000` | `0x20_0000` | `0x101F_0000` | 64 KiB | **Vial/VIA EEPROM** | wear-leveling 备份区（逻辑 32 KiB）。**禁写**（见写预算规则）。 |
 | `0x20_0000` | `0x40_0000` | `0x1020_0000` | 2 MiB | **固件预留尾部** | "≤4 MiB 固件 LD 预留"的尾部，当前未使用。 |
-| `0x40_0000` | `0x80_0000` | `0x1040_0000` | 4 MiB | **开机动画区 (boot)** | QGF 开机图 + 余量，由独立 UF2 烧录。`BOOT_QGF_ADDR`（splash 只用开头）。 |
+| `0x40_0000` | `0x80_0000` | `0x1040_0000` | 4 MiB | **开机动画区 (boot)** | 开机动画 QGF，从区首开始。`BOOT_QGF_ADDR`。`host_tool boot install` 直接写，或烧独立 UF2。 |
 | `0x80_0000` | `0x100_0000` | `0x1080_0000` | 8 MiB | **App 槽区 (slots)** | 32 × 256 KiB slot，relocatable slot app（SETTINGS/MATRIX/WFC 等）。`ATHENA_APP_AREA_*`。 |
 
 > 注 1：固件区仍为 4 MiB（`0x1000_0000..0x1040_0000`）。EEPROM 固定在 `0x1F_0000`
@@ -83,7 +83,8 @@
 | EEPROM base `0x001F_0000` / backing 64 KiB / logical 32 KiB | `keymaps/vial/config.h`（`WEAR_LEVELING_RP2040_FLASH_BASE`、`WEAR_LEVELING_BACKING_SIZE`） |
 | 固件区 / boot 区 / app 槽区边界 | `src/firmware/app/c1_gfx.h`（`BOOT_QGF_ADDR`、注释里的分区图；`ANIM_QGF_ADDR` 为 legacy） |
 | App 槽区 begin/end + slot 几何 | `src/firmware/app_upload.h`、`src/host/common/proto.h`（`*_APP_AREA_*` / `*_APP_SLOT_*`）、`src/host/common/app_pkg.h`（`APP_LINK_BASE`）、`src/app/sdk/app.ld`（`LINK_BASE`/FLASH ORIGIN） |
-| 打包/烧录地址（boot=`0x1040_0000`、boot 区 4 MiB） | `tools/png_to_uf2.py`（`BOOT_ADDR`/`BOOT_END`；`SLOT_*` 为 legacy） |
+| boot 区 begin/end（活写会话的地址窗口） | `src/firmware/app_upload.h`（`BOOT_AREA_*`）、`src/host/common/proto.h`（`ATHENA_BOOT_AREA_*`） |
+| 打包/烧录地址（boot=`0x1040_0000`、boot 区 4 MiB） | `tools/make_boot_anim.py`（`BOOT_ADDR`/`BOOT_BYTES`）、`tools/png_to_uf2.py`（`BOOT_ADDR`/`BOOT_END`；`SLOT_*` 为 legacy） |
 | JEDEC / diag 报告 | `probe_flash.c`、`user_rawhid.c`（`ath_handle_diag` / `ath_handle_probe`） |
 
 ---

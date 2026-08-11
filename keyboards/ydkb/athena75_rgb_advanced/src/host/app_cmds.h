@@ -20,3 +20,6 @@ int cmd_probe(int argc, char **argv);
 
 // Slot apps: pack an ELF into a .app, inspect one, or relocate for a slot.
 int cmd_app(int argc, char **argv);
+
+// Boot animation: write / inspect / remove the QGF the splash plays.
+int cmd_boot(int argc, char **argv);
