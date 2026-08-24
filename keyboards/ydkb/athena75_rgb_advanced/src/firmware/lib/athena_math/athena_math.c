@@ -1,104 +1,104 @@
 /* Athena75 shared math — Q15.16 subset + plasma-style helpers.
- * RP2040 / Cortex-M0+: FIXED_FRACTION=16 so mul/div fit in int64. */
+ * RP2040 / Cortex-M0+: AM_FRACTION=16 so mul/div fit in int64. */
 
 #include "athena_math.h"
 #include "athena_math_lut.h"
 
 typedef long long large_int;
 
-static fixed_point fixed_frac(fixed_point value)
+static am_fixed am_frac(am_fixed value)
 {
-    return value & fixed_fractional_mask;
+    return value & am_fractional_mask;
 }
 
-static fixed_point fixed_floor(fixed_point value)
+static am_fixed am_floor(am_fixed value)
 {
-    return value & fixed_integer_mask;
+    return value & am_integer_mask;
 }
 
-static fixed_point fixed_sign(fixed_point value)
+static am_fixed am_sign(am_fixed value)
 {
-    return value >= 0 ? fixed_one : -fixed_one;
+    return value >= 0 ? am_one : -am_one;
 }
 
-fixed_point fixed_abs(fixed_point value)
+am_fixed am_abs(am_fixed value)
 {
     return value >= 0 ? value : -value;
 }
 
-fixed_point fixed_mul(fixed_point value_a, fixed_point value_b)
+am_fixed am_mul(am_fixed value_a, am_fixed value_b)
 {
-    if (fixed_frac(value_a) == 0 && fixed_frac(value_b) == 0)
-        return fixed_itox(fixed_xtoi(value_a) * fixed_xtoi(value_b));
-    if (fixed_frac(value_a) == 0)
-        return fixed_xtoi(value_a) * value_b;
-    if (fixed_frac(value_b) == 0)
-        return value_a * fixed_xtoi(value_b);
-    return (fixed_point)(((large_int)value_a * (large_int)value_b) >> FIXED_FRACTION);
+    if (am_frac(value_a) == 0 && am_frac(value_b) == 0)
+        return am_itox(am_xtoi(value_a) * am_xtoi(value_b));
+    if (am_frac(value_a) == 0)
+        return am_xtoi(value_a) * value_b;
+    if (am_frac(value_b) == 0)
+        return value_a * am_xtoi(value_b);
+    return (am_fixed)(((large_int)value_a * (large_int)value_b) >> AM_FRACTION);
 }
 
-fixed_point fixed_div(fixed_point value_a, fixed_point value_b)
+am_fixed am_div(am_fixed value_a, am_fixed value_b)
 {
     if (value_b == 0)
-        return fixed_mul(fixed_sign(value_a), fixed_inf);
-    if (fixed_frac(value_b) == 0)
-        return value_a / fixed_xtoi(value_b);
-    return (fixed_point)(((large_int)value_a << FIXED_FRACTION) / value_b);
+        return am_mul(am_sign(value_a), am_inf);
+    if (am_frac(value_b) == 0)
+        return value_a / am_xtoi(value_b);
+    return (am_fixed)(((large_int)value_a << AM_FRACTION) / value_b);
 }
 
-static fixed_point fixed_mod(fixed_point value_a, fixed_point value_b)
+static am_fixed am_mod(am_fixed value_a, am_fixed value_b)
 {
-    fixed_point q = fixed_div(value_a, value_b);
-    return value_a - fixed_mul(fixed_floor(q), value_b);
+    am_fixed q = am_div(value_a, value_b);
+    return value_a - am_mul(am_floor(q), value_b);
 }
 
 /* Linear interpolation over a LUT. */
-static fixed_point fixed_lerp_lut(const fixed_point *values, fixed_point value, fixed_point end_value)
+static am_fixed am_lerp_lut(const am_fixed *values, am_fixed value, am_fixed end_value)
 {
-    if (value >= fixed_one) return end_value;
+    if (value >= am_one) return end_value;
     if (value <= 0) return values[0];
 
-    fixed_point pos = value << FIXED_LUT_SHIFT;
-    int index = fixed_xtoi(pos);
-    fixed_point value_a = values[index];
-    fixed_point value_b = index < FIXED_LUT_SIZE - 1 ? values[index + 1] : end_value;
-    return value_a + fixed_mul(value_b - value_a, fixed_frac(pos));
+    am_fixed pos = value << AM_LUT_SHIFT;
+    int index = am_xtoi(pos);
+    am_fixed value_a = values[index];
+    am_fixed value_b = index < AM_LUT_SIZE - 1 ? values[index + 1] : end_value;
+    return value_a + am_mul(value_b - value_a, am_frac(pos));
 }
 
-fixed_point fixed_cos(fixed_point value)
+am_fixed am_cos(am_fixed value)
 {
-    fixed_point double_pi = fixed_pi << 1;
+    am_fixed double_pi = am_pi << 1;
     if (value < 0) value = -value;
-    value = fixed_mod(value, double_pi);
-    if (value > fixed_pi) value = double_pi - value;
-    return fixed_lerp_lut(fixed_lut_cos, fixed_div(value, fixed_pi), -fixed_one);
+    value = am_mod(value, double_pi);
+    if (value > am_pi) value = double_pi - value;
+    return am_lerp_lut(am_lut_cos, am_div(value, am_pi), -am_one);
 }
 
-fixed_point fixed_sin(fixed_point value)
+am_fixed am_sin(am_fixed value)
 {
-    return fixed_cos(fixed_half_pi - value);
+    return am_cos(am_half_pi - value);
 }
 
-fixed_point fixed_atan(fixed_point value)
+am_fixed am_atan(am_fixed value)
 {
-    if (fixed_abs(value) > fixed_one)
-        return (value > 0 ? fixed_half_pi : -fixed_half_pi) - fixed_atan(fixed_div(fixed_one, value));
-    return fixed_lerp_lut(fixed_lut_atan, (value + fixed_one) >> 1, fixed_half_pi >> 1);
+    if (am_abs(value) > am_one)
+        return (value > 0 ? am_half_pi : -am_half_pi) - am_atan(am_div(am_one, value));
+    return am_lerp_lut(am_lut_atan, (value + am_one) >> 1, am_half_pi >> 1);
 }
 
-fixed_point fixed_rad(fixed_point value)
+am_fixed am_rad(am_fixed value)
 {
-    return fixed_mul(value, fixed_pi) / 180;
+    return am_mul(value, am_pi) / 180;
 }
 
 /* Quadrant-correct atan2. Ratio is reduced to the first octant so |arg| <= 1. */
-fixed_point fixed_atan2(fixed_point y, fixed_point x)
+am_fixed am_atan2(am_fixed y, am_fixed x)
 {
     if (x == 0 && y == 0) return 0;
-    fixed_point ax = fixed_abs(x), ay = fixed_abs(y);
-    fixed_point a = (ax >= ay) ? fixed_atan(fixed_div(ay, ax))
-                               : fixed_half_pi - fixed_atan(fixed_div(ax, ay));
-    if (x < 0) a = fixed_pi - a;
+    am_fixed ax = am_abs(x), ay = am_abs(y);
+    am_fixed a = (ax >= ay) ? am_atan(am_div(ay, ax))
+                            : am_half_pi - am_atan(am_div(ax, ay));
+    if (x < 0) a = am_pi - a;
     return y < 0 ? -a : a;
 }
 
@@ -139,10 +139,10 @@ uint16_t am_isqrt16(uint16_t n)
     return res;
 }
 
-fixed_point fixed_hypot(fixed_point x, fixed_point y)
+am_fixed am_hypot(am_fixed x, am_fixed y)
 {
     uint64_t s = (uint64_t)((int64_t)x * x) + (uint64_t)((int64_t)y * y);
-    return (fixed_point)am_isqrt64(s);
+    return (am_fixed)am_isqrt64(s);
 }
 
 static const int8_t am_sin8_lut[256] = {

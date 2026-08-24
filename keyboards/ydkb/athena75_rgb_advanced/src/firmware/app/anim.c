@@ -330,7 +330,7 @@ static inline int isqrt_u32(uint32_t n) {
     return (int)res;
 }
 
-static void whirl_build_cs_q8(fixed_point strength, int16_t *cos_tab, int16_t *sin_tab) {
+static void whirl_build_cs_q8(am_fixed strength, int16_t *cos_tab, int16_t *sin_tab) {
     if (strength == 0) {
         for (int r = 0; r <= WHIRL_R; r++) {
             cos_tab[r] = (int16_t)(1 << WHIRL_Q8);
@@ -339,9 +339,9 @@ static void whirl_build_cs_q8(fixed_point strength, int16_t *cos_tab, int16_t *s
         return;
     }
     for (int r = 0; r <= WHIRL_R; r++) {
-        fixed_point twist = (fixed_point)(((long long)strength * (WHIRL_R - r)) / WHIRL_R);
-        cos_tab[r] = (int16_t)(fixed_cos(twist) >> (FIXED_FRACTION - WHIRL_Q8));
-        sin_tab[r] = (int16_t)(fixed_sin(twist) >> (FIXED_FRACTION - WHIRL_Q8));
+        am_fixed twist = (am_fixed)(((long long)strength * (WHIRL_R - r)) / WHIRL_R);
+        cos_tab[r] = (int16_t)(am_cos(twist) >> (AM_FRACTION - WHIRL_Q8));
+        sin_tab[r] = (int16_t)(am_sin(twist) >> (AM_FRACTION - WHIRL_Q8));
     }
 }
 
@@ -383,9 +383,9 @@ static void comp_whirlpool(uint16_t t) {
     const uint16_t w_prev = (uint16_t)(256 - t);
 
     const int         sense = whirl_sense();
-    const fixed_point s_max = fixed_rad(fixed_itox(LCD_WHIRL_STRENGTH_DEG));
-    const fixed_point sA    = (fixed_point)(((long long)s_max * sense * (int)t) / 256);
-    const fixed_point sB    = (fixed_point)(((long long)s_max * sense * ((int)t - 256)) / 256);
+    const am_fixed s_max = am_rad(am_itox(LCD_WHIRL_STRENGTH_DEG));
+    const am_fixed sA    = (am_fixed)(((long long)s_max * sense * (int)t) / 256);
+    const am_fixed sB    = (am_fixed)(((long long)s_max * sense * ((int)t - 256)) / 256);
 
     static int16_t cosA[WHIRL_R + 1], sinA[WHIRL_R + 1];
     static int16_t cosB[WHIRL_R + 1], sinB[WHIRL_R + 1];

@@ -3,6 +3,8 @@
 Shared integer math for Athena75 slot apps and (legacy) firmware effects on the
 RP2040 — **no FPU**, so everything is LUT / integer / Q15.16.
 
+All public symbols use the **`am_`** prefix (athena math).
+
 ## Layout
 
 | File | Role |
@@ -15,14 +17,14 @@ RP2040 — **no FPU**, so everything is LUT / integer / Q15.16.
 
 ## API surface
 
-**Q15.16 (`fixed_point`, 16 fractional bits)** — fish physics, rare trig:
+**Q15.16 (`am_fixed`, 16 fractional bits)** — fish physics, rare trig:
 
-- `fixed_itox` / `fixed_xtoi`, `fixed_mul`, `fixed_div`, `fixed_abs`
-- `fixed_sin` / `fixed_cos` / `fixed_atan` / `fixed_rad`
-- `fixed_atan2` (quadrant-correct), `fixed_hypot` (bit isqrt — not exp/log)
-- Constants: `fixed_one`, `fixed_half`, `fixed_pi`, `fixed_half_pi`, …
+- `am_itox` / `am_xtoi`, `am_mul`, `am_div`, `am_abs`
+- `am_sin` / `am_cos` / `am_atan` / `am_rad`
+- `am_atan2` (quadrant-correct), `am_hypot` (bit isqrt — not exp/log)
+- Constants: `am_one`, `am_half`, `am_pi`, `am_half_pi`, …
 
-**Demo helpers (`am_*`)** — plasma-style hot paths:
+**Demo helpers** — plasma-style hot paths:
 
 - `am_sin8` / `am_cos8` — `sin(phase * 2π/256) * 127`, phase is `uint8_t`
 - `am_isqrt16` / `am_isqrt32` / `am_isqrt64`

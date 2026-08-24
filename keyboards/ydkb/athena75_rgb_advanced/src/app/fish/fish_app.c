@@ -62,9 +62,9 @@ static const host_api_t *g_api;
 // -- fixed point --------------------------------------------------------------
 // FX() is only ever applied to a literal, so the double maths is folded at
 // compile time and no soft-float call survives into the image.
-#define FX(x)     ((fixed_point)((x) * 65536.0 + ((x) >= 0 ? 0.5 : -0.5)))
-#define FX_TWO_PI (fixed_pi * 2)
-#define PX(v)     ((int16_t)(((v) + fixed_half) >> 16))
+#define FX(x)     ((am_fixed)((x) * 65536.0 + ((x) >= 0 ? 0.5 : -0.5)))
+#define FX_TWO_PI (am_pi * 2)
+#define PX(v)     ((int16_t)(((v) + am_half) >> 16))
 
 #define PANEL       128
 #define SIM_STEP_MS 16u
@@ -149,13 +149,13 @@ static const host_api_t *g_api;
 #define EPS FX(0.002)
 
 typedef struct {
-    fixed_point x, y;              // px
-    fixed_point vx, vy;            // px/s
-    fixed_point heading;           // rad
-    fixed_point segx[SEG], segy[SEG];
-    fixed_point phase, amp;        // tail beat
-    fixed_point acc_s;             // smoothed |acceleration|
-    fixed_point pvx, pvy;          // last frame's velocity
+    am_fixed x, y;              // px
+    am_fixed vx, vy;            // px/s
+    am_fixed heading;           // rad
+    am_fixed segx[SEG], segy[SEG];
+    am_fixed phase, amp;        // tail beat
+    am_fixed acc_s;             // smoothed |acceleration|
+    am_fixed pvx, pvy;          // last frame's velocity
     uint8_t     chained;           // train seeded behind the head yet?
 } fish_t;
 
@@ -239,54 +239,54 @@ static bool menu_shown;
 
 // Q16 forms of the settings above, refreshed once per step instead of per fish:
 // each is one divide, and the pair loop would otherwise redo them N² times.
-static fixed_point fx_cruise, fx_sep, fx_ali, fx_coh, fx_glass, fx_curr;
-static fixed_point fx_vision, fx_vision2, fx_typing;
-static fixed_point fx_food, fx_food_core;
-static fixed_point fx_col_lo, fx_col_span;   // speeds the body palette spans
+static am_fixed fx_cruise, fx_sep, fx_ali, fx_coh, fx_glass, fx_curr;
+static am_fixed fx_vision, fx_vision2, fx_typing;
+static am_fixed fx_food, fx_food_core;
+static am_fixed fx_col_lo, fx_col_span;   // speeds the body palette spans
 
 // The typing boost, smoothed, and the cruise speed it produces this step.
 // wpm() is only there on firmware new enough to publish it.
 static bool        has_wpm;
-static fixed_point boost_s;
-static fixed_point fx_cruise_now;
+static am_fixed boost_s;
+static am_fixed fx_cruise_now;
 
-// v/10 and v/100 in Q16. fixed_div would take the whole-number fast path and
+// v/10 and v/100 in Q16. am_div would take the whole-number fast path and
 // truncate v to an integer first, which is exactly the precision being asked for
 // here, so the shift and divide are written out.
-static inline fixed_point tenths(uint8_t v)  { return (fixed_point)(((int32_t)v << 16) / 10); }
-static inline fixed_point percent(uint8_t v) { return (fixed_point)(((int32_t)v << 16) / 100); }
+static inline am_fixed tenths(uint8_t v)  { return (am_fixed)(((int32_t)v << 16) / 10); }
+static inline am_fixed percent(uint8_t v) { return (am_fixed)(((int32_t)v << 16) / 100); }
 
 static void cfg_derive(void) {
-    fx_cruise = fixed_itox(cfg.speed);
+    fx_cruise = am_itox(cfg.speed);
     fx_sep    = tenths(cfg.sep);
     fx_ali    = tenths(cfg.ali);
     fx_coh    = tenths(cfg.coh);
-    fx_glass  = fixed_mul(fx_cruise, percent(cfg.glass));
-    fx_curr   = fixed_mul(fx_cruise, percent(cfg.current));
-    fx_vision = fixed_itox(cfg.vision);
+    fx_glass  = am_mul(fx_cruise, percent(cfg.glass));
+    fx_curr   = am_mul(fx_cruise, percent(cfg.current));
+    fx_vision = am_itox(cfg.vision);
     // The square is what the pair loop compares against, so square it once here.
-    fx_vision2 = fixed_itox((int32_t)cfg.vision * cfg.vision);
+    fx_vision2 = am_itox((int32_t)cfg.vision * cfg.vision);
     fx_typing  = percent(cfg.typing);
     // The pellet, like the walls, pulls at the base cruise speed: a typing
     // burst should move the fish, not stiffen the tank around them.
-    fx_food      = fixed_mul(fx_cruise, FOOD_PULL);
-    fx_food_core = fixed_mul(fx_cruise, FOOD_CORE);
-    fx_col_lo   = fixed_mul(fx_cruise, COL_LO);
-    fx_col_span = fixed_mul(fx_cruise, COL_HI - COL_LO);
+    fx_food      = am_mul(fx_cruise, FOOD_PULL);
+    fx_food_core = am_mul(fx_cruise, FOOD_CORE);
+    fx_col_lo   = am_mul(fx_cruise, COL_LO);
+    fx_col_span = am_mul(fx_cruise, COL_HI - COL_LO);
     fx_cruise_now = fx_cruise;
 }
 
 // The school's speed this step. The wall fields deliberately stay on the base
 // cruise speed: typing should move the fish, not stiffen the tank.
 static void typing_step(uint8_t w) {
-    fixed_point target = 0;
+    am_fixed target = 0;
     if (w && cfg.typing) {
-        fixed_point r = w >= WPM_FULL ? fixed_one
-                                      : (fixed_point)(((int32_t)w << 16) / WPM_FULL);
-        target = fixed_mul(fx_typing, WPM_KICK + fixed_mul(WPM_SPAN, r));
+        am_fixed r = w >= WPM_FULL ? am_one
+                                      : (am_fixed)(((int32_t)w << 16) / WPM_FULL);
+        target = am_mul(fx_typing, WPM_KICK + am_mul(WPM_SPAN, r));
     }
-    boost_s += fixed_mul(target - boost_s, target > boost_s ? BOOST_UP : BOOST_DOWN);
-    fx_cruise_now = fx_cruise + fixed_mul(fx_cruise, boost_s);
+    boost_s += am_mul(target - boost_s, target > boost_s ? BOOST_UP : BOOST_DOWN);
+    fx_cruise_now = fx_cruise + am_mul(fx_cruise, boost_s);
 }
 
 #define FISH_HUD_MS    1600u
@@ -372,36 +372,36 @@ static void cfg_commit(void) {
 }
 
 // -- fixed point helpers ------------------------------------------------------
-// hypot / atan2: fixed_hypot / fixed_atan2 from athena_math.
+// hypot / atan2: am_hypot / am_atan2 from athena_math.
 
-static fixed_point wrap_pi(fixed_point a) {
-    while (a >  fixed_pi) a -= FX_TWO_PI;
-    while (a < -fixed_pi) a += FX_TWO_PI;
+static am_fixed wrap_pi(am_fixed a) {
+    while (a >  am_pi) a -= FX_TWO_PI;
+    while (a < -am_pi) a += FX_TWO_PI;
     return a;
 }
 
 // |F| = strength * R² / (d² + R²): finite at the wall, no band edge to cross.
 // Kept in 64-bit because d² for a fish across the tank overflows Q16.
-static fixed_point soft_fall(fixed_point d, fixed_point r) {
-    int64_t d2 = ((int64_t)d * d) >> FIXED_FRACTION;
-    int64_t r2 = ((int64_t)r * r) >> FIXED_FRACTION;
-    if (d2 + r2 <= 0) return fixed_one;
-    return (fixed_point)((r2 << FIXED_FRACTION) / (d2 + r2));
+static am_fixed soft_fall(am_fixed d, am_fixed r) {
+    int64_t d2 = ((int64_t)d * d) >> AM_FRACTION;
+    int64_t r2 = ((int64_t)r * r) >> AM_FRACTION;
+    if (d2 + r2 <= 0) return am_one;
+    return (am_fixed)((r2 << AM_FRACTION) / (d2 + r2));
 }
 
 // Reynolds steering: treat the accumulator as a desired direction, aim it at
 // cruise speed, and return the correction, capped at cruise. Normalising first
 // is why the callers can hand in raw sums without averaging them.
-static void steer(fixed_point dx, fixed_point dy, fixed_point vx, fixed_point vy,
-                  fixed_point cru, fixed_point *ox, fixed_point *oy) {
-    fixed_point len = fixed_hypot(dx, dy);
+static void steer(am_fixed dx, am_fixed dy, am_fixed vx, am_fixed vy,
+                  am_fixed cru, am_fixed *ox, am_fixed *oy) {
+    am_fixed len = am_hypot(dx, dy);
     if (len < EPS) { *ox = 0; *oy = 0; return; }
-    fixed_point fx = fixed_mul(fixed_div(dx, len), cru) - vx;
-    fixed_point fy = fixed_mul(fixed_div(dy, len), cru) - vy;
-    fixed_point m  = fixed_hypot(fx, fy);
+    am_fixed fx = am_mul(am_div(dx, len), cru) - vx;
+    am_fixed fy = am_mul(am_div(dy, len), cru) - vy;
+    am_fixed m  = am_hypot(fx, fy);
     if (m > cru) {
-        fx = fixed_mul(fixed_div(fx, m), cru);
-        fy = fixed_mul(fixed_div(fy, m), cru);
+        fx = am_mul(am_div(fx, m), cru);
+        fy = am_mul(am_div(fy, m), cru);
     }
     *ox = fx;
     *oy = fy;
@@ -414,27 +414,27 @@ static inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
 static inline int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
 
 // -- the tank -----------------------------------------------------------------
-static inline fixed_point bound_x(void) { return fixed_itox(view_w - 1); }
-static inline fixed_point bound_y(void) { return fixed_itox(view_h - 1); }
+static inline am_fixed bound_x(void) { return am_itox(view_w - 1); }
+static inline am_fixed bound_y(void) { return am_itox(view_h - 1); }
 
 static void fish_spawn(fish_t *f) {
-    fixed_point mx = bound_x(), my = bound_y();
-    fixed_point margin = FISH_SIZE + FISH_SIZE;
-    f->x = margin + (fixed_point)(((int64_t)(mx - 2 * margin) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
-    f->y = margin + (fixed_point)(((int64_t)(my - 2 * margin) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+    am_fixed mx = bound_x(), my = bound_y();
+    am_fixed margin = FISH_SIZE + FISH_SIZE;
+    f->x = margin + (am_fixed)(((int64_t)(mx - 2 * margin) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+    f->y = margin + (am_fixed)(((int64_t)(my - 2 * margin) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
 
     // 2pi/256 per step, so a random byte is a random heading without a divide.
-    fixed_point ang = (fixed_point)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
-    fixed_point cru = fx_cruise;
-    fixed_point mins = fixed_mul(cru, MIN_FRAC);
-    fixed_point spd = mins + (fixed_point)(((int64_t)(cru - mins) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+    am_fixed ang = (am_fixed)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
+    am_fixed cru = fx_cruise;
+    am_fixed mins = am_mul(cru, MIN_FRAC);
+    am_fixed spd = mins + (am_fixed)(((int64_t)(cru - mins) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
 
     f->heading = ang;
-    f->vx      = fixed_mul(fixed_cos(ang), spd);
-    f->vy      = fixed_mul(fixed_sin(ang), spd);
+    f->vx      = am_mul(am_cos(ang), spd);
+    f->vy      = am_mul(am_sin(ang), spd);
     f->pvx     = f->vx;
     f->pvy     = f->vy;
-    f->phase   = (fixed_point)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
+    f->phase   = (am_fixed)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
     f->amp     = 0;
     f->acc_s   = 0;
     f->chained = 0;
@@ -469,12 +469,12 @@ static void sync_dims(void) {
 // argue about. The timers run on simulation steps rather than wall clock, which
 // means they stop with the tank while a menu is up.
 static bool        food_live;
-static fixed_point food_x, food_y;
-static fixed_point food_phase;    // breathing
+static am_fixed food_x, food_y;
+static am_fixed food_phase;    // breathing
 static uint32_t    food_ms;       // age of the pellet on screen
-static fixed_point food_eaten;    // fish-seconds taken out of it
+static am_fixed food_eaten;    // fish-seconds taken out of it
 static uint32_t    feed_ms;       // since the last one went away
-static fixed_point type_chars;    // characters typed since then, Q16
+static am_fixed type_chars;    // characters typed since then, Q16
 
 static void food_clear(void) {
     food_live  = false;
@@ -496,15 +496,15 @@ static void food_spawn(void) {
     sx /= fish_n;
     sy /= fish_n;
 
-    const fixed_point mx = bound_x(), my = bound_y();
-    fixed_point gx = FOOD_MARGIN, gy = FOOD_MARGIN;
+    const am_fixed mx = bound_x(), my = bound_y();
+    am_fixed gx = FOOD_MARGIN, gy = FOOD_MARGIN;
     if (2 * gx > mx) gx = mx >> 2;   // a narrow virtual window still has a middle
     if (2 * gy > my) gy = my >> 2;
 
     int32_t best = -1;
     for (uint8_t k = 0; k < 2; k++) {
-        fixed_point x = gx + (fixed_point)(((int64_t)(mx - 2 * gx) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
-        fixed_point y = gy + (fixed_point)(((int64_t)(my - 2 * gy) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+        am_fixed x = gx + (am_fixed)(((int64_t)(mx - 2 * gx) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
+        am_fixed y = gy + (am_fixed)(((int64_t)(my - 2 * gy) * (int32_t)(g_api->rng() & 0xFFu)) >> 8);
         int32_t dx = PX(x) - sx, dy = PX(y) - sy;
         int32_t d2 = dx * dx + dy * dy;
         if (d2 > best) {
@@ -524,9 +524,9 @@ static void food_spawn(void) {
 static uint8_t crowd_at_food(void) {
     uint8_t n = 0;
     for (uint8_t i = 0; i < fish_n; i++) {
-        fixed_point dx = fish[i].x - food_x, dy = fish[i].y - food_y;
-        if (fixed_abs(dx) >= FOOD_EAT_R || fixed_abs(dy) >= FOOD_EAT_R) continue;
-        if (fixed_mul(dx, dx) + fixed_mul(dy, dy) < FOOD_EAT_R2) n++;
+        am_fixed dx = fish[i].x - food_x, dy = fish[i].y - food_y;
+        if (am_abs(dx) >= FOOD_EAT_R || am_abs(dy) >= FOOD_EAT_R) continue;
+        if (am_mul(dx, dx) + am_mul(dy, dy) < FOOD_EAT_R2) n++;
     }
     return n;
 }
@@ -544,45 +544,45 @@ static void food_step(uint8_t wpm) {
         food_phase += FOOD_PULSE;
         if (food_phase > FX_TWO_PI) food_phase -= FX_TWO_PI;
         food_ms    += SIM_STEP_MS;
-        food_eaten += (fixed_point)crowd_at_food() * DT;
+        food_eaten += (am_fixed)crowd_at_food() * DT;
         if (food_eaten >= FOOD_BITES || food_ms >= FOOD_TTL_MS) food_clear();
         return;
     }
     feed_ms    += SIM_STEP_MS;
-    type_chars += (fixed_point)((int32_t)wpm * WPM_CHARS_STEP);
+    type_chars += (am_fixed)((int32_t)wpm * WPM_CHARS_STEP);
     if (feed_ms >= (uint32_t)cfg.feed * 1000u || type_chars >= FOOD_CHARS) food_spawn();
 }
 
 // Pull towards the pellet minus the core push away from it, both on the same
 // radial line, so the two collapse into one signed magnitude.
-static void food_force(const fish_t *f, fixed_point *ax, fixed_point *ay) {
+static void food_force(const fish_t *f, am_fixed *ax, am_fixed *ay) {
     if (!food_live) return;
-    fixed_point dx = food_x - f->x, dy = food_y - f->y;
-    fixed_point d  = fixed_hypot(dx, dy);
+    am_fixed dx = food_x - f->x, dy = food_y - f->y;
+    am_fixed d  = am_hypot(dx, dy);
     if (d < EPS) return;
-    fixed_point m = fixed_mul(fx_food, soft_fall(d, FOOD_R)) -
-                    fixed_mul(fx_food_core, soft_fall(d, FOOD_CORE_R));
-    *ax += fixed_mul(fixed_div(dx, d), m);
-    *ay += fixed_mul(fixed_div(dy, d), m);
+    am_fixed m = am_mul(fx_food, soft_fall(d, FOOD_R)) -
+                    am_mul(fx_food_core, soft_fall(d, FOOD_CORE_R));
+    *ax += am_mul(am_div(dx, d), m);
+    *ay += am_mul(am_div(dy, d), m);
 }
 
 // -- forces -------------------------------------------------------------------
 // Separation / alignment / cohesion over everyone inside VISION. The steer()
 // normalisation means alignment and separation can use plain sums; only cohesion
 // needs the neighbourhood average.
-static void flock(uint8_t self, fixed_point cru, fixed_point *ax, fixed_point *ay) {
+static void flock(uint8_t self, am_fixed cru, am_fixed *ax, am_fixed *ay) {
     const fish_t *b = &fish[self];
-    fixed_point vsx = 0, vsy = 0, psx = 0, psy = 0, sx = 0, sy = 0;
+    am_fixed vsx = 0, vsy = 0, psx = 0, psy = 0, sx = 0, sy = 0;
     int32_t n = 0;
 
     for (uint8_t j = 0; j < fish_n; j++) {
         if (j == self) continue;
         const fish_t *o = &fish[j];
-        fixed_point dx = b->x - o->x;          // away from the neighbour
-        fixed_point dy = b->y - o->y;
+        am_fixed dx = b->x - o->x;          // away from the neighbour
+        am_fixed dy = b->y - o->y;
         // Rejecting on the axes first also keeps dx*dx inside Q16.
-        if (fixed_abs(dx) >= fx_vision || fixed_abs(dy) >= fx_vision) continue;
-        fixed_point d2 = fixed_mul(dx, dx) + fixed_mul(dy, dy);
+        if (am_abs(dx) >= fx_vision || am_abs(dy) >= fx_vision) continue;
+        am_fixed d2 = am_mul(dx, dx) + am_mul(dy, dy);
         if (d2 >= fx_vision2 || d2 == 0) continue;
 
         n++;
@@ -590,48 +590,48 @@ static void flock(uint8_t self, fixed_point cru, fixed_point *ax, fixed_point *a
         vsy += o->vy;
         psx += o->x;
         psy += o->y;
-        fixed_point inv = fixed_div(fixed_one, d2 < SEP_MIN_D2 ? SEP_MIN_D2 : d2);
-        sx += fixed_mul(dx, inv);
-        sy += fixed_mul(dy, inv);
+        am_fixed inv = am_div(am_one, d2 < SEP_MIN_D2 ? SEP_MIN_D2 : d2);
+        sx += am_mul(dx, inv);
+        sy += am_mul(dy, inv);
     }
     if (!n) return;
 
-    fixed_point tx, ty;
+    am_fixed tx, ty;
     steer(vsx, vsy, b->vx, b->vy, cru, &tx, &ty);
-    *ax += fixed_mul(tx, fx_ali);
-    *ay += fixed_mul(ty, fx_ali);
+    *ax += am_mul(tx, fx_ali);
+    *ay += am_mul(ty, fx_ali);
 
-    fixed_point cx = fixed_div(psx, fixed_itox(n)) - b->x;
-    fixed_point cy = fixed_div(psy, fixed_itox(n)) - b->y;
+    am_fixed cx = am_div(psx, am_itox(n)) - b->x;
+    am_fixed cy = am_div(psy, am_itox(n)) - b->y;
     steer(cx, cy, b->vx, b->vy, cru, &tx, &ty);
-    *ax += fixed_mul(tx, fx_coh);
-    *ay += fixed_mul(ty, fx_coh);
+    *ax += am_mul(tx, fx_coh);
+    *ay += am_mul(ty, fx_coh);
 
     steer(sx, sy, b->vx, b->vy, cru, &tx, &ty);
-    *ax += fixed_mul(tx, fx_sep);
-    *ay += fixed_mul(ty, fx_sep);
+    *ax += am_mul(tx, fx_sep);
+    *ay += am_mul(ty, fx_sep);
 }
 
 // Four walls in one sweep. Normals point into the tank; tangents run clockwise
 // on screen (+x along the top, +y down the right, and so on), so a corner is
 // just the two bands adding up.
-static void environment(const fish_t *f, fixed_point *ax, fixed_point *ay) {
-    const fixed_point tw = fx_curr;
-    const fixed_point nw = fx_glass;
+static void environment(const fish_t *f, am_fixed *ax, am_fixed *ay) {
+    const am_fixed tw = fx_curr;
+    const am_fixed nw = fx_glass;
     if (!tw && !nw) return;
 
-    fixed_point fall = soft_fall(f->y, EDGE_R);                 // top
-    *ax += fixed_mul(tw, fall);
-    *ay += fixed_mul(nw, fall);
+    am_fixed fall = soft_fall(f->y, EDGE_R);                 // top
+    *ax += am_mul(tw, fall);
+    *ay += am_mul(nw, fall);
     fall = soft_fall(bound_x() - f->x, EDGE_R);                 // right
-    *ay += fixed_mul(tw, fall);
-    *ax -= fixed_mul(nw, fall);
+    *ay += am_mul(tw, fall);
+    *ax -= am_mul(nw, fall);
     fall = soft_fall(bound_y() - f->y, EDGE_R);                 // bottom
-    *ax -= fixed_mul(tw, fall);
-    *ay -= fixed_mul(nw, fall);
+    *ax -= am_mul(tw, fall);
+    *ay -= am_mul(nw, fall);
     fall = soft_fall(f->x, EDGE_R);                             // left
-    *ay -= fixed_mul(tw, fall);
-    *ax += fixed_mul(nw, fall);
+    *ay -= am_mul(tw, fall);
+    *ax += am_mul(nw, fall);
 }
 
 // Look one step ahead: if that lands outside, zero the offending normal
@@ -639,14 +639,14 @@ static void environment(const fish_t *f, fixed_point *ax, fixed_point *ay) {
 // middle of the tank when it is square on to the wall. Direction only -- how far
 // it actually turns this frame is limit_turn()'s call, so the swerve arcs.
 static void avoid_walls(fish_t *f) {
-    const fixed_point s = FISH_SIZE;
-    const fixed_point mx = bound_x(), my = bound_y();
-    fixed_point vx = f->vx, vy = f->vy;
-    fixed_point speed = fixed_hypot(vx, vy);
+    const am_fixed s = FISH_SIZE;
+    const am_fixed mx = bound_x(), my = bound_y();
+    am_fixed vx = f->vx, vy = f->vy;
+    am_fixed speed = am_hypot(vx, vy);
     if (speed < EPS) return;
 
-    fixed_point px = f->x + fixed_mul(vx, DT);
-    fixed_point py = f->y + fixed_mul(vy, DT);
+    am_fixed px = f->x + am_mul(vx, DT);
+    am_fixed py = f->y + am_mul(vy, DT);
     bool blocked = false;
 
     if (px < s && vx < 0)            { vx = 0; blocked = true; }
@@ -655,46 +655,46 @@ static void avoid_walls(fish_t *f) {
     else if (py > my - s && vy > 0)  { vy = 0; blocked = true; }
     if (!blocked) return;
 
-    fixed_point t = fixed_hypot(vx, vy);
+    am_fixed t = am_hypot(vx, vy);
     if (t > EPS) {
-        f->vx = fixed_mul(fixed_div(vx, t), speed);
-        f->vy = fixed_mul(fixed_div(vy, t), speed);
+        f->vx = am_mul(am_div(vx, t), speed);
+        f->vy = am_mul(am_div(vy, t), speed);
         return;
     }
-    fixed_point cx = (mx >> 1) - f->x;
-    fixed_point cy = (my >> 1) - f->y;
-    fixed_point cl = fixed_hypot(cx, cy);
+    am_fixed cx = (mx >> 1) - f->x;
+    am_fixed cy = (my >> 1) - f->y;
+    am_fixed cl = am_hypot(cx, cy);
     if (cl < EPS) return;
-    f->vx = fixed_mul(fixed_div(cx, cl), speed);
-    f->vy = fixed_mul(fixed_div(cy, cl), speed);
+    f->vx = am_mul(am_div(cx, cl), speed);
+    f->vy = am_mul(am_div(cy, cl), speed);
 }
 
 // The one place a frame's direction change is applied, so every source of it --
 // steering, wall avoidance -- comes out as the same smooth arc.
-static void limit_turn(fish_t *f, fixed_point v0x, fixed_point v0y) {
+static void limit_turn(fish_t *f, am_fixed v0x, am_fixed v0y) {
     if ((!v0x && !v0y) || (!f->vx && !f->vy)) return;
-    fixed_point prev = fixed_atan2(v0y, v0x);
-    fixed_point cur  = fixed_atan2(f->vy, f->vx);
-    fixed_point d    = wrap_pi(cur - prev);
+    am_fixed prev = am_atan2(v0y, v0x);
+    am_fixed cur  = am_atan2(f->vy, f->vx);
+    am_fixed d    = wrap_pi(cur - prev);
     if (d <= TURN_STEP && d >= -TURN_STEP) return;
 
-    fixed_point a  = prev + (d > 0 ? TURN_STEP : -TURN_STEP);
-    fixed_point sp = fixed_hypot(f->vx, f->vy);
-    f->vx = fixed_mul(fixed_cos(a), sp);
-    f->vy = fixed_mul(fixed_sin(a), sp);
+    am_fixed a  = prev + (d > 0 ? TURN_STEP : -TURN_STEP);
+    am_fixed sp = am_hypot(f->vx, f->vy);
+    f->vx = am_mul(am_cos(a), sp);
+    f->vy = am_mul(am_sin(a), sp);
 }
 
 // -- pose ---------------------------------------------------------------------
 // t along the body, 0 at the head and 1 at the last joint.
-static const fixed_point seg_t[SEG] = { 0, FX(0.3333), FX(0.6667), FX(1.0) };
+static const am_fixed seg_t[SEG] = { 0, FX(0.3333), FX(0.6667), FX(1.0) };
 
-static fixed_point wag_lateral(const fish_t *f, uint8_t i) {
+static am_fixed wag_lateral(const fish_t *f, uint8_t i) {
     if (i == 0 || f->amp < AMP_MIN) return 0;
-    fixed_point t = seg_t[i];
+    am_fixed t = seg_t[i];
     // Phase lags down the body, so the tail travels a wave instead of swinging
     // as one rigid piece.
-    fixed_point s = fixed_sin(f->phase - fixed_mul(t, FX(2.5)));
-    return fixed_mul(fixed_mul(s, f->amp), fixed_mul(t, t));
+    am_fixed s = am_sin(f->phase - am_mul(t, FX(2.5)));
+    return am_mul(am_mul(s, f->amp), am_mul(t, t));
 }
 
 // Train follow: the head drags each joint along at a fixed spacing.
@@ -703,37 +703,37 @@ static void pull_train(fish_t *f) {
     f->segy[0] = f->y;
 
     if (!f->chained) {
-        fixed_point bx = -fixed_cos(f->heading);
-        fixed_point by = -fixed_sin(f->heading);
+        am_fixed bx = -am_cos(f->heading);
+        am_fixed by = -am_sin(f->heading);
         for (uint8_t i = 1; i < SEG; i++) {
-            f->segx[i] = f->x + fixed_mul(bx, SEG_LEN * i);
-            f->segy[i] = f->y + fixed_mul(by, SEG_LEN * i);
+            f->segx[i] = f->x + am_mul(bx, SEG_LEN * i);
+            f->segy[i] = f->y + am_mul(by, SEG_LEN * i);
         }
         f->chained = 1;
         return;
     }
     for (uint8_t i = 1; i < SEG; i++) {
-        fixed_point dx = f->segx[i] - f->segx[i - 1];
-        fixed_point dy = f->segy[i] - f->segy[i - 1];
-        fixed_point d  = fixed_hypot(dx, dy);
+        am_fixed dx = f->segx[i] - f->segx[i - 1];
+        am_fixed dy = f->segy[i] - f->segy[i - 1];
+        am_fixed d  = am_hypot(dx, dy);
         if (d < EPS) {
-            dx = -fixed_cos(f->heading);
-            dy = -fixed_sin(f->heading);
-            d  = fixed_one;
+            dx = -am_cos(f->heading);
+            dy = -am_sin(f->heading);
+            d  = am_one;
         }
-        f->segx[i] = f->segx[i - 1] + fixed_mul(fixed_div(dx, d), SEG_LEN);
-        f->segy[i] = f->segy[i - 1] + fixed_mul(fixed_div(dy, d), SEG_LEN);
+        f->segx[i] = f->segx[i - 1] + am_mul(am_div(dx, d), SEG_LEN);
+        f->segy[i] = f->segy[i - 1] + am_mul(am_div(dy, d), SEG_LEN);
     }
 }
 
 static void refresh_pose(fish_t *f) {
-    fixed_point speed = fixed_hypot(f->vx, f->vy);
+    am_fixed speed = am_hypot(f->vx, f->vy);
     if (speed > 0) {
-        fixed_point target = fixed_atan2(f->vy, f->vx);
+        am_fixed target = am_atan2(f->vy, f->vx);
         if (!f->chained) {
             f->heading = target;
         } else {
-            fixed_point d = wrap_pi(target - f->heading);
+            am_fixed d = wrap_pi(target - f->heading);
             if (d >  TURN_STEP) d =  TURN_STEP;
             if (d < -TURN_STEP) d = -TURN_STEP;
             f->heading = wrap_pi(f->heading + d);
@@ -741,21 +741,21 @@ static void refresh_pose(fish_t *f) {
     }
     pull_train(f);
 
-    fixed_point ax = fixed_mul(f->vx - f->pvx, INV_DT);
-    fixed_point ay = fixed_mul(f->vy - f->pvy, INV_DT);
+    am_fixed ax = am_mul(f->vx - f->pvx, INV_DT);
+    am_fixed ay = am_mul(f->vy - f->pvy, INV_DT);
     f->pvx = f->vx;
     f->pvy = f->vy;
-    fixed_point acc = fixed_hypot(ax, ay);
-    f->acc_s += fixed_mul(acc - f->acc_s, SMOOTH_ACC);
+    am_fixed acc = am_hypot(ax, ay);
+    f->acc_s += am_mul(acc - f->acc_s, SMOOTH_ACC);
 
-    fixed_point freq = FREQ_BASE + fixed_mul(f->acc_s, ACC_TO_FREQ);
+    am_fixed freq = FREQ_BASE + am_mul(f->acc_s, ACC_TO_FREQ);
     if (freq > FREQ_MAX) freq = FREQ_MAX;
-    f->phase += fixed_mul(DT, freq);
+    f->phase += am_mul(DT, freq);
     while (f->phase > FX_TWO_PI) f->phase -= FX_TWO_PI;
 
-    fixed_point ta = AMP_BASE + fixed_mul(speed, AMP_SPEED);
+    am_fixed ta = AMP_BASE + am_mul(speed, AMP_SPEED);
     if (ta > AMP_MAX) ta = AMP_MAX;
-    f->amp += fixed_mul(ta - f->amp, SMOOTH_AMP);
+    f->amp += am_mul(ta - f->amp, SMOOTH_AMP);
 }
 
 // -- one step -----------------------------------------------------------------
@@ -764,41 +764,41 @@ static void school_step(void) {
     typing_step(typed);
     food_step(typed);
 
-    const fixed_point cru  = fx_cruise_now;
-    const fixed_point mins = fixed_mul(cru, MIN_FRAC);
-    const fixed_point mx = bound_x(), my = bound_y();
+    const am_fixed cru  = fx_cruise_now;
+    const am_fixed mins = am_mul(cru, MIN_FRAC);
+    const am_fixed mx = bound_x(), my = bound_y();
 
     for (uint8_t i = 0; i < fish_n; i++) {
         fish_t *f = &fish[i];
-        const fixed_point v0x = f->vx, v0y = f->vy;
+        const am_fixed v0x = f->vx, v0y = f->vy;
 
-        fixed_point ax = 0, ay = 0;
+        am_fixed ax = 0, ay = 0;
         flock(i, cru, &ax, &ay);
         food_force(f, &ax, &ay);
         environment(f, &ax, &ay);
-        ax -= fixed_mul(DRAG, f->vx);
-        ay -= fixed_mul(DRAG, f->vy);
+        ax -= am_mul(DRAG, f->vx);
+        ay -= am_mul(DRAG, f->vy);
 
-        f->vx += fixed_mul(ax, DT);
-        f->vy += fixed_mul(ay, DT);
+        f->vx += am_mul(ax, DT);
+        f->vy += am_mul(ay, DT);
 
-        fixed_point sp = fixed_hypot(f->vx, f->vy);
+        am_fixed sp = am_hypot(f->vx, f->vy);
         if (sp < mins) {
             if (sp < EPS) {
-                fixed_point a = (fixed_point)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
-                f->vx = fixed_mul(fixed_cos(a), mins);
-                f->vy = fixed_mul(fixed_sin(a), mins);
+                am_fixed a = (am_fixed)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
+                f->vx = am_mul(am_cos(a), mins);
+                f->vy = am_mul(am_sin(a), mins);
             } else {
-                f->vx = fixed_mul(fixed_div(f->vx, sp), mins);
-                f->vy = fixed_mul(fixed_div(f->vy, sp), mins);
+                f->vx = am_mul(am_div(f->vx, sp), mins);
+                f->vy = am_mul(am_div(f->vy, sp), mins);
             }
         }
 
         avoid_walls(f);
         limit_turn(f, v0x, v0y);
 
-        f->x += fixed_mul(f->vx, DT);
-        f->y += fixed_mul(f->vy, DT);
+        f->x += am_mul(f->vx, DT);
+        f->y += am_mul(f->vy, DT);
 
         // Position-only backstop; touching the velocity here is what makes a
         // fish judder against the glass.
@@ -842,7 +842,7 @@ static uint16_t hsl565(int32_t hue, int32_t light_pct) {
 // ends follow the *base* cruise speed, which is what makes a typing burst warm
 // the tank up rather than just move it.
 static int32_t speed_hue(const fish_t *f) {
-    fixed_point sp = fixed_hypot(f->vx, f->vy) - fx_col_lo;
+    am_fixed sp = am_hypot(f->vx, f->vy) - fx_col_lo;
     if (sp <= 0) return 220;
     if (sp >= fx_col_span) return 0;
     int32_t hue = 220 - (int32_t)(((int64_t)sp * 220) / fx_col_span);
@@ -856,7 +856,7 @@ static inline void px_put(uint8_t *fb, int16_t x, int16_t y, uint16_t c) {
 // Half-space rasteriser over the bounding box: a triangle here is ~5x5 px, so
 // the box test is a handful of pixels and needs no edge stepping. Working in Q8
 // keeps every cross product inside int32; the sign test accepts either winding.
-static void tri_fill(uint8_t *fb, const fixed_point *vx, const fixed_point *vy, uint16_t col) {
+static void tri_fill(uint8_t *fb, const am_fixed *vx, const am_fixed *vy, uint16_t col) {
     int32_t ax = vx[0] >> 8, ay = vy[0] >> 8;
     int32_t bx = vx[1] >> 8, by = vy[1] >> 8;
     int32_t cx = vx[2] >> 8, cy = vy[2] >> 8;
@@ -884,54 +884,54 @@ static void tri_fill(uint8_t *fb, const fixed_point *vx, const fixed_point *vy, 
 
 // Per joint: the triangle reaches 0.7 of its length ahead of the joint and 0.3
 // behind, and both length and half-width taper by 1 - 0.35t down the body.
-static const fixed_point tri_fwd[SEG]  = { FX(3.491), FX(3.084), FX(2.677), FX(2.269) };
-static const fixed_point tri_back[SEG] = { FX(1.496), FX(1.322), FX(1.147), FX(0.973) };
-static const fixed_point tri_half[SEG] = { FX(2.750), FX(2.429), FX(2.108), FX(1.788) };
+static const am_fixed tri_fwd[SEG]  = { FX(3.491), FX(3.084), FX(2.677), FX(2.269) };
+static const am_fixed tri_back[SEG] = { FX(1.496), FX(1.322), FX(1.147), FX(0.973) };
+static const am_fixed tri_half[SEG] = { FX(2.750), FX(2.429), FX(2.108), FX(1.788) };
 // HSL lightness down the train, the reference's 58% - 14%t.
 static const uint8_t     tri_light[SEG] = { 58, 53, 49, 44 };
 
 static void draw_one(uint8_t *fb, const fish_t *f) {
-    fixed_point wx[SEG], wy[SEG];
+    am_fixed wx[SEG], wy[SEG];
     uint16_t    col[SEG];
 
     const int32_t hue = speed_hue(f);
     for (uint8_t i = 0; i < SEG; i++) col[i] = hsl565(hue, tri_light[i]);
 
     for (uint8_t i = 0; i < SEG; i++) {
-        fixed_point x = f->segx[i], y = f->segy[i];
-        fixed_point w = wag_lateral(f, i);
+        am_fixed x = f->segx[i], y = f->segy[i];
+        am_fixed w = wag_lateral(f, i);
         if (w && i) {
-            fixed_point dx = f->segx[i] - f->segx[i - 1];
-            fixed_point dy = f->segy[i] - f->segy[i - 1];
-            fixed_point len = fixed_hypot(dx, dy);
+            am_fixed dx = f->segx[i] - f->segx[i - 1];
+            am_fixed dy = f->segy[i] - f->segy[i - 1];
+            am_fixed len = am_hypot(dx, dy);
             if (len > EPS) {
-                x -= fixed_mul(fixed_div(dy, len), w);
-                y += fixed_mul(fixed_div(dx, len), w);
+                x -= am_mul(am_div(dy, len), w);
+                y += am_mul(am_div(dx, len), w);
             }
         }
         wx[i] = x;
         wy[i] = y;
     }
 
-    const fixed_point hcos = fixed_cos(f->heading);
-    const fixed_point hsin = fixed_sin(f->heading);
+    const am_fixed hcos = am_cos(f->heading);
+    const am_fixed hsin = am_sin(f->heading);
 
     // Back to front, so the head triangle wins the overlap.
     for (int8_t i = SEG - 1; i >= 0; i--) {
-        fixed_point ux = hcos, uy = hsin;
+        am_fixed ux = hcos, uy = hsin;
         if (i > 0) {
             // A body joint faces the one ahead of it. The direction is already
             // there in the joint delta, so no atan2/cos/sin round trip.
-            fixed_point dx = wx[i - 1] - wx[i], dy = wy[i - 1] - wy[i];
-            fixed_point l  = fixed_hypot(dx, dy);
-            if (l > EPS) { ux = fixed_div(dx, l); uy = fixed_div(dy, l); }
+            am_fixed dx = wx[i - 1] - wx[i], dy = wy[i - 1] - wy[i];
+            am_fixed l  = am_hypot(dx, dy);
+            if (l > EPS) { ux = am_div(dx, l); uy = am_div(dy, l); }
         }
-        fixed_point bx = wx[i] - fixed_mul(ux, tri_back[i]);
-        fixed_point by = wy[i] - fixed_mul(uy, tri_back[i]);
-        fixed_point nx = fixed_mul(-uy, tri_half[i]);
-        fixed_point ny = fixed_mul(ux, tri_half[i]);
-        const fixed_point tx[3] = { wx[i] + fixed_mul(ux, tri_fwd[i]), bx + nx, bx - nx };
-        const fixed_point ty[3] = { wy[i] + fixed_mul(uy, tri_fwd[i]), by + ny, by - ny };
+        am_fixed bx = wx[i] - am_mul(ux, tri_back[i]);
+        am_fixed by = wy[i] - am_mul(uy, tri_back[i]);
+        am_fixed nx = am_mul(-uy, tri_half[i]);
+        am_fixed ny = am_mul(ux, tri_half[i]);
+        const am_fixed tx[3] = { wx[i] + am_mul(ux, tri_fwd[i]), bx + nx, bx - nx };
+        const am_fixed ty[3] = { wy[i] + am_mul(uy, tri_fwd[i]), by + ny, by - ny };
         tri_fill(fb, tx, ty, col[i]);
     }
 }
@@ -944,7 +944,7 @@ static void draw_one(uint8_t *fb, const fish_t *f) {
 static void draw_food(uint8_t *fb) {
     if (!food_live) return;
     const int16_t  cx    = PX(food_x), cy = PX(food_y);
-    const int32_t  pulse = (int32_t)((fixed_sin(food_phase) + fixed_one) >> 9);   // 0..256
+    const int32_t  pulse = (int32_t)((am_sin(food_phase) + am_one) >> 9);   // 0..256
     const uint16_t core  = hsl565(46, 84);
     const uint16_t ring  = hsl565(34, 40 + pulse * 28 / 256);
     const int32_t  reach = food_eaten > FOOD_BITES * 2 / 3 ? 1     // squared radius
