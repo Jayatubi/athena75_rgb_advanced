@@ -36,9 +36,9 @@
 // the reference's mouse attractor: one gravity well, gone once enough fish have
 // crowded round it.
 //
-// All of it is Q15.16 through the firmware's fixed_math library — this core has
-// no FPU. The two exceptions written here are hypot (fixed_sqrt goes through
-// exp/log, far too slow and lossy) and atan2 (the library's loses the quadrant).
+// All of it is Q15.16 through athena_math — this core has no FPU. hypot/atan2
+// come from that library (bit-isqrt + quadrant-correct atan2); the old
+// fixed_math exp/log sqrt path is gone on purpose.
 //
 // Enter opens the firmware menu engine on the FISH menu content; the same knobs
 // are reachable without leaving the tank (Up/Down speed, Right/Left one fish at a
@@ -48,7 +48,7 @@
 #include <stdbool.h>
 
 #include "host_api.h"
-#include "lib/fixed_math/fixed_math.h"
+#include "lib/athena_math/athena_math.h"
 
 // -- freestanding libc bits (no newlib is linked into the app) ----------------
 void *memset(void *d, int c, unsigned long n) {
@@ -372,36 +372,7 @@ static void cfg_commit(void) {
 }
 
 // -- fixed point helpers ------------------------------------------------------
-// Bit-by-bit square root of a Q32 value, which lands in Q16. fixed_sqrt() is
-// pow(x, 0.5) == exp(0.5 * log x) in this library: two table lerps and a power
-// loop for something the pair loop wants dozens of times per frame.
-static uint32_t isqrt_u64(uint64_t n) {
-    uint64_t op = n, res = 0, one = (uint64_t)1 << 62;
-    while (one > op) one >>= 2;
-    while (one) {
-        if (op >= res + one) { op -= res + one; res = (res >> 1) + one; }
-        else                 { res >>= 1; }
-        one >>= 2;
-    }
-    return (uint32_t)res;
-}
-
-static fixed_point fx_hypot(fixed_point x, fixed_point y) {
-    uint64_t s = (uint64_t)((int64_t)x * x) + (uint64_t)((int64_t)y * y);
-    return (fixed_point)isqrt_u64(s);
-}
-
-// fixed_atan2() feeds atan(a/b) straight out, which folds the left half-plane
-// onto the right one and overflows the divide for a near-vertical direction.
-// Reduce to the first octant instead: the ratio is always <= 1 there.
-static fixed_point fx_atan2(fixed_point y, fixed_point x) {
-    if (!x && !y) return 0;
-    fixed_point ax = fixed_abs(x), ay = fixed_abs(y);
-    fixed_point a = (ax >= ay) ? fixed_atan(fixed_div(ay, ax))
-                               : fixed_half_pi - fixed_atan(fixed_div(ax, ay));
-    if (x < 0) a = fixed_pi - a;
-    return y < 0 ? -a : a;
-}
+// hypot / atan2: fixed_hypot / fixed_atan2 from athena_math.
 
 static fixed_point wrap_pi(fixed_point a) {
     while (a >  fixed_pi) a -= FX_TWO_PI;
@@ -423,11 +394,11 @@ static fixed_point soft_fall(fixed_point d, fixed_point r) {
 // is why the callers can hand in raw sums without averaging them.
 static void steer(fixed_point dx, fixed_point dy, fixed_point vx, fixed_point vy,
                   fixed_point cru, fixed_point *ox, fixed_point *oy) {
-    fixed_point len = fx_hypot(dx, dy);
+    fixed_point len = fixed_hypot(dx, dy);
     if (len < EPS) { *ox = 0; *oy = 0; return; }
     fixed_point fx = fixed_mul(fixed_div(dx, len), cru) - vx;
     fixed_point fy = fixed_mul(fixed_div(dy, len), cru) - vy;
-    fixed_point m  = fx_hypot(fx, fy);
+    fixed_point m  = fixed_hypot(fx, fy);
     if (m > cru) {
         fx = fixed_mul(fixed_div(fx, m), cru);
         fy = fixed_mul(fixed_div(fy, m), cru);
@@ -587,7 +558,7 @@ static void food_step(uint8_t wpm) {
 static void food_force(const fish_t *f, fixed_point *ax, fixed_point *ay) {
     if (!food_live) return;
     fixed_point dx = food_x - f->x, dy = food_y - f->y;
-    fixed_point d  = fx_hypot(dx, dy);
+    fixed_point d  = fixed_hypot(dx, dy);
     if (d < EPS) return;
     fixed_point m = fixed_mul(fx_food, soft_fall(d, FOOD_R)) -
                     fixed_mul(fx_food_core, soft_fall(d, FOOD_CORE_R));
@@ -671,7 +642,7 @@ static void avoid_walls(fish_t *f) {
     const fixed_point s = FISH_SIZE;
     const fixed_point mx = bound_x(), my = bound_y();
     fixed_point vx = f->vx, vy = f->vy;
-    fixed_point speed = fx_hypot(vx, vy);
+    fixed_point speed = fixed_hypot(vx, vy);
     if (speed < EPS) return;
 
     fixed_point px = f->x + fixed_mul(vx, DT);
@@ -684,7 +655,7 @@ static void avoid_walls(fish_t *f) {
     else if (py > my - s && vy > 0)  { vy = 0; blocked = true; }
     if (!blocked) return;
 
-    fixed_point t = fx_hypot(vx, vy);
+    fixed_point t = fixed_hypot(vx, vy);
     if (t > EPS) {
         f->vx = fixed_mul(fixed_div(vx, t), speed);
         f->vy = fixed_mul(fixed_div(vy, t), speed);
@@ -692,7 +663,7 @@ static void avoid_walls(fish_t *f) {
     }
     fixed_point cx = (mx >> 1) - f->x;
     fixed_point cy = (my >> 1) - f->y;
-    fixed_point cl = fx_hypot(cx, cy);
+    fixed_point cl = fixed_hypot(cx, cy);
     if (cl < EPS) return;
     f->vx = fixed_mul(fixed_div(cx, cl), speed);
     f->vy = fixed_mul(fixed_div(cy, cl), speed);
@@ -702,13 +673,13 @@ static void avoid_walls(fish_t *f) {
 // steering, wall avoidance -- comes out as the same smooth arc.
 static void limit_turn(fish_t *f, fixed_point v0x, fixed_point v0y) {
     if ((!v0x && !v0y) || (!f->vx && !f->vy)) return;
-    fixed_point prev = fx_atan2(v0y, v0x);
-    fixed_point cur  = fx_atan2(f->vy, f->vx);
+    fixed_point prev = fixed_atan2(v0y, v0x);
+    fixed_point cur  = fixed_atan2(f->vy, f->vx);
     fixed_point d    = wrap_pi(cur - prev);
     if (d <= TURN_STEP && d >= -TURN_STEP) return;
 
     fixed_point a  = prev + (d > 0 ? TURN_STEP : -TURN_STEP);
-    fixed_point sp = fx_hypot(f->vx, f->vy);
+    fixed_point sp = fixed_hypot(f->vx, f->vy);
     f->vx = fixed_mul(fixed_cos(a), sp);
     f->vy = fixed_mul(fixed_sin(a), sp);
 }
@@ -744,7 +715,7 @@ static void pull_train(fish_t *f) {
     for (uint8_t i = 1; i < SEG; i++) {
         fixed_point dx = f->segx[i] - f->segx[i - 1];
         fixed_point dy = f->segy[i] - f->segy[i - 1];
-        fixed_point d  = fx_hypot(dx, dy);
+        fixed_point d  = fixed_hypot(dx, dy);
         if (d < EPS) {
             dx = -fixed_cos(f->heading);
             dy = -fixed_sin(f->heading);
@@ -756,9 +727,9 @@ static void pull_train(fish_t *f) {
 }
 
 static void refresh_pose(fish_t *f) {
-    fixed_point speed = fx_hypot(f->vx, f->vy);
+    fixed_point speed = fixed_hypot(f->vx, f->vy);
     if (speed > 0) {
-        fixed_point target = fx_atan2(f->vy, f->vx);
+        fixed_point target = fixed_atan2(f->vy, f->vx);
         if (!f->chained) {
             f->heading = target;
         } else {
@@ -774,7 +745,7 @@ static void refresh_pose(fish_t *f) {
     fixed_point ay = fixed_mul(f->vy - f->pvy, INV_DT);
     f->pvx = f->vx;
     f->pvy = f->vy;
-    fixed_point acc = fx_hypot(ax, ay);
+    fixed_point acc = fixed_hypot(ax, ay);
     f->acc_s += fixed_mul(acc - f->acc_s, SMOOTH_ACC);
 
     fixed_point freq = FREQ_BASE + fixed_mul(f->acc_s, ACC_TO_FREQ);
@@ -811,7 +782,7 @@ static void school_step(void) {
         f->vx += fixed_mul(ax, DT);
         f->vy += fixed_mul(ay, DT);
 
-        fixed_point sp = fx_hypot(f->vx, f->vy);
+        fixed_point sp = fixed_hypot(f->vx, f->vy);
         if (sp < mins) {
             if (sp < EPS) {
                 fixed_point a = (fixed_point)(int32_t)((g_api->rng() & 0xFFu) * (FX_TWO_PI / 256));
@@ -871,7 +842,7 @@ static uint16_t hsl565(int32_t hue, int32_t light_pct) {
 // ends follow the *base* cruise speed, which is what makes a typing burst warm
 // the tank up rather than just move it.
 static int32_t speed_hue(const fish_t *f) {
-    fixed_point sp = fx_hypot(f->vx, f->vy) - fx_col_lo;
+    fixed_point sp = fixed_hypot(f->vx, f->vy) - fx_col_lo;
     if (sp <= 0) return 220;
     if (sp >= fx_col_span) return 0;
     int32_t hue = 220 - (int32_t)(((int64_t)sp * 220) / fx_col_span);
@@ -932,7 +903,7 @@ static void draw_one(uint8_t *fb, const fish_t *f) {
         if (w && i) {
             fixed_point dx = f->segx[i] - f->segx[i - 1];
             fixed_point dy = f->segy[i] - f->segy[i - 1];
-            fixed_point len = fx_hypot(dx, dy);
+            fixed_point len = fixed_hypot(dx, dy);
             if (len > EPS) {
                 x -= fixed_mul(fixed_div(dy, len), w);
                 y += fixed_mul(fixed_div(dx, len), w);
@@ -952,7 +923,7 @@ static void draw_one(uint8_t *fb, const fish_t *f) {
             // A body joint faces the one ahead of it. The direction is already
             // there in the joint delta, so no atan2/cos/sin round trip.
             fixed_point dx = wx[i - 1] - wx[i], dy = wy[i - 1] - wy[i];
-            fixed_point l  = fx_hypot(dx, dy);
+            fixed_point l  = fixed_hypot(dx, dy);
             if (l > EPS) { ux = fixed_div(dx, l); uy = fixed_div(dy, l); }
         }
         fixed_point bx = wx[i] - fixed_mul(ux, tri_back[i]);

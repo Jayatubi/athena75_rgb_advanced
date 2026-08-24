@@ -25,8 +25,7 @@
 隔一阵子——或者你打字够快（QMK 的实时 WPM，见 `host_api.wpm()`）就提前——缸里会掉下
 一粒饵，鱼群围过去，等聚够了它就没了。
 
-全部算术是 Q15.16 定点，因为这颗核心没有 FPU。只有 hypot 和 atan2 是自己写的：
-`fixed_sqrt` 走 exp/log 太慢也太糙，库里的 atan2 又会丢象限。
+全部算术是 Q15.16 定点（`athena_math`），因为这颗核心没有 FPU。hypot / atan2 也走该库（位运算 isqrt + 保象限 atan2），不再用旧 `fixed_math` 的 exp/log 开方。
 
 > `TYPING` 这项需要固件构建号 ≥ 260731（`FW_WPM_BUILD`），旧固件上取不到 WPM。
 

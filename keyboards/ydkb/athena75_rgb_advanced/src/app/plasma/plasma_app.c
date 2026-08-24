@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 #include "host_api.h"
+#include "lib/athena_math/athena_math.h"
 
 static const host_api_t *g_api;
 
@@ -16,52 +17,10 @@ static const host_api_t *g_api;
 #define SCALE     2u
 #define RENDER_MS 16u
 
-/* sin(i * 2π/256) * 127, i in 0..255. Phase is uint8 — wrap is free (& 0xFF). */
-static const int8_t sin_lut[256] = {
-       0,    3,    6,    9,   12,   16,   19,   22,   25,   28,   31,   34,   37,   40,   43,   46,
-      49,   51,   54,   57,   60,   63,   65,   68,   71,   73,   76,   78,   81,   83,   85,   88,
-      90,   92,   94,   96,   98,  100,  102,  104,  106,  107,  109,  111,  112,  113,  115,  116,
-     117,  118,  120,  121,  122,  122,  123,  124,  125,  125,  126,  126,  126,  127,  127,  127,
-     127,  127,  127,  127,  126,  126,  126,  125,  125,  124,  123,  122,  122,  121,  120,  118,
-     117,  116,  115,  113,  112,  111,  109,  107,  106,  104,  102,  100,   98,   96,   94,   92,
-      90,   88,   85,   83,   81,   78,   76,   73,   71,   68,   65,   63,   60,   57,   54,   51,
-      49,   46,   43,   40,   37,   34,   31,   28,   25,   22,   19,   16,   12,    9,    6,    3,
-       0,   -3,   -6,   -9,  -12,  -16,  -19,  -22,  -25,  -28,  -31,  -34,  -37,  -40,  -43,  -46,
-     -49,  -51,  -54,  -57,  -60,  -63,  -65,  -68,  -71,  -73,  -76,  -78,  -81,  -83,  -85,  -88,
-     -90,  -92,  -94,  -96,  -98, -100, -102, -104, -106, -107, -109, -111, -112, -113, -115, -116,
-    -117, -118, -120, -121, -122, -122, -123, -124, -125, -125, -126, -126, -126, -127, -127, -127,
-    -127, -127, -127, -127, -126, -126, -126, -125, -125, -124, -123, -122, -122, -121, -120, -118,
-    -117, -116, -115, -113, -112, -111, -109, -107, -106, -104, -102, -100,  -98,  -96,  -94,  -92,
-     -90,  -88,  -85,  -83,  -81,  -78,  -76,  -73,  -71,  -68,  -65,  -63,  -60,  -57,  -54,  -51,
-     -49,  -46,  -43,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -12,   -9,   -6,   -3,
-};
-
-static inline int16_t isin(uint8_t a) {
-    return (int16_t)sin_lut[a];
-}
-
-static inline int16_t icos(uint8_t a) {
-    return (int16_t)sin_lut[(uint8_t)(a + 64u)];
-}
+/* sin/cos/isqrt: am_sin8 / am_cos8 / am_isqrt16 from athena_math. */
 
 static inline uint8_t lode_phase(uint16_t coord, uint16_t w) {
     return (uint8_t)((coord * 41u) / w);
-}
-
-/* Integer sqrt for distance terms (max x²+y² on 128 panel ≈ 2·127²). */
-static uint16_t isqrt16(uint16_t n) {
-    uint16_t op = n, res = 0, one = (uint16_t)1u << 14;
-    while (one > op) one >>= 2;
-    while (one != 0) {
-        if (op >= res + one) {
-            op  = (uint16_t)(op - (res + one));
-            res = (uint16_t)((res >> 1) + one);
-        } else {
-            res >>= 1;
-        }
-        one >>= 2;
-    }
-    return res;
 }
 
 /* ---- save / config ------------------------------------------------------ */
@@ -291,10 +250,6 @@ static inline void fb_put(uint16_t *fb16, uint32_t i, uint16_t c) {
 }
 
 /* Integer lerp: a + (b-a)*t/255, t in 0..255. */
-static inline uint8_t lerp8(uint8_t a, uint8_t b, uint8_t t) {
-    return (uint8_t)((int16_t)a + (((int16_t)b - (int16_t)a) * (int16_t)t) / 255);
-}
-
 typedef struct {
     uint8_t r, g, b;
 } pal_stop_t;
@@ -315,9 +270,9 @@ static void pal_eval_stops(uint8_t xi, const pal_stop_t *s, uint8_t n,
         *b = s[segs].b;
         return;
     }
-    *r = lerp8(s[seg].r, s[seg + 1u].r, t);
-    *g = lerp8(s[seg].g, s[seg + 1u].g, t);
-    *b = lerp8(s[seg].b, s[seg + 1u].b, t);
+    *r = am_lerp8(s[seg].r, s[seg + 1u].r, t);
+    *g = am_lerp8(s[seg].g, s[seg + 1u].g, t);
+    *b = am_lerp8(s[seg].b, s[seg + 1u].b, t);
 }
 
 /* Tileable ramps: near-black lows, saturated mids, bright highs, dark close. */
@@ -392,9 +347,9 @@ static void pal_rebuild_blend(uint8_t pal_a, uint8_t pal_b, uint8_t t) {
         uint8_t r, g, b;
         pal_eval_stops((uint8_t)x, stops_a, n_a, &ar, &ag, &ab);
         pal_eval_stops((uint8_t)x, stops_b, n_b, &br, &bg, &bb);
-        r = lerp8(ar, br, t);
-        g = lerp8(ag, bg, t);
-        b = lerp8(ab, bb, t);
+        r = am_lerp8(ar, br, t);
+        g = am_lerp8(ag, bg, t);
+        b = am_lerp8(ab, bb, t);
         pal_lut[x] = rgb565(r, g, b);
     }
     pal_lut[255] = pal_lut[0];
@@ -469,10 +424,10 @@ static void update_sources(uint8_t t) {
      * turn at the period boundary and teleport the distance centers.
      * Ratios 1:2 and 1:3 jointly period-close after 2 / 3 wraps of t.
      */
-    src_cx[0] = (int16_t)(64 + ((isin(t) * 44) >> 7));
-    src_cy[0] = (int16_t)(64 + ((icos((uint8_t)(t * 2u)) * 40) >> 7));
-    src_cx[1] = (int16_t)(64 + ((isin((uint8_t)(t + 90u)) * 50) >> 7));
-    src_cy[1] = (int16_t)(64 + ((icos((uint8_t)(t * 3u + 50u)) * 46) >> 7));
+    src_cx[0] = (int16_t)(64 + ((am_sin8(t) * 44) >> 7));
+    src_cy[0] = (int16_t)(64 + ((am_cos8((uint8_t)(t * 2u)) * 40) >> 7));
+    src_cx[1] = (int16_t)(64 + ((am_sin8((uint8_t)(t + 90u)) * 50) >> 7));
+    src_cy[1] = (int16_t)(64 + ((am_cos8((uint8_t)(t * 3u + 50u)) * 46) >> 7));
 }
 
 /*
@@ -485,10 +440,10 @@ static uint16_t plasma_at(uint8_t x, uint8_t y, uint8_t t) {
     int16_t dy0 = (int16_t)y - src_cy[0];
     int16_t dx1 = (int16_t)x - src_cx[1];
     int16_t dy1 = (int16_t)y - src_cy[1];
-    uint16_t d0 = isqrt16((uint16_t)((uint16_t)(dx0 * dx0) + (uint16_t)(dy0 * dy0)));
-    uint16_t d1 = isqrt16((uint16_t)((uint16_t)(dx1 * dx1) + (uint16_t)(dy1 * dy1)));
+    uint16_t d0 = am_isqrt16((uint16_t)((uint16_t)(dx0 * dx0) + (uint16_t)(dy0 * dy0)));
+    uint16_t d1 = am_isqrt16((uint16_t)((uint16_t)(dx1 * dx1) + (uint16_t)(dy1 * dy1)));
     /* Corner distance (fixed origin) for DIST. */
-    uint16_t d_corner = isqrt16((uint16_t)((uint16_t)x * (uint16_t)x + (uint16_t)y * (uint16_t)y));
+    uint16_t d_corner = am_isqrt16((uint16_t)((uint16_t)x * (uint16_t)x + (uint16_t)y * (uint16_t)y));
 
     int16_t v;
     int16_t denom;
@@ -500,46 +455,46 @@ static uint16_t plasma_at(uint8_t x, uint8_t y, uint8_t t) {
         case PAT_XY:
             /* Classic: sin(x)+sin(y) */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 20u) + t)) +
-                isin((uint8_t)(lode_phase(y, 20u) + (uint8_t)(t * 2u)))
+                am_sin8((uint8_t)(lode_phase(x, 20u) + t)) +
+                am_sin8((uint8_t)(lode_phase(y, 20u) + (uint8_t)(t * 2u)))
             );
             denom = 2;
             break;
         case PAT_DIAG:
             /* + diagonal (x+y) term */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 20u) + t)) +
-                isin((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u))) +
-                isin((uint8_t)(lode_phase((uint16_t)(x + y), 20u) + t))
+                am_sin8((uint8_t)(lode_phase(x, 20u) + t)) +
+                am_sin8((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u))) +
+                am_sin8((uint8_t)(lode_phase((uint16_t)(x + y), 20u) + t))
             );
             denom = 3;
             break;
         case PAT_DIST:
             /* Lode 4-sine: x, y, dist-to-center (drifts), dist-to-corner */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 20u) + t)) +
-                isin((uint8_t)(lode_phase(y, 40u) + (uint8_t)(t * 2u))) +
-                isin((uint8_t)(lode_phase(d0, 18u) + (uint8_t)(t * 3u))) +
-                isin((uint8_t)(lode_phase(d_corner, 16u) + (uint8_t)(t * 2u)))
+                am_sin8((uint8_t)(lode_phase(x, 20u) + t)) +
+                am_sin8((uint8_t)(lode_phase(y, 40u) + (uint8_t)(t * 2u))) +
+                am_sin8((uint8_t)(lode_phase(d0, 18u) + (uint8_t)(t * 3u))) +
+                am_sin8((uint8_t)(lode_phase(d_corner, 16u) + (uint8_t)(t * 2u)))
             );
             denom = 4;
             break;
         case PAT_RINGS:
             /* Dual moving distance centers */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(d0, 18u) + t)) +
-                isin((uint8_t)(lode_phase(d1, 16u) + (uint8_t)(t * 2u)))
+                am_sin8((uint8_t)(lode_phase(d0, 18u) + t)) +
+                am_sin8((uint8_t)(lode_phase(d1, 16u) + (uint8_t)(t * 2u)))
             );
             denom = 2;
             break;
         case PAT_FULL:
         default:
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 22u) + t)) +
-                isin((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u))) +
-                isin((uint8_t)(lode_phase((uint16_t)(x + y), 20u) + t)) +
-                isin((uint8_t)(lode_phase(d0, 18u) + (uint8_t)(t * 3u))) +
-                isin((uint8_t)(lode_phase(d1, 16u) + (uint8_t)(t * 2u)))
+                am_sin8((uint8_t)(lode_phase(x, 22u) + t)) +
+                am_sin8((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u))) +
+                am_sin8((uint8_t)(lode_phase((uint16_t)(x + y), 20u) + t)) +
+                am_sin8((uint8_t)(lode_phase(d0, 18u) + (uint8_t)(t * 3u))) +
+                am_sin8((uint8_t)(lode_phase(d1, 16u) + (uint8_t)(t * 2u)))
             );
             denom = 5;
             break;

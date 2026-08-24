@@ -21,7 +21,7 @@
 #include "c1_gfx.h"
 #include "qgf.h"
 #include "ui.h"
-#include "lib/fixed_math/fixed_math.h" // Q15.16 trig for Whirlpool
+#include "lib/athena_math/athena_math.h" // Q15.16 trig for Whirlpool
 
 // RP2040 free-running µs counter (TIMERAWL) for the compose-time HUD. Do NOT
 // include hardware/timer.h -- its assert macros token-paste TIMER, colliding
