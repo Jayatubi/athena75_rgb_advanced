@@ -72,16 +72,25 @@ typedef struct {
     uint8_t  speed;   /* 0=fast .. 3=slow */
     uint8_t  palette; /* 0=sun, 1=sky */
     uint8_t  mode;    /* 0=near, 1=full */
-    uint8_t  _pad[4];
+    uint8_t  pattern; /* 0=xy .. 4=full */
+    uint8_t  _pad[3];
     uint32_t crc;
 } plasma_save_t;
 
 #define PLASMA_SAVE_MAGIC 0x314D4C50u /* "PLM1" LE */
-#define PLASMA_SAVE_VER   11u
+#define PLASMA_SAVE_VER   12u
 #define PALETTE_COUNT     2u
 #define MODE_COUNT        2u
+#define PATTERN_COUNT     5u
 enum { MODE_NEAR = 0, MODE_FULL = 1 };
 enum { PAL_SUN = 0, PAL_SKY = 1 };
+enum {
+    PAT_XY = 0,   /* sin(x)+sin(y) */
+    PAT_DIAG,     /* + (x+y) */
+    PAT_DIST,     /* corner + center distances */
+    PAT_RINGS,    /* dual moving distance centers */
+    PAT_FULL      /* multi-term (default) */
+};
 
 static plasma_save_t cfg;
 static bool     leave_pending;
@@ -132,13 +141,14 @@ static uint32_t crc32(const void *data, uint32_t len) {
 }
 
 static void cfg_defaults(void) {
-    cfg.magic   = PLASMA_SAVE_MAGIC;
-    cfg.version = PLASMA_SAVE_VER;
-    cfg.speed   = 1;
-    cfg.palette = PAL_SUN;
-    cfg.mode    = MODE_NEAR;
-    cfg._pad[0] = cfg._pad[1] = cfg._pad[2] = cfg._pad[3] = 0;
-    cfg.crc     = crc32(&cfg, (uint32_t)__builtin_offsetof(plasma_save_t, crc));
+    cfg.magic    = PLASMA_SAVE_MAGIC;
+    cfg.version  = PLASMA_SAVE_VER;
+    cfg.speed    = 1;
+    cfg.palette  = PAL_SUN;
+    cfg.mode     = MODE_NEAR;
+    cfg.pattern  = PAT_FULL;
+    cfg._pad[0]  = cfg._pad[1] = cfg._pad[2] = 0;
+    cfg.crc      = crc32(&cfg, (uint32_t)__builtin_offsetof(plasma_save_t, crc));
 }
 
 static void cfg_load(void) {
@@ -146,7 +156,7 @@ static void cfg_load(void) {
     if (!g_api->save_read(0, &saved, sizeof saved) ||
         saved.magic != PLASMA_SAVE_MAGIC || saved.version != PLASMA_SAVE_VER ||
         saved.speed >= 4u || saved.palette >= PALETTE_COUNT ||
-        saved.mode >= MODE_COUNT ||
+        saved.mode >= MODE_COUNT || saved.pattern >= PATTERN_COUNT ||
         saved.crc != crc32(&saved, (uint32_t)__builtin_offsetof(plasma_save_t, crc))) {
         cfg_defaults();
         return;
@@ -193,6 +203,24 @@ static const char *mode_name(uint8_t m) {
         case MODE_FULL: return "FULL";
         default: return "?";
     }
+}
+
+static const char *pattern_name(uint8_t p) {
+    switch (p) {
+        case PAT_XY:    return "XY";
+        case PAT_DIAG:  return "DIAG";
+        case PAT_DIST:  return "DIST";
+        case PAT_RINGS: return "RINGS";
+        case PAT_FULL:  return "FULL";
+        default: return "?";
+    }
+}
+
+static inline uint8_t clamp_pal_idx(int16_t v, int16_t denom) {
+    int16_t idx = (int16_t)((v / denom) + 128);
+    if (idx < 0) idx = 0;
+    else if (idx > 255) idx = 255;
+    return (uint8_t)idx;
 }
 
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
@@ -275,9 +303,9 @@ static void update_sources(uint8_t t) {
 }
 
 /*
- * Spatial wavelengths between old soft /32 and dense /16,/8 — widths
- * 18/12/16/14/12 keep multiple fringes without RGB565 banding looking like
- * stutter. Two distance terms use drifting centers.
+ * Pattern formulas follow Lode's plasma tutorial (sum of sines), adapted to
+ * integer LUT + seamless uint8 phase (time coeffs = integer multiples of t).
+ * Spatial widths keep multiple fringes on 128 without RGB565 banding stutter.
  */
 static uint16_t plasma_at(uint8_t x, uint8_t y, uint8_t t) {
     int16_t dx0 = (int16_t)x - src_cx[0];
@@ -286,19 +314,60 @@ static uint16_t plasma_at(uint8_t x, uint8_t y, uint8_t t) {
     int16_t dy1 = (int16_t)y - src_cy[1];
     uint16_t d0 = isqrt16((uint16_t)((uint16_t)(dx0 * dx0) + (uint16_t)(dy0 * dy0)));
     uint16_t d1 = isqrt16((uint16_t)((uint16_t)(dx1 * dx1) + (uint16_t)(dy1 * dy1)));
+    /* Corner distance (fixed origin) for DIST. */
+    uint16_t d_corner = isqrt16((uint16_t)((uint16_t)x * (uint16_t)x + (uint16_t)y * (uint16_t)y));
 
-    /* Time coeffs are integer × t only — t>>n / (t*k)>>n discontinuity at wrap. */
-    int16_t v = (int16_t)(
-        isin((uint8_t)(lode_phase(x, 18u) + t)) +
-        isin((uint8_t)(lode_phase(y, 12u) + (uint8_t)(t * 2u))) +
-        isin((uint8_t)(lode_phase((uint16_t)(x + y), 16u) + t)) +
-        isin((uint8_t)(lode_phase(d0, 14u) + (uint8_t)(t * 3u))) +
-        isin((uint8_t)(lode_phase(d1, 12u) + (uint8_t)(t * 2u)))
-    );
-    int16_t idx = (int16_t)((v / 5) + 128);
-    if (idx < 0) idx = 0;
-    else if (idx > 255) idx = 255;
-    return palette_color((uint8_t)idx);
+    int16_t v;
+    int16_t denom;
+    switch (cfg.pattern) {
+        case PAT_XY:
+            /* Classic: sin(x)+sin(y) */
+            v = (int16_t)(
+                isin((uint8_t)(lode_phase(x, 16u) + t)) +
+                isin((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u)))
+            );
+            denom = 2;
+            break;
+        case PAT_DIAG:
+            /* + diagonal (x+y) term */
+            v = (int16_t)(
+                isin((uint8_t)(lode_phase(x, 16u) + t)) +
+                isin((uint8_t)(lode_phase(y, 12u) + (uint8_t)(t * 2u))) +
+                isin((uint8_t)(lode_phase((uint16_t)(x + y), 16u) + t))
+            );
+            denom = 3;
+            break;
+        case PAT_DIST:
+            /* Lode 4-sine: x, y, dist-to-center (drifts), dist-to-corner */
+            v = (int16_t)(
+                isin((uint8_t)(lode_phase(x, 16u) + t)) +
+                isin((uint8_t)(lode_phase(y, 32u) + (uint8_t)(t * 2u))) +
+                isin((uint8_t)(lode_phase(d0, 14u) + (uint8_t)(t * 3u))) +
+                isin((uint8_t)(lode_phase(d_corner, 12u) + (uint8_t)(t * 2u)))
+            );
+            denom = 4;
+            break;
+        case PAT_RINGS:
+            /* Dual moving distance centers */
+            v = (int16_t)(
+                isin((uint8_t)(lode_phase(d0, 14u) + t)) +
+                isin((uint8_t)(lode_phase(d1, 12u) + (uint8_t)(t * 2u)))
+            );
+            denom = 2;
+            break;
+        case PAT_FULL:
+        default:
+            v = (int16_t)(
+                isin((uint8_t)(lode_phase(x, 18u) + t)) +
+                isin((uint8_t)(lode_phase(y, 12u) + (uint8_t)(t * 2u))) +
+                isin((uint8_t)(lode_phase((uint16_t)(x + y), 16u) + t)) +
+                isin((uint8_t)(lode_phase(d0, 14u) + (uint8_t)(t * 3u))) +
+                isin((uint8_t)(lode_phase(d1, 12u) + (uint8_t)(t * 2u)))
+            );
+            denom = 5;
+            break;
+    }
+    return palette_color(clamp_pal_idx(v, denom));
 }
 
 static void effect_plasma(uint16_t *fb16) {
@@ -326,11 +395,12 @@ static void fx_draw(void) {
 /* ---- menu --------------------------------------------------------------- */
 
 enum {
-    G_SPEED = 1, G_PALETTE, G_MODE,
-    N_ROOT = 0, N_SPEED, N_PALETTE, N_MODE
+    G_SPEED = 1, G_PALETTE, G_MODE, G_PATTERN,
+    N_ROOT = 0, N_SPEED, N_PALETTE, N_MODE, N_PATTERN
 };
 static const app_menu_item_t root_items[] = {
     { "SPEED",   APP_MI_FOLDER, 0, 0, 0, N_SPEED },
+    { "PATTERN", APP_MI_FOLDER, 0, 0, 0, N_PATTERN },
     { "PALETTE", APP_MI_FOLDER, 0, 0, 0, N_PALETTE },
     { "MODE",    APP_MI_FOLDER, 0, 0, 0, N_MODE },
 };
@@ -347,18 +417,27 @@ static const app_menu_item_t palette_items[] = {
 static const app_menu_item_t mode_items[] = {
     RADIO("NEAR", G_MODE, MODE_NEAR), RADIO("FULL", G_MODE, MODE_FULL),
 };
+static const app_menu_item_t pattern_items[] = {
+    RADIO("XY", G_PATTERN, PAT_XY),
+    RADIO("DIAG", G_PATTERN, PAT_DIAG),
+    RADIO("DIST", G_PATTERN, PAT_DIST),
+    RADIO("RINGS", G_PATTERN, PAT_RINGS),
+    RADIO("FULL", G_PATTERN, PAT_FULL),
+};
 #undef RADIO
 static const app_menu_node_t menu_nodes[] = {
-    [N_ROOT]    = { "PLASMA", root_items, 3 },
+    [N_ROOT]    = { "PLASMA", root_items, 4 },
     [N_SPEED]   = { 0, speed_items, 4 },
     [N_PALETTE] = { 0, palette_items, 2 },
     [N_MODE]    = { 0, mode_items, 2 },
+    [N_PATTERN] = { 0, pattern_items, 5 },
 };
 
 static uint8_t menu_get(uint8_t group) {
     if (group == G_SPEED) return cfg.speed;
     if (group == G_PALETTE) return cfg.palette;
     if (group == G_MODE) return cfg.mode;
+    if (group == G_PATTERN) return cfg.pattern;
     return 0;
 }
 
@@ -372,6 +451,9 @@ static void menu_set(uint8_t group, uint8_t value) {
         cfg_commit();
     } else if (group == G_MODE && value < MODE_COUNT) {
         cfg.mode = value;
+        cfg_commit();
+    } else if (group == G_PATTERN && value < PATTERN_COUNT) {
+        cfg.pattern = value;
         cfg_commit();
     }
 }
@@ -419,12 +501,25 @@ static void mode_nudge(int8_t delta) {
     hud_show("MODE", mode_name(cfg.mode));
 }
 
+static void pattern_nudge(int8_t delta) {
+    int v = (int)cfg.pattern + (int)delta;
+    if (v < 0) v = (int)PATTERN_COUNT - 1;
+    else if (v >= (int)PATTERN_COUNT) v = 0;
+    if ((uint8_t)v != cfg.pattern) {
+        cfg.pattern = (uint8_t)v;
+        cfg_commit();
+    }
+    hud_show("PATTERN", pattern_name(cfg.pattern));
+}
+
 static bool key_repeatable(uint16_t kc) {
     switch (kc) {
         case APP_KEY_UP:
         case APP_KEY_DOWN:
         case APP_KEY_LEFT:
         case APP_KEY_RIGHT:
+        case APP_KEY_MINUS:
+        case APP_KEY_EQUAL:
             return true;
         default:
             return false;
@@ -440,6 +535,8 @@ static void key_action(uint16_t kc) {
         case APP_KEY_DOWN:  speed_nudge(+1); break;
         case APP_KEY_RIGHT: palette_nudge(+1); break;
         case APP_KEY_LEFT:  palette_nudge(-1); break;
+        case APP_KEY_MINUS: pattern_nudge(-1); break;
+        case APP_KEY_EQUAL: pattern_nudge(+1); break;
         default: break;
     }
 }
