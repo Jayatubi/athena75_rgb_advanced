@@ -9,7 +9,9 @@
 
 - **PATTERN** 在几种 Lode 风格场公式间切换（不是换色板）：XY / DIAG / DIST / RINGS / FULL。
 - 时间相位只用 `uint8` 整数倍步进（禁止 `t>>1` 一类半周期陷阱），波源按慢速 Lissajous **每帧**漂移；色板滚动更慢、也连续。
-- 色板共 9 种（默认 **GOLD**）；←→ 循环切换，LUT 仅在换色板时重建；`pal_lut[255]=pal_lut[0]` 保证滚动无缝。
+- 色板共 9 种（默认 **GOLD**），支持 **AUTO PALETTE** 自动过渡：当前色板 A 会按 `lerp(A,B,t)` 平滑混到目标色板 B，结束后自动切到下一组（循环）。
+- 混色在 8-bit RGB 里完成后再打包 RGB565，降低可见台阶；并保持 `pal_lut[255]=pal_lut[0]` 的无缝滚动语义。
+- 出于帧预算考虑，混合 LUT 只在过渡步进变化时重建，不在像素热路径内逐点算插值。
 
 ## 菜单（Enter）
 
@@ -18,17 +20,26 @@
 | SPEED | FAST / MED / SLOW / V.SLOW |
 | PATTERN | XY / DIAG / DIST / RINGS / FULL |
 | PALETTE | SUN / SKY / SOFT / GOLD / PEACH / TEAL / DUSK / FIRE / ICE |
+| AUTO PAL | OFF / ON |
+| XFADE SPD | FAST / MID / SLOW（约 2s / 4s / 8s） |
 | MODE | NEAR / FULL |
 
 ### 场公式（PATTERN）
 
-| 名 | 说明 |
+相位按 `φ(p, w) = 41·p / w`（`sin_lut` 一周 256 ≡ 2π）。`t` 为场相位；双漂移中心由独立 Lissajous 相位 `s` **每帧**更新：
+
+`C0 = (64 + 44 sin(s)/128, 64 + 40 cos(2s)/128)`  
+`C1 = (64 + 50 sin(s+90)/128, 64 + 46 cos(3s+50)/128)`
+
+`d0 = √((x−C0x)²+(y−C0y)²)`，`d1` 同理对 `C1`；角点距离 `dc = √(x²+y²)`。各项 `sin` 相加后除以项数，再经 6/5 增益与 soft knee 映到色板。
+
+| 名 | 公式 |
 |---|---|
-| XY | 经典 `sin(x)+sin(y)`（Lode 早期示例） |
-| DIAG | 再加 `(x+y)` 斜向项 |
-| DIST | 四正弦：x / y / 到漂移中心 / 到角点（Lode `sqrt`） |
-| RINGS | 双漂移距离中心（圆环干涉） |
-| FULL | 多正弦全项（默认，含斜向 + 双距离源） |
+| XY | 经典正交双正弦（Lode 早期）：`[sin(φ(x,20)+t) + sin(φ(y,20)+2t)] / 2` |
+| DIAG | 再加斜向：`[sin(φ(x,20)+t) + sin(φ(y,16)+2t) + sin(φ(x+y,20)+t)] / 3` |
+| DIST | 四正弦（x / y / 漂移中心 / 角点）：`[sin(φ(x,20)+t) + sin(φ(y,40)+2t) + sin(φ(d0,18)+3t) + sin(φ(dc,16)+2t)] / 4` |
+| RINGS | 双漂移距离中心（圆环干涉）：`[sin(φ(d0,18)+t) + sin(φ(d1,16)+2t)] / 2` |
+| FULL | 多正弦全项（默认）：`[sin(φ(x,22)+t) + sin(φ(y,16)+2t) + sin(φ(x+y,20)+t) + sin(φ(d0,18)+3t) + sin(φ(d1,16)+2t)] / 5` |
 
 ### 色板
 
@@ -58,7 +69,7 @@
 | 键 | 功能 |
 |---|---|
 | ↑ / ↓ | 加快 / 减慢 |
-| ← / → | 循环换色板 |
+| ← / → | 循环换色板（AUTO=ON 时会从该色板重新开始自动序列） |
 | `-` / `=` | 上一个 / 下一个 PATTERN |
 | Space | 切换 MODE（NEAR ↔ FULL） |
 | Enter | 打开菜单 |
@@ -66,7 +77,7 @@
 
 （`gif` 仍是固件的 OS 输入模式开关，不会进到 app。）
 
-SPEED / PATTERN / PALETTE / MODE 写入 save（version 13）。
+SPEED / PATTERN / PALETTE / MODE / AUTO PAL / XFADE SPD 写入 save（version 13）。
 
 ## 构建与更新
 

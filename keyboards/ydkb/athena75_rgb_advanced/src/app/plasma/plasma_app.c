@@ -73,7 +73,9 @@ typedef struct {
     uint8_t  palette; /* see PAL_* */
     uint8_t  mode;    /* 0=near, 1=full */
     uint8_t  pattern; /* 0=xy .. 4=full */
-    uint8_t  _pad[3];
+    uint8_t  auto_palette; /* 0=off, 1=on */
+    uint8_t  trans_speed;  /* 0=fast, 1=mid, 2=slow */
+    uint8_t  _pad;
     uint32_t crc;
 } plasma_save_t;
 
@@ -82,6 +84,8 @@ typedef struct {
 #define PALETTE_COUNT     9u
 #define MODE_COUNT        2u
 #define PATTERN_COUNT     5u
+#define AUTO_COUNT        2u
+#define TRANS_SPEED_COUNT 3u
 enum { MODE_NEAR = 0, MODE_FULL = 1 };
 enum {
     PAL_SUN = 0,
@@ -112,6 +116,13 @@ static uint8_t  src_sub;
 static uint8_t  pal_scroll;
 static uint8_t  pal_sub;
 static uint16_t pal_lut[256];
+static uint8_t  pal_from;
+static uint8_t  pal_to;
+static uint8_t  pal_mix_t;
+static uint8_t  pal_cache_from;
+static uint8_t  pal_cache_to;
+static uint8_t  pal_cache_t;
+static uint32_t pal_mix_elapsed;
 
 /* Precomputed moving centers for the current frame (set in effect_plasma). */
 static int16_t src_cx[2], src_cy[2];
@@ -138,6 +149,7 @@ static const uint8_t field_step[4] = { 1u, 1u, 1u, 1u };
 static const uint8_t field_div[4]  = { 1u, 2u, 3u, 5u };
 static const uint8_t pal_step[4]   = { 1u, 1u, 1u, 1u };
 static const uint8_t pal_div[4]    = { 2u, 3u, 5u, 8u };
+static const uint16_t pal_xfade_ms[TRANS_SPEED_COUNT] = { 2000u, 4000u, 8000u };
 
 static uint32_t crc32(const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
@@ -157,7 +169,9 @@ static void cfg_defaults(void) {
     cfg.palette  = PAL_GOLD;
     cfg.mode     = MODE_NEAR;
     cfg.pattern  = PAT_FULL;
-    cfg._pad[0]  = cfg._pad[1] = cfg._pad[2] = 0;
+    cfg.auto_palette = 1u;
+    cfg.trans_speed  = 1u;
+    cfg._pad         = 0;
     cfg.crc      = crc32(&cfg, (uint32_t)__builtin_offsetof(plasma_save_t, crc));
 }
 
@@ -172,6 +186,8 @@ static void cfg_load(void) {
         return;
     }
     cfg = saved;
+    if (cfg.auto_palette >= AUTO_COUNT) cfg.auto_palette = 1u;
+    if (cfg.trans_speed >= TRANS_SPEED_COUNT) cfg.trans_speed = 1u;
 }
 
 static void cfg_commit(void) {
@@ -229,6 +245,19 @@ static const char *pattern_name(uint8_t p) {
         case PAT_DIST:  return "DIST";
         case PAT_RINGS: return "RINGS";
         case PAT_FULL:  return "FULL";
+        default: return "?";
+    }
+}
+
+static const char *auto_name(uint8_t v) {
+    return v ? "ON" : "OFF";
+}
+
+static const char *trans_speed_name(uint8_t v) {
+    switch (v) {
+        case 0: return "FAST";
+        case 1: return "MID";
+        case 2: return "SLOW";
         default: return "?";
     }
 }
@@ -329,27 +358,74 @@ static const pal_stop_t pal_ice[] = {
     { 210, 248, 255 }, { 60, 120, 200 }, { 8, 20, 70 }, { 0, 4, 22 }
 };
 
-static void pal_rebuild(void) {
-    const pal_stop_t *stops = pal_gold;
-    uint8_t          n      = (uint8_t)(sizeof pal_gold / sizeof pal_gold[0]);
-    switch (cfg.palette) {
-        case PAL_SUN:   stops = pal_sun;   n = (uint8_t)(sizeof pal_sun / sizeof pal_sun[0]); break;
-        case PAL_SKY:   stops = pal_sky;   n = (uint8_t)(sizeof pal_sky / sizeof pal_sky[0]); break;
-        case PAL_SOFT:  stops = pal_soft;  n = (uint8_t)(sizeof pal_soft / sizeof pal_soft[0]); break;
-        case PAL_GOLD:  stops = pal_gold;  n = (uint8_t)(sizeof pal_gold / sizeof pal_gold[0]); break;
-        case PAL_PEACH: stops = pal_peach; n = (uint8_t)(sizeof pal_peach / sizeof pal_peach[0]); break;
-        case PAL_TEAL:  stops = pal_teal;  n = (uint8_t)(sizeof pal_teal / sizeof pal_teal[0]); break;
-        case PAL_DUSK:  stops = pal_dusk;  n = (uint8_t)(sizeof pal_dusk / sizeof pal_dusk[0]); break;
-        case PAL_FIRE:  stops = pal_fire;  n = (uint8_t)(sizeof pal_fire / sizeof pal_fire[0]); break;
-        case PAL_ICE:   stops = pal_ice;   n = (uint8_t)(sizeof pal_ice / sizeof pal_ice[0]); break;
+static void pal_select_stops(uint8_t pal, const pal_stop_t **stops, uint8_t *n) {
+    *stops = pal_gold;
+    *n     = (uint8_t)(sizeof pal_gold / sizeof pal_gold[0]);
+    switch (pal) {
+        case PAL_SUN:   *stops = pal_sun;   *n = (uint8_t)(sizeof pal_sun / sizeof pal_sun[0]); break;
+        case PAL_SKY:   *stops = pal_sky;   *n = (uint8_t)(sizeof pal_sky / sizeof pal_sky[0]); break;
+        case PAL_SOFT:  *stops = pal_soft;  *n = (uint8_t)(sizeof pal_soft / sizeof pal_soft[0]); break;
+        case PAL_GOLD:  *stops = pal_gold;  *n = (uint8_t)(sizeof pal_gold / sizeof pal_gold[0]); break;
+        case PAL_PEACH: *stops = pal_peach; *n = (uint8_t)(sizeof pal_peach / sizeof pal_peach[0]); break;
+        case PAL_TEAL:  *stops = pal_teal;  *n = (uint8_t)(sizeof pal_teal / sizeof pal_teal[0]); break;
+        case PAL_DUSK:  *stops = pal_dusk;  *n = (uint8_t)(sizeof pal_dusk / sizeof pal_dusk[0]); break;
+        case PAL_FIRE:  *stops = pal_fire;  *n = (uint8_t)(sizeof pal_fire / sizeof pal_fire[0]); break;
+        case PAL_ICE:   *stops = pal_ice;   *n = (uint8_t)(sizeof pal_ice / sizeof pal_ice[0]); break;
         default: break;
     }
+}
+
+static inline uint8_t pal_next(uint8_t pal) {
+    return (uint8_t)((pal + 1u) % PALETTE_COUNT);
+}
+
+static void pal_rebuild_blend(uint8_t pal_a, uint8_t pal_b, uint8_t t) {
+    const pal_stop_t *stops_a;
+    const pal_stop_t *stops_b;
+    uint8_t           n_a;
+    uint8_t           n_b;
+    pal_select_stops(pal_a, &stops_a, &n_a);
+    pal_select_stops(pal_b, &stops_b, &n_b);
     for (uint16_t x = 0; x < 256u; x++) {
+        uint8_t ar, ag, ab;
+        uint8_t br, bg, bb;
         uint8_t r, g, b;
-        pal_eval_stops((uint8_t)x, stops, n, &r, &g, &b);
+        pal_eval_stops((uint8_t)x, stops_a, n_a, &ar, &ag, &ab);
+        pal_eval_stops((uint8_t)x, stops_b, n_b, &br, &bg, &bb);
+        r = lerp8(ar, br, t);
+        g = lerp8(ag, bg, t);
+        b = lerp8(ab, bb, t);
         pal_lut[x] = rgb565(r, g, b);
     }
     pal_lut[255] = pal_lut[0];
+}
+
+static void pal_runtime_sync(bool force) {
+    if (force ||
+        pal_cache_from != pal_from ||
+        pal_cache_to != pal_to ||
+        pal_cache_t != pal_mix_t) {
+        pal_rebuild_blend(pal_from, pal_to, pal_mix_t);
+        pal_cache_from = pal_from;
+        pal_cache_to   = pal_to;
+        pal_cache_t    = pal_mix_t;
+    }
+}
+
+static void pal_set_manual(uint8_t pal) {
+    cfg.palette = pal;
+    if (cfg.auto_palette) {
+        pal_from       = pal;
+        pal_to         = pal_next(pal);
+        pal_mix_elapsed = 0;
+        pal_mix_t      = 0;
+    } else {
+        pal_from       = pal;
+        pal_to         = pal;
+        pal_mix_elapsed = 0;
+        pal_mix_t      = 0;
+    }
+    pal_runtime_sync(true);
 }
 
 static inline uint16_t palette_color(uint8_t idx) {
@@ -496,13 +572,15 @@ static void fx_draw(void) {
 /* ---- menu --------------------------------------------------------------- */
 
 enum {
-    G_SPEED = 1, G_PALETTE, G_MODE, G_PATTERN,
-    N_ROOT = 0, N_SPEED, N_PALETTE, N_MODE, N_PATTERN
+    G_SPEED = 1, G_PALETTE, G_MODE, G_PATTERN, G_AUTO, G_TRANS_SPEED,
+    N_ROOT = 0, N_SPEED, N_PALETTE, N_MODE, N_PATTERN, N_AUTO, N_TRANS_SPEED
 };
 static const app_menu_item_t root_items[] = {
     { "SPEED",   APP_MI_FOLDER, 0, 0, 0, N_SPEED },
     { "PATTERN", APP_MI_FOLDER, 0, 0, 0, N_PATTERN },
     { "PALETTE", APP_MI_FOLDER, 0, 0, 0, N_PALETTE },
+    { "AUTO PAL", APP_MI_FOLDER, 0, 0, 0, N_AUTO },
+    { "XFADE SPD", APP_MI_FOLDER, 0, 0, 0, N_TRANS_SPEED },
     { "MODE",    APP_MI_FOLDER, 0, 0, 0, N_MODE },
 };
 #define RADIO(label_, group_, value_) \
@@ -525,6 +603,14 @@ static const app_menu_item_t palette_items[] = {
 static const app_menu_item_t mode_items[] = {
     RADIO("NEAR", G_MODE, MODE_NEAR), RADIO("FULL", G_MODE, MODE_FULL),
 };
+static const app_menu_item_t auto_items[] = {
+    RADIO("OFF", G_AUTO, 0), RADIO("ON", G_AUTO, 1),
+};
+static const app_menu_item_t trans_speed_items[] = {
+    RADIO("FAST", G_TRANS_SPEED, 0),
+    RADIO("MID", G_TRANS_SPEED, 1),
+    RADIO("SLOW", G_TRANS_SPEED, 2),
+};
 static const app_menu_item_t pattern_items[] = {
     RADIO("XY", G_PATTERN, PAT_XY),
     RADIO("DIAG", G_PATTERN, PAT_DIAG),
@@ -534,10 +620,12 @@ static const app_menu_item_t pattern_items[] = {
 };
 #undef RADIO
 static const app_menu_node_t menu_nodes[] = {
-    [N_ROOT]    = { "PLASMA", root_items, 4 },
+    [N_ROOT]    = { "PLASMA", root_items, 6 },
     [N_SPEED]   = { 0, speed_items, 4 },
     [N_PALETTE] = { 0, palette_items, 9 },
     [N_MODE]    = { 0, mode_items, 2 },
+    [N_AUTO]    = { 0, auto_items, 2 },
+    [N_TRANS_SPEED] = { 0, trans_speed_items, 3 },
     [N_PATTERN] = { 0, pattern_items, 5 },
 };
 
@@ -546,6 +634,8 @@ static uint8_t menu_get(uint8_t group) {
     if (group == G_PALETTE) return cfg.palette;
     if (group == G_MODE) return cfg.mode;
     if (group == G_PATTERN) return cfg.pattern;
+    if (group == G_AUTO) return cfg.auto_palette;
+    if (group == G_TRANS_SPEED) return cfg.trans_speed;
     return 0;
 }
 
@@ -554,14 +644,23 @@ static void menu_set(uint8_t group, uint8_t value) {
         cfg.speed = value;
         cfg_commit();
     } else if (group == G_PALETTE && value < PALETTE_COUNT) {
-        cfg.palette = value;
-        pal_rebuild();
+        pal_set_manual(value);
         cfg_commit();
     } else if (group == G_MODE && value < MODE_COUNT) {
         cfg.mode = value;
         cfg_commit();
     } else if (group == G_PATTERN && value < PATTERN_COUNT) {
         cfg.pattern = value;
+        cfg_commit();
+    } else if (group == G_AUTO && value < AUTO_COUNT) {
+        cfg.auto_palette = value;
+        pal_set_manual(cfg.palette);
+        hud_show("AUTO", auto_name(cfg.auto_palette));
+        cfg_commit();
+    } else if (group == G_TRANS_SPEED && value < TRANS_SPEED_COUNT) {
+        cfg.trans_speed = value;
+        pal_runtime_sync(true);
+        hud_show("XFADE", trans_speed_name(cfg.trans_speed));
         cfg_commit();
     }
 }
@@ -591,8 +690,7 @@ static void palette_nudge(int8_t delta) {
     if (v < 0) v = (int)PALETTE_COUNT - 1;
     else if (v >= (int)PALETTE_COUNT) v = 0;
     if ((uint8_t)v != cfg.palette) {
-        cfg.palette = (uint8_t)v;
-        pal_rebuild();
+        pal_set_manual((uint8_t)v);
         cfg_commit();
     }
     hud_show("PALETTE", palette_name(cfg.palette));
@@ -684,8 +782,15 @@ static void plasma_enter(void) {
     src_sub       = 0;
     pal_scroll    = 0;
     pal_sub       = 0;
+    pal_from      = 0;
+    pal_to        = 0;
+    pal_mix_t     = 0;
+    pal_cache_from = 0xFFu;
+    pal_cache_to   = 0xFFu;
+    pal_cache_t    = 0xFFu;
+    pal_mix_elapsed = 0;
     cfg_load();
-    pal_rebuild();
+    pal_set_manual(cfg.palette);
     render_t = g_api->now_ms() - RENDER_MS;
     fx_draw();
 }
@@ -723,6 +828,23 @@ static void plasma_tick(uint32_t dt_ms) {
         pal_sub    = 0;
         pal_scroll = (uint8_t)(pal_scroll + pal_step[sp]);
     }
+    if (cfg.auto_palette) {
+        uint16_t dur = pal_xfade_ms[cfg.trans_speed];
+        if (dur == 0u) dur = 1u;
+        pal_mix_elapsed += RENDER_MS;
+        while (pal_mix_elapsed >= dur) {
+            pal_mix_elapsed -= dur;
+            pal_from = pal_to;
+            pal_to   = pal_next(pal_to);
+        }
+        pal_mix_t = (uint8_t)(((uint32_t)pal_mix_elapsed * 255u) / (uint32_t)dur);
+    } else {
+        pal_mix_elapsed = 0;
+        pal_mix_t       = 0;
+        pal_from        = cfg.palette;
+        pal_to          = cfg.palette;
+    }
+    pal_runtime_sync(false);
     fx_draw();
 }
 
