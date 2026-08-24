@@ -11,9 +11,8 @@ All public symbols use the **`am_`** prefix (athena math).
 |------|------|
 | `athena_math.h` | Public API |
 | `athena_math.c` | Implementation |
-| `athena_math_lut.h` | Q15.16 cos + atan tables (regenerate with `gen_lut.py`) |
-| `athena_math_sin8.inc` | 256-entry int8 sin for uint8 phase |
-| `gen_lut.py` | Regenerates the two LUT files |
+| `athena_math_lut.h` | Complete LUT tables: Q15.16 cos/atan + int8 sin8 (regenerate with `gen_lut.py`) |
+| `gen_lut.py` | Regenerates `athena_math_lut.h` |
 
 ## API surface
 

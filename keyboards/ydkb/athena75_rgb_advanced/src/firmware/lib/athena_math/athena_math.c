@@ -145,10 +145,6 @@ am_fixed am_hypot(am_fixed x, am_fixed y)
     return (am_fixed)am_isqrt64(s);
 }
 
-static const int8_t am_sin8_lut[256] = {
-#include "athena_math_sin8.inc"
-};
-
 int16_t am_sin8(uint8_t phase)
 {
     return (int16_t)am_sin8_lut[phase];
