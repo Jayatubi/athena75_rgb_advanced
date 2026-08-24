@@ -66,6 +66,7 @@ delta 帧、字节 RLE 压缩都认，按每帧自带的 delay 播一遍就交�
 | BRICK | [`src/app/brick/README.md`](../src/app/brick/README.md) |
 | FISH | [`src/app/fish/README.md`](../src/app/fish/README.md) |
 | WFC | [`src/app/wfc/README.md`](../src/app/wfc/README.md) |
+| PLASMA | [`src/app/plasma/README.md`](../src/app/plasma/README.md) |
 
 参数只在**退出 app 时**落盘一次：菜单里改也好、直接按键改也好，都只是把结构体交给
 固件暂存（`cfg_save`），由固件在退出（或重载前，例如休眠唤醒）比较一次、需要才擦写。
@@ -156,7 +157,7 @@ cmake -S keyboards/ydkb/athena75_rgb_advanced/src/host \
 cmake --build keyboards/ydkb/athena75_rgb_advanced/src/host/build --config Release
 
 # slot app
-bash src/app/tools/build_app.sh settings   # 或 matrix | life | maze | fish | brick | wfc
+bash src/app/tools/build_app.sh settings   # 或 matrix | life | maze | fish | brick | wfc | plasma
 host_tool app install  path/to/life.app              # 默认走 HID PUT，键盘 LCD 上确认
 host_tool app install  path/to/wfc.app --method uf2  # 大包 / 多 slot 时可选的 UF2 路径
 host_tool app update   path/to/matrix.app            # 只换代码和图标，保留 data 与 save

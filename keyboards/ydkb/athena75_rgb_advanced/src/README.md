@@ -7,7 +7,7 @@ sits at the repo root, since what it holds is what the project ships.
 |------|----------|
 | `src/firmware/` | QMK keyboard firmware (OS runtime, menu, LCD, flash upload, gfx, lib) |
 | `src/host/` | Native `host_tool` (CMake); USB HID, UF2 upload, app pack, snapshot |
-| `src/app/` | Slot apps + SDK + `tools/build_app.sh`. One directory each, with its own readme: [settings](app/settings/README.md), [matrix](app/matrix/README.md), [life](app/life/README.md), [maze](app/maze/README.md), [brick](app/brick/README.md), [fish](app/fish/README.md), [wfc](app/wfc/README.md) |
+| `src/app/` | Slot apps + SDK + `tools/build_app.sh`. One directory each, with its own readme: [settings](app/settings/README.md), [matrix](app/matrix/README.md), [life](app/life/README.md), [maze](app/maze/README.md), [brick](app/brick/README.md), [fish](app/fish/README.md), [wfc](app/wfc/README.md), [plasma](app/plasma/README.md) |
 | `src/sim/` | `athena_sim`, a full-system RP2040 emulator for this board ([details](sim/README.md)) |
 | `artifacts/` | Committed build outputs, at the repo root: `firmware/`, `host/`, `apps/`, `boot/`, `sim/` |
 | `tools/` | Build entrypoints (`build.py`, `build_mac.sh`, `build_wsl.sh`, helpers) |

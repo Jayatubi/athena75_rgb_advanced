@@ -127,7 +127,7 @@ OS 模式闲置约 30 秒会自动退回键盘模式，避免忘了切换而打�
 |:---:|:---:|:---:|
 | [**SETTINGS**](keyboards/ydkb/athena75_rgb_advanced/src/app/settings/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/settings.gif" width="180" alt="SETTINGS"> | [**MATRIX**](keyboards/ydkb/athena75_rgb_advanced/src/app/matrix/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/matrix.gif" width="180" alt="MATRIX"> | [**LIFE**](keyboards/ydkb/athena75_rgb_advanced/src/app/life/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/life.gif" width="180" alt="LIFE"> |
 | [**MAZE**](keyboards/ydkb/athena75_rgb_advanced/src/app/maze/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/maze.gif" width="180" alt="MAZE"> | [**BRICK**](keyboards/ydkb/athena75_rgb_advanced/src/app/brick/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/brick.gif" width="180" alt="BRICK"> | [**FISH**](keyboards/ydkb/athena75_rgb_advanced/src/app/fish/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/fish.gif" width="180" alt="FISH"> |
-| [**WFC**](keyboards/ydkb/athena75_rgb_advanced/src/app/wfc/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/wfc.gif" width="180" alt="WFC"> | | |
+| [**WFC**](keyboards/ydkb/athena75_rgb_advanced/src/app/wfc/README.md)<br><img src="keyboards/ydkb/athena75_rgb_advanced/docs/apps/wfc.gif" width="180" alt="WFC"> | [**PLASMA**](keyboards/ydkb/athena75_rgb_advanced/src/app/plasma/README.md) | | |
 
 ---
 
