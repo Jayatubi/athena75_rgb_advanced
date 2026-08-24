@@ -70,7 +70,7 @@ typedef struct {
     uint32_t magic;
     uint8_t  version;
     uint8_t  speed;   /* 0=fast .. 3=slow */
-    uint8_t  palette; /* 0=sun, 1=sky */
+    uint8_t  palette; /* see PAL_* */
     uint8_t  mode;    /* 0=near, 1=full */
     uint8_t  pattern; /* 0=xy .. 4=full */
     uint8_t  _pad[3];
@@ -78,12 +78,22 @@ typedef struct {
 } plasma_save_t;
 
 #define PLASMA_SAVE_MAGIC 0x314D4C50u /* "PLM1" LE */
-#define PLASMA_SAVE_VER   12u
-#define PALETTE_COUNT     2u
+#define PLASMA_SAVE_VER   13u
+#define PALETTE_COUNT     9u
 #define MODE_COUNT        2u
 #define PATTERN_COUNT     5u
 enum { MODE_NEAR = 0, MODE_FULL = 1 };
-enum { PAL_SUN = 0, PAL_SKY = 1 };
+enum {
+    PAL_SUN = 0,
+    PAL_SKY,
+    PAL_SOFT,
+    PAL_GOLD,
+    PAL_PEACH,
+    PAL_TEAL,
+    PAL_DUSK,
+    PAL_FIRE,
+    PAL_ICE
+};
 enum {
     PAT_XY = 0,   /* sin(x)+sin(y) */
     PAT_DIAG,     /* + (x+y) */
@@ -144,7 +154,7 @@ static void cfg_defaults(void) {
     cfg.magic    = PLASMA_SAVE_MAGIC;
     cfg.version  = PLASMA_SAVE_VER;
     cfg.speed    = 1;
-    cfg.palette  = PAL_SUN;
+    cfg.palette  = PAL_GOLD;
     cfg.mode     = MODE_NEAR;
     cfg.pattern  = PAT_FULL;
     cfg._pad[0]  = cfg._pad[1] = cfg._pad[2] = 0;
@@ -191,8 +201,15 @@ static const char *speed_name(uint8_t s) {
 
 static const char *palette_name(uint8_t p) {
     switch (p) {
-        case PAL_SUN: return "SUN";
-        case PAL_SKY: return "SKY";
+        case PAL_SUN:   return "SUN";
+        case PAL_SKY:   return "SKY";
+        case PAL_SOFT:  return "SOFT";
+        case PAL_GOLD:  return "GOLD";
+        case PAL_PEACH: return "PEACH";
+        case PAL_TEAL:  return "TEAL";
+        case PAL_DUSK:  return "DUSK";
+        case PAL_FIRE:  return "FIRE";
+        case PAL_ICE:   return "ICE";
         default: return "?";
     }
 }
@@ -216,8 +233,20 @@ static const char *pattern_name(uint8_t p) {
     }
 }
 
+/*
+ * Multi-sine averages concentrate near 0 (CLT). Soft ~1.2× gain (6/5) gives
+ * a middle ground — let palette chroma carry richness, not a steep index map.
+ * Soft knee |d|²/512 then compresses extremes so midtones carry more of the
+ * walk — fewer contour bands on RGB565.
+ */
 static inline uint8_t clamp_pal_idx(int16_t v, int16_t denom) {
-    int16_t idx = (int16_t)((v / denom) + 128);
+    int16_t idx = (int16_t)((v * 6) / (denom * 5) + 128);
+    if (idx < 0) idx = 0;
+    else if (idx > 255) idx = 255;
+    int16_t d  = (int16_t)(idx - 128);
+    int16_t ad = (int16_t)(d < 0 ? -d : d);
+    d = (int16_t)(d - (d * ad) / 512);
+    idx = (int16_t)(128 + d);
     if (idx < 0) idx = 0;
     else if (idx > 255) idx = 255;
     return (uint8_t)idx;
@@ -232,26 +261,94 @@ static inline void fb_put(uint16_t *fb16, uint32_t i, uint16_t c) {
     fb16[i] = __builtin_bswap16(c);
 }
 
+/* Integer lerp: a + (b-a)*t/255, t in 0..255. */
+static inline uint8_t lerp8(uint8_t a, uint8_t b, uint8_t t) {
+    return (uint8_t)((int16_t)a + (((int16_t)b - (int16_t)a) * (int16_t)t) / 255);
+}
+
+typedef struct {
+    uint8_t r, g, b;
+} pal_stop_t;
+
+/*
+ * Multi-stop ramp over 0..255. Last stop should match the first so pal_scroll
+ * wraps without a seam (deep-base loop, FIRE-style).
+ */
+static void pal_eval_stops(uint8_t xi, const pal_stop_t *s, uint8_t n,
+                           uint8_t *r, uint8_t *g, uint8_t *b) {
+    uint8_t segs = (uint8_t)(n - 1u);
+    uint32_t p   = (uint32_t)xi * (uint32_t)segs;
+    uint8_t  seg = (uint8_t)(p / 255u);
+    uint8_t  t   = (uint8_t)(p % 255u);
+    if (seg >= segs) {
+        *r = s[segs].r;
+        *g = s[segs].g;
+        *b = s[segs].b;
+        return;
+    }
+    *r = lerp8(s[seg].r, s[seg + 1u].r, t);
+    *g = lerp8(s[seg].g, s[seg + 1u].g, t);
+    *b = lerp8(s[seg].b, s[seg + 1u].b, t);
+}
+
+/* Tileable ramps: near-black lows, saturated mids, bright highs, dark close. */
+static const pal_stop_t pal_sun[] = {
+    { 6, 1, 0 }, { 140, 32, 0 }, { 230, 90, 8 }, { 255, 175, 28 },
+    { 255, 230, 90 }, { 255, 110, 55 }, { 180, 28, 28 }, { 6, 1, 0 }
+};
+static const pal_stop_t pal_sky[] = {
+    { 1, 4, 22 }, { 0, 50, 120 }, { 0, 150, 220 }, { 40, 190, 255 },
+    { 140, 150, 255 }, { 200, 70, 210 }, { 40, 16, 90 }, { 1, 4, 22 }
+};
+static const pal_stop_t pal_soft[] = {
+    { 22, 4, 10 }, { 110, 22, 32 }, { 200, 80, 50 }, { 230, 150, 70 },
+    { 240, 190, 140 }, { 220, 90, 95 }, { 130, 32, 48 }, { 22, 4, 10 }
+};
+static const pal_stop_t pal_gold[] = {
+    { 8, 2, 0 }, { 90, 28, 0 }, { 200, 100, 0 }, { 255, 175, 16 },
+    { 255, 230, 64 }, { 255, 140, 12 }, { 120, 36, 0 }, { 8, 2, 0 }
+};
+static const pal_stop_t pal_peach[] = {
+    { 14, 3, 2 }, { 90, 18, 10 }, { 220, 80, 36 }, { 255, 145, 80 },
+    { 255, 205, 145 }, { 255, 110, 100 }, { 150, 28, 36 }, { 14, 3, 2 }
+};
+static const pal_stop_t pal_teal[] = {
+    { 0, 8, 10 }, { 0, 55, 52 }, { 0, 130, 120 }, { 8, 210, 190 },
+    { 70, 245, 215 }, { 160, 255, 230 }, { 0, 70, 80 }, { 0, 8, 10 }
+};
+static const pal_stop_t pal_dusk[] = {
+    { 8, 0, 14 }, { 55, 0, 80 }, { 160, 8, 130 }, { 230, 20, 70 },
+    { 255, 100, 16 }, { 255, 170, 36 }, { 70, 8, 36 }, { 8, 0, 14 }
+};
+static const pal_stop_t pal_fire[] = {
+    { 0, 0, 0 }, { 170, 8, 0 }, { 240, 28, 0 }, { 255, 110, 0 },
+    { 255, 210, 24 }, { 255, 252, 210 }, { 255, 70, 8 }, { 0, 0, 0 }
+};
+static const pal_stop_t pal_ice[] = {
+    { 0, 4, 22 }, { 0, 40, 100 }, { 0, 150, 210 }, { 40, 230, 255 },
+    { 210, 248, 255 }, { 60, 120, 200 }, { 8, 20, 70 }, { 0, 4, 22 }
+};
+
 static void pal_rebuild(void) {
+    const pal_stop_t *stops = pal_gold;
+    uint8_t          n      = (uint8_t)(sizeof pal_gold / sizeof pal_gold[0]);
+    switch (cfg.palette) {
+        case PAL_SUN:   stops = pal_sun;   n = (uint8_t)(sizeof pal_sun / sizeof pal_sun[0]); break;
+        case PAL_SKY:   stops = pal_sky;   n = (uint8_t)(sizeof pal_sky / sizeof pal_sky[0]); break;
+        case PAL_SOFT:  stops = pal_soft;  n = (uint8_t)(sizeof pal_soft / sizeof pal_soft[0]); break;
+        case PAL_GOLD:  stops = pal_gold;  n = (uint8_t)(sizeof pal_gold / sizeof pal_gold[0]); break;
+        case PAL_PEACH: stops = pal_peach; n = (uint8_t)(sizeof pal_peach / sizeof pal_peach[0]); break;
+        case PAL_TEAL:  stops = pal_teal;  n = (uint8_t)(sizeof pal_teal / sizeof pal_teal[0]); break;
+        case PAL_DUSK:  stops = pal_dusk;  n = (uint8_t)(sizeof pal_dusk / sizeof pal_dusk[0]); break;
+        case PAL_FIRE:  stops = pal_fire;  n = (uint8_t)(sizeof pal_fire / sizeof pal_fire[0]); break;
+        case PAL_ICE:   stops = pal_ice;   n = (uint8_t)(sizeof pal_ice / sizeof pal_ice[0]); break;
+        default: break;
+    }
     for (uint16_t x = 0; x < 256u; x++) {
-        uint8_t xi = (uint8_t)x;
-        int16_t s1 = isin(xi);
-        int16_t s2 = isin((uint8_t)(xi * 2u));
-        int16_t s4 = isin((uint8_t)(xi * 4u));
         uint8_t r, g, b;
-        if (cfg.palette == PAL_SKY) {
-            r = (uint8_t)(175 + (s1 >> 2));
-            g = (uint8_t)(200 + (s2 >> 2));
-            b = (uint8_t)(220 + (s1 >> 2));
-        } else {
-            /* PAL_SUN — soft warm sunny (tileable) */
-            r = (uint8_t)(215 + (s1 >> 2));
-            g = (uint8_t)(175 + (s2 >> 2));
-            b = (uint8_t)(125 + (s4 >> 3));
-        }
+        pal_eval_stops((uint8_t)x, stops, n, &r, &g, &b);
         pal_lut[x] = rgb565(r, g, b);
     }
-    /* Seamless scroll: last sample matches first (sin harmonics already ~close). */
     pal_lut[255] = pal_lut[0];
 }
 
@@ -305,7 +402,7 @@ static void update_sources(uint8_t t) {
 /*
  * Pattern formulas follow Lode's plasma tutorial (sum of sines), adapted to
  * integer LUT + seamless uint8 phase (time coeffs = integer multiples of t).
- * Spatial widths keep multiple fringes on 128 without RGB565 banding stutter.
+ * Spatial widths keep a few soft fringes on 128 without RGB565 banding stutter.
  */
 static uint16_t plasma_at(uint8_t x, uint8_t y, uint8_t t) {
     int16_t dx0 = (int16_t)x - src_cx[0];
@@ -319,50 +416,54 @@ static uint16_t plasma_at(uint8_t x, uint8_t y, uint8_t t) {
 
     int16_t v;
     int16_t denom;
+    /*
+     * Spatial widths ~20–30% longer than the rich pass — fewer concentric
+     * fringes (年轮) while still showing regional structure on 128.
+     */
     switch (cfg.pattern) {
         case PAT_XY:
             /* Classic: sin(x)+sin(y) */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 16u) + t)) +
-                isin((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u)))
+                isin((uint8_t)(lode_phase(x, 20u) + t)) +
+                isin((uint8_t)(lode_phase(y, 20u) + (uint8_t)(t * 2u)))
             );
             denom = 2;
             break;
         case PAT_DIAG:
             /* + diagonal (x+y) term */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 16u) + t)) +
-                isin((uint8_t)(lode_phase(y, 12u) + (uint8_t)(t * 2u))) +
-                isin((uint8_t)(lode_phase((uint16_t)(x + y), 16u) + t))
+                isin((uint8_t)(lode_phase(x, 20u) + t)) +
+                isin((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u))) +
+                isin((uint8_t)(lode_phase((uint16_t)(x + y), 20u) + t))
             );
             denom = 3;
             break;
         case PAT_DIST:
             /* Lode 4-sine: x, y, dist-to-center (drifts), dist-to-corner */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 16u) + t)) +
-                isin((uint8_t)(lode_phase(y, 32u) + (uint8_t)(t * 2u))) +
-                isin((uint8_t)(lode_phase(d0, 14u) + (uint8_t)(t * 3u))) +
-                isin((uint8_t)(lode_phase(d_corner, 12u) + (uint8_t)(t * 2u)))
+                isin((uint8_t)(lode_phase(x, 20u) + t)) +
+                isin((uint8_t)(lode_phase(y, 40u) + (uint8_t)(t * 2u))) +
+                isin((uint8_t)(lode_phase(d0, 18u) + (uint8_t)(t * 3u))) +
+                isin((uint8_t)(lode_phase(d_corner, 16u) + (uint8_t)(t * 2u)))
             );
             denom = 4;
             break;
         case PAT_RINGS:
             /* Dual moving distance centers */
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(d0, 14u) + t)) +
-                isin((uint8_t)(lode_phase(d1, 12u) + (uint8_t)(t * 2u)))
+                isin((uint8_t)(lode_phase(d0, 18u) + t)) +
+                isin((uint8_t)(lode_phase(d1, 16u) + (uint8_t)(t * 2u)))
             );
             denom = 2;
             break;
         case PAT_FULL:
         default:
             v = (int16_t)(
-                isin((uint8_t)(lode_phase(x, 18u) + t)) +
-                isin((uint8_t)(lode_phase(y, 12u) + (uint8_t)(t * 2u))) +
-                isin((uint8_t)(lode_phase((uint16_t)(x + y), 16u) + t)) +
-                isin((uint8_t)(lode_phase(d0, 14u) + (uint8_t)(t * 3u))) +
-                isin((uint8_t)(lode_phase(d1, 12u) + (uint8_t)(t * 2u)))
+                isin((uint8_t)(lode_phase(x, 22u) + t)) +
+                isin((uint8_t)(lode_phase(y, 16u) + (uint8_t)(t * 2u))) +
+                isin((uint8_t)(lode_phase((uint16_t)(x + y), 20u) + t)) +
+                isin((uint8_t)(lode_phase(d0, 18u) + (uint8_t)(t * 3u))) +
+                isin((uint8_t)(lode_phase(d1, 16u) + (uint8_t)(t * 2u)))
             );
             denom = 5;
             break;
@@ -413,6 +514,13 @@ static const app_menu_item_t speed_items[] = {
 static const app_menu_item_t palette_items[] = {
     RADIO("SUN", G_PALETTE, PAL_SUN),
     RADIO("SKY", G_PALETTE, PAL_SKY),
+    RADIO("SOFT", G_PALETTE, PAL_SOFT),
+    RADIO("GOLD", G_PALETTE, PAL_GOLD),
+    RADIO("PEACH", G_PALETTE, PAL_PEACH),
+    RADIO("TEAL", G_PALETTE, PAL_TEAL),
+    RADIO("DUSK", G_PALETTE, PAL_DUSK),
+    RADIO("FIRE", G_PALETTE, PAL_FIRE),
+    RADIO("ICE", G_PALETTE, PAL_ICE),
 };
 static const app_menu_item_t mode_items[] = {
     RADIO("NEAR", G_MODE, MODE_NEAR), RADIO("FULL", G_MODE, MODE_FULL),
@@ -428,7 +536,7 @@ static const app_menu_item_t pattern_items[] = {
 static const app_menu_node_t menu_nodes[] = {
     [N_ROOT]    = { "PLASMA", root_items, 4 },
     [N_SPEED]   = { 0, speed_items, 4 },
-    [N_PALETTE] = { 0, palette_items, 2 },
+    [N_PALETTE] = { 0, palette_items, 9 },
     [N_MODE]    = { 0, mode_items, 2 },
     [N_PATTERN] = { 0, pattern_items, 5 },
 };

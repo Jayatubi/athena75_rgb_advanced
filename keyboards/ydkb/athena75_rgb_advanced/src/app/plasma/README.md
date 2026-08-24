@@ -9,7 +9,7 @@
 
 - **PATTERN** 在几种 Lode 风格场公式间切换（不是换色板）：XY / DIAG / DIST / RINGS / FULL。
 - 时间相位只用 `uint8` 整数倍步进（禁止 `t>>1` 一类半周期陷阱），波源按慢速 Lissajous **每帧**漂移；色板滚动更慢、也连续。
-- 色板仅 **SUN** / **SKY**（默认 SUN）；←→ 在两者间切换。
+- 色板共 9 种（默认 **GOLD**）；←→ 循环切换，LUT 仅在换色板时重建；`pal_lut[255]=pal_lut[0]` 保证滚动无缝。
 
 ## 菜单（Enter）
 
@@ -17,7 +17,7 @@
 |---|---|
 | SPEED | FAST / MED / SLOW / V.SLOW |
 | PATTERN | XY / DIAG / DIST / RINGS / FULL |
-| PALETTE | SUN / SKY |
+| PALETTE | SUN / SKY / SOFT / GOLD / PEACH / TEAL / DUSK / FIRE / ICE |
 | MODE | NEAR / FULL |
 
 ### 场公式（PATTERN）
@@ -34,8 +34,17 @@
 
 | 名 | 说明 |
 |---|---|
-| SUN | 柔和暖阳金（默认） |
-| SKY | 明亮天空柔彩 |
+| SUN | 近黑 → 金 / 琥珀 / 珊瑚 / 玫桃（深底高饱和） |
+| SKY | 深蓝 → 青 → 蔚蓝 → 淡紫 |
+| SOFT | 深玫 / 桃 / 金（柔于 FIRE，不是灰雾） |
+| GOLD | 近黑 → 暖金 / 琥珀（**默认**） |
+| PEACH | 深褐 → 桃 → 杏 → 腮红 / 奶油 |
+| TEAL | 深青绿 → 青 → 海沫 / 薄荷 |
+| DUSK | 近黑紫 → 品红 → 橙夕照 |
+| FIRE | 黑 → 红 → 橙 → 黄 → 白 → 黑（无缝） |
+| ICE | 深蓝 → 青 → 白 → 深蓝 |
+
+索引映射约 1.2× + soft knee；丰富度主要靠色板，不做陡峭拉伸。
 
 ### 渲染模式
 
@@ -49,7 +58,7 @@
 | 键 | 功能 |
 |---|---|
 | ↑ / ↓ | 加快 / 减慢 |
-| ← / → | 换色板（SUN ↔ SKY） |
+| ← / → | 循环换色板 |
 | `-` / `=` | 上一个 / 下一个 PATTERN |
 | Space | 切换 MODE（NEAR ↔ FULL） |
 | Enter | 打开菜单 |
@@ -57,7 +66,7 @@
 
 （`gif` 仍是固件的 OS 输入模式开关，不会进到 app。）
 
-SPEED / PATTERN / PALETTE / MODE 写入 save（version 12）。
+SPEED / PATTERN / PALETTE / MODE 写入 save（version 13）。
 
 ## 构建与更新
 
