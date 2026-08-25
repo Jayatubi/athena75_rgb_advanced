@@ -6,6 +6,7 @@
 #include "config.h"
 #include "app/app.h"
 #include "app_scan.h"
+#include "eeconfig.h"
 #include <string.h>
 
 #ifdef RGB_MATRIX_ENABLE
@@ -15,6 +16,7 @@
 
 #include "sdk/host_api.h"   // app_menu_model_t: an app supplies the menu CONTENT
 
+extern user_eeconfig_t user_eeconfig;
 // The app model reuses the engine's kind/flag numbering and mirrors menu_action_t
 // for the reserved actions, so items need no field translation and menu.c's action
 // switch handles EXIT/REBOOT/BOOTSEL identically for built-in and app menus.
@@ -94,6 +96,9 @@ enum {
     VG_RGB_SPD,  // rgb speed level      [0, RGB_SPD_LEVELS)
     VG_CAPS_COLOR, // capslock indicator colour: index 0..7 (layout options bits[0:2])
     VG_RGB_SCOPE,  // which leds light: 0=both 1=switches 2=underglow (bits[3:5])
+    // Boot autostart: value 0 = launcher, 1..32 = flash slot+1 (user_eeconfig.autostart).
+    // Only SETTINGS' INSTALLED list marks rows with this group (gen_app).
+    VG_AUTOSTART,
 };
 
 #ifdef RGB_MATRIX_ENABLE
@@ -139,6 +144,10 @@ static uint8_t group_get(uint8_t g) {
         case VG_SPEED:     return menu_bind_get_speed();
         case VG_TWEEN:     return menu_bind_get_tween_idx();
         case VG_FT:        return menu_bind_get_ft() ? 1u : 0u;
+        case VG_AUTOSTART: {
+            uint8_t a = user_eeconfig.autostart;
+            return (a >= 1u && a <= APP_SLOT_TOTAL) ? a : 0u;
+        }
 #ifdef RGB_MATRIX_ENABLE
         case VG_RGB_ON:    return app_sys_switch_rgb_get() ? 1u : 0u;
         case VG_RGB_MODE:  return rgb_matrix_get_mode();
@@ -167,6 +176,10 @@ static void group_set(uint8_t g, uint8_t v) {
         case VG_SPEED:     menu_bind_set_speed(v);      break;
         case VG_TWEEN:     menu_bind_set_tween_idx(v);  break;
         case VG_FT:        menu_bind_set_ft(v != 0);    break;
+        case VG_AUTOSTART:
+            user_eeconfig.autostart = (v >= 1u && v <= APP_SLOT_TOTAL) ? v : 0u;
+            eeconfig_update_user(user_eeconfig.raw);
+            break;
 #ifdef RGB_MATRIX_ENABLE
         case VG_RGB_ON:    app_sys_switch_rgb_set(v != 0); break;
         // Selecting an effect also switches the backlight on, per spec.
@@ -458,8 +471,13 @@ static void gen_app(uint8_t idx, menu_item_t *out, char *label) {
     out->id    = (uint16_t)(0x2001u + idx);
     out->label = a->name;       // valid until the next app_scan()
     if (g_app_model) {
+        // SETTINGS INSTALLED: folder into DETAILS/UNINSTALL; Space is a radio
+        // that picks this flash slot as the post-splash autostart target.
         out->kind  = MIK_FOLDER;
         out->child = APP_MENU_CHILD_APP_ITEM;
+        out->flags = MI_RADIO;
+        out->group = VG_AUTOSTART;
+        out->value = (uint8_t)(a->slot + 1u); // 1..32; 0 = none
     } else {
         out->kind  = MIK_ACTION;
         out->value = MA_APP_LAUNCH;
@@ -804,9 +822,18 @@ bool menu_item_has_mark(const menu_item_t *it) {
     return it && (it->flags & MI_MARKED);
 }
 
+// Firmware-owned autostart radios live on APP_MENU_CHILD_APP rows even while an
+// app model (SETTINGS) is bound — they must not round-trip through the app's
+// group_get/set (those ids are app-private).
+static bool item_is_autostart_radio(const menu_item_t *it) {
+    return it && (it->flags & MI_RADIO) && it->group == VG_AUTOSTART;
+}
+
 bool menu_item_selected(const menu_item_t *it) {
     if (!it) return false;
-    if (g_app_model) { // app owns selection state (firmware-owned rows have no mark)
+    if (item_is_autostart_radio(it))
+        return group_get(VG_AUTOSTART) == it->value;
+    if (g_app_model) { // app owns selection state for its own marked rows
         if (!(it->flags & (MI_RADIO | MI_TOGGLE)) || !g_app_model->group_get) return false;
         uint8_t g = g_app_model->group_get(it->group);
         return (it->flags & MI_TOGGLE) ? (g != 0) : (g == it->value);
@@ -818,6 +845,15 @@ bool menu_item_selected(const menu_item_t *it) {
 
 void menu_item_toggle(const menu_item_t *it) {
     if (!it) return;
+    // Autostart is a true radio with clear-on-reselect: Space on the marked app
+    // cancels autostart (back to launcher-after-boot).
+    if (item_is_autostart_radio(it)) {
+        if (group_get(VG_AUTOSTART) == it->value)
+            group_set(VG_AUTOSTART, 0u);
+        else
+            group_set(VG_AUTOSTART, it->value);
+        return;
+    }
     if (g_app_model) {
         if (!g_app_model->group_set) return;
         if (it->flags & MI_TOGGLE) {

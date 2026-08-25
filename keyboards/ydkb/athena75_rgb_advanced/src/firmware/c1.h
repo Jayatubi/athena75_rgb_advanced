@@ -115,6 +115,8 @@ void flash_prompt_request(void);
 // slot save sector (host_api.save_*), so the old anim/matrix bitfields here are
 // gone. Keep lcd_off at bit0 so an existing eeprom word still reads the panel
 // power flag correctly; sleep reuses the next 3 bits (clamp >4 -> 0 = 5 min).
+// autostart: 0 = launcher after splash (fresh-eeprom default), 1..32 = flash
+// slot index + 1. Set from SETTINGS → APP → INSTALLED via Space (radio).
 // GCC packs uint8_t/bool bit-fields into 1-byte containers without straddling.
 typedef union {
     uint32_t raw;
@@ -122,7 +124,7 @@ typedef union {
         bool     lcd_off :1; // bit0: manual LCD power (unchanged position)
         uint8_t  sleep   :3; // 0=5m, 1=1m, 2=10m, 3=15m, 4=never
         uint8_t  _rsv0   :4;
-        uint8_t  _rsv1;
+        uint8_t  autostart;  // 0=off, 1..32 = slot+1
         uint8_t  _rsv2;
         uint8_t  _rsv3;
     };

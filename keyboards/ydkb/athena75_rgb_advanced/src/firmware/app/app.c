@@ -14,6 +14,7 @@
 #include "c1.h"
 #include "menu.h"
 #include "app_upload.h"
+#include "app_scan.h"
 
 #define APP_DT_MAX_MS 200 // clamp the frame delta after a stall / wake
 
@@ -129,7 +130,25 @@ void app_run(void) {
 
 const app_t *app_current(void)     { return cur; }
 bool         app_boot_active(void) { return cur == NULL || cur == &app_boot; }
-void         app_boot_finish(void) { boot_done = true; }
+
+// Splash done: if SETTINGS marked an installed app for autostart, launch it;
+// otherwise the reconciler lands on the OS launcher.
+void app_boot_finish(void) {
+    boot_done = true;
+    uint8_t a = user_eeconfig.autostart;
+    if (a < 1u || a > APP_SLOT_TOTAL) return;
+    uint8_t want = (uint8_t)(a - 1u);
+    app_scan();
+    for (uint8_t i = 0; i < app_scan_count(); i++) {
+        const app_scan_entry_t *e = app_scan_get(i);
+        if (e && e->slot == want) {
+            app_launch_slot(e->base);
+            return;
+        }
+    }
+    // Stale slot (uninstalled / bad header): stay on launcher.
+}
+
 void         app_request_reinit(void) { reinit_req = true; }
 
 // ---- Legacy display-mode radio (firmware fallback menu only) ----------------

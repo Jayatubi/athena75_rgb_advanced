@@ -21,15 +21,17 @@ SETTINGS
 │   └── EFFECT / BRIGHT / HUE / SAT / SPEED / CAPS
 ├── SLEEP        1 / 5 / 10 / 15 分钟 / NEVER（LCD 与 RGB 共用）
 ├── APP
-│   ├── INSTALLED   固件的已装 app 列表（可查看详情、卸载）
+│   ├── INSTALLED   固件的已装 app 列表（可查看详情、卸载；Space 设开机自启）
 │   └── STORAGE     32 个 slot 的占用总览
 ├── LCD TEST     固件的屏幕校准页
 ├── REBOOT       NORMAL / BOOTSEL
 └── SYSTEM       固件构建号与 ABI 版本
 ```
 
-RGB、CapsLock 颜色、SLEEP 属于 QMK 自己的 EEPROM，走 eeconfig，不受 app 存档那套
-「退出时统一落盘」的约束。
+RGB、CapsLock 颜色、SLEEP、以及 INSTALLED 里 Space 选的开机自启 app，都属于 QMK
+自己的 EEPROM（`user_eeconfig`），走 eeconfig，不受 app 存档那套「退出时统一落盘」
+的约束。自启是单选：Space 选中某 app 后下次启动 splash 结束会直接进该 app；再按一次
+同一行则取消，回到 launcher。
 
 ## 构建与安装
 
