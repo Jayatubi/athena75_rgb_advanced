@@ -130,5 +130,9 @@ compile_commands.json
 .clangd/
 .cache/
 
+# Local-only ACE asset sync workflow. It reads private project textures and
+# must never be tracked or committed.
+/.cursor/skills/sync-ace-base-art/
+
 # temp
 zzt_*

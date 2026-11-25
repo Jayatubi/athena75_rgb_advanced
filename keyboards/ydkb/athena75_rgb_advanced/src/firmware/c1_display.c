@@ -6,6 +6,7 @@
 #include "qp_gc9xxx_opcodes.h"
 #include "qp_gc9107_opcodes.h"
 
+#include "gfx/cjk12_font.h"
 #include "gfx/menu_font.h"
 #include "ui.h"
 #include "ui_window.h"
@@ -545,6 +546,17 @@ static const mf_glyph_t *mf_lookup(uint32_t cp) {
     return NULL;
 }
 
+static int16_t cjk12_lookup(uint32_t cp) {
+    int32_t lo = 0, hi = (int32_t)CJK12_COUNT - 1;
+    while (lo <= hi) {
+        int32_t  mid = (lo + hi) >> 1;
+        uint16_t v   = cjk12_codepoints[mid];
+        if (v == cp) return (int16_t)mid;
+        if (v < cp) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+}
+
 // Optional per-draw clip window (software stencil), in window-logical coords.
 // Every ui_* primitive (rects, wires, rings, text) culls to it on top of the
 // virtual-window bounds. Default = whole panel (no-op). Single-threaded on core1,
@@ -574,7 +586,30 @@ static void mf_blit(uint8_t *fb, int16_t x, int16_t y, const char *str, uint16_t
     uint32_t    cp;
     while ((cp = utf8_next(&p)) != 0) {
         const mf_glyph_t *g = mf_lookup(cp);
-        if (!g) continue;
+        if (!g) {
+            int16_t gi = cjk12_lookup(cp);
+            if (gi < 0) continue;
+            const uint8_t *bits = &cjk12_bitmap[(uint32_t)gi * CJK12_GLYPH_BYTES];
+            for (int16_t row = 0; row < CJK12_HEIGHT; row++) {
+                int16_t ly = (int16_t)(y + row);
+                if (ly < 0 || ly >= vscr_h || ly < clip_y0 || ly >= clip_y1) continue;
+                int16_t fy = (int16_t)(vscr_oy + ly);
+                if (fy >= ANIM_SIZE) continue;
+                uint32_t base = (uint32_t)fy * ANIM_SIZE;
+                for (int16_t col = 0; col < CJK12_WIDTH; col++) {
+                    uint32_t bit = (uint32_t)row * CJK12_WIDTH + (uint32_t)col;
+                    if (!(bits[bit >> 3] & (0x80u >> (bit & 7)))) continue;
+                    int16_t lx = (int16_t)(cx + col);
+                    if (lx < 0 || lx >= vscr_w || lx < clip_x0 || lx >= clip_x1) continue;
+                    int16_t fx = (int16_t)(vscr_ox + lx);
+                    if (fx >= ANIM_SIZE) continue;
+                    uint32_t i = base + (uint32_t)fx;
+                    px_wr(fb, i, blend565(px_rd(fb, i), fg, a8));
+                }
+            }
+            cx = (int16_t)(cx + CJK12_WIDTH);
+            continue;
+        }
         const uint8_t *cov = &mf_cov[g->off];
         for (int16_t row = 0; row < MF_LINE_HEIGHT; row++) {
             int16_t        ly   = (int16_t)(y + row);           // logical y (window space)
@@ -619,6 +654,7 @@ int16_t ui_text_width(const char *str) {
     while ((cp = utf8_next(&p)) != 0) {
         const mf_glyph_t *g = mf_lookup(cp);
         if (g) w = (int16_t)(w + MF_ADVANCE); // monospace advance, not ink width
+        else if (cjk12_lookup(cp) >= 0) w = (int16_t)(w + CJK12_WIDTH);
     }
     return w;
 }
