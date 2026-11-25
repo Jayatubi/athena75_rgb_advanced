@@ -9,10 +9,16 @@
 输入可以是:
 
     x.gif                 逐帧连同它自己的帧间隔
-    x.mp4 / .mov / ...    需要 ffmpeg (缺了会说清楚), 按 --fps 抽帧
+    x.mp4 / .mov / ...    需要 ffmpeg (缺了会说清楚); 居中裁方后 lanczos 到
+                          128x128 的 rgb24, 再 RGB565 量化 (可加抖动)
     dir/                  按文件名排序的 PNG/JPG 序列, 按 --fps 定时
     x.png                 单张图, 配 --hold 就是一张静态开机图
                           再加 --fade 500 就是淡入 - 停留 - 淡出
+
+视频不要先压成 128x128 的 H.264 再转: 本工具从片源直出 rgb24→QGF, 少一轮有损。
+可用 --start-frame/--end-frame 按帧号截取 (含两端), 或 --start/--duration 按秒。
+
+RGB888→RGB565 默认有序 Bayer 8×8 抖动 (--dither bayer); 也可用 fs / none。
 
 开机动画区是 4 MiB。整帧 RLE 大约只够 130~2500 帧(取决于画面), 但 delta 帧只存
 变化的矩形, 实拍视频通常能再省一大截。装不下时默认自动降帧率重试, 会把过程打出来。
@@ -48,12 +54,46 @@ def fit(img, mode):
     if mode == "stretch":
         return img.resize((SIZE, SIZE), Image.LANCZOS)
     w, h = img.size
-    scale = max(SIZE / w, SIZE / h) if mode == "cover" else min(SIZE / w, SIZE / h)
+    # cover: 先居中裁成正方形再放大到面板, 与视频路径 crop=ih:ih:... 一致
+    if mode == "cover":
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.convert("RGB").crop((left, top, left + side, top + side))
+        return img.resize((SIZE, SIZE), Image.LANCZOS)
+    scale = min(SIZE / w, SIZE / h)
     nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
     img = img.resize((nw, nh), Image.LANCZOS)
     canvas = Image.new("RGB", (SIZE, SIZE), (0, 0, 0))
     canvas.paste(img.convert("RGB"), ((SIZE - nw) // 2, (SIZE - nh) // 2))
     return canvas
+
+
+def _video_scale_vf(fit_mode):
+    """居中裁方 + lanczos 到 128, 全程 rgb24 (ffmpeg 输出 rawvideo 前仍是高位深滤波)。"""
+    # 对横屏: crop=ih:ih:(iw-ih)/2:0; 竖屏对称用 iw。min 写法两种都覆盖。
+    sq = "crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2"
+    if fit_mode == "cover":
+        return f"{sq},scale={SIZE}:{SIZE}:flags=lanczos"
+    if fit_mode == "contain":
+        return (f"scale={SIZE}:{SIZE}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                f"pad={SIZE}:{SIZE}:(ow-iw)/2:(oh-ih)/2:black")
+    return f"scale={SIZE}:{SIZE}:flags=lanczos"
+
+
+def _probe_fps(ffprobe, path):
+    p = subprocess.run(
+        [ffprobe, "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", path],
+        capture_output=True, text=True)
+    s = (p.stdout or "").strip()
+    if not s or "/" not in s:
+        return 25.0
+    a, b = s.split("/", 1)
+    try:
+        return float(a) / float(b) if float(b) else float(a)
+    except ValueError:
+        return 25.0
 
 
 # ---- 帧来源 ----------------------------------------------------------------
@@ -83,30 +123,53 @@ def frames_from_gif(path, fps, fit_mode):
     return out
 
 
-def frames_from_video(path, fps, fit_mode, start, duration):
-    """ffmpeg 直接吐 128x128 的 rgb24 裸流, 省掉临时文件。"""
+def frames_from_video(path, fps, fit_mode, start, duration, start_frame, end_frame):
+    """ffmpeg 直接吐 128x128 的 rgb24 裸流 (裁方+缩放在滤波链里完成), 不经中间 mp4。"""
     ff = shutil.which("ffmpeg")
     if not ff:
         die("这是视频, 需要 ffmpeg 才能抽帧 (装一个, 或先自己转成 GIF / PNG 序列)")
-    if fit_mode == "cover":
-        vf = f"fps={fps},scale={SIZE}:{SIZE}:force_original_aspect_ratio=increase,crop={SIZE}:{SIZE}"
-    elif fit_mode == "contain":
-        vf = (f"fps={fps},scale={SIZE}:{SIZE}:force_original_aspect_ratio=decrease,"
-              f"pad={SIZE}:{SIZE}:(ow-iw)/2:(oh-ih)/2:black")
+    ffprobe = shutil.which("ffprobe") or ff.replace("ffmpeg", "ffprobe")
+    scale = _video_scale_vf(fit_mode)
+    native_fps = _probe_fps(ffprobe, path) if os.path.isfile(ffprobe) else 25.0
+
+    filters = []
+    use_native = False
+    if start_frame is not None or end_frame is not None:
+        a = 0 if start_frame is None else int(start_frame)
+        b = 10 ** 9 if end_frame is None else int(end_frame)
+        if b < a:
+            die(f"--end-frame ({b}) < --start-frame ({a})")
+        filters.append(f"select=between(n\\,{a}\\,{b})")
+        filters.append(f"setpts=N/{native_fps}/TB")
+        use_native = not fps
+    if fps and not use_native:
+        filters.append(f"fps={fps}")
+    elif use_native:
+        pass
     else:
-        vf = f"fps={fps},scale={SIZE}:{SIZE}"
+        fps = fps or 20
+        filters.append(f"fps={fps}")
+    filters.append(scale)
+    vf = ",".join(filters)
+
+    out_fps = native_fps if use_native else (fps or 20)
+    delay = max(1, int(round(1000.0 / out_fps)))
+
     cmd = [ff, "-v", "error", "-nostdin"]
-    if start:
-        cmd += ["-ss", str(start)]
-    cmd += ["-i", path]
-    if duration:
-        cmd += ["-t", str(duration)]
+    # 按帧截取时不要 -ss/-t (时间裁剪会偏), 交给 select=
+    if start_frame is None and end_frame is None:
+        if start:
+            cmd += ["-ss", str(start)]
+        cmd += ["-i", path]
+        if duration:
+            cmd += ["-t", str(duration)]
+    else:
+        cmd += ["-i", path]
     cmd += ["-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
 
     from PIL import Image
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     need = SIZE * SIZE * 3
-    delay = int(round(1000.0 / fps))
     out = []
     while True:
         buf = p.stdout.read(need)
@@ -139,7 +202,9 @@ def collect(args):
     if ext == ".gif":
         return frames_from_gif(src, args.fps, args.fit)
     if ext in VIDEO_EXT:
-        return frames_from_video(src, args.fps or 20, args.fit, args.start, args.duration)
+        return frames_from_video(
+            src, args.fps, args.fit, args.start, args.duration,
+            args.start_frame, args.end_frame)
     if ext in IMAGE_EXT:
         from PIL import Image
         return [(fit(Image.open(src), args.fit), args.hold)]
@@ -168,6 +233,14 @@ def fade(frames, ms_in, ms_out, step):
     return head + frames + tail
 
 
+def end_hold(frames, ms):
+    """把末帧时长加长 ms (停留后再淡出)。"""
+    if ms <= 0:
+        return frames
+    img, d = frames[-1]
+    return frames[:-1] + [(img, d + int(ms))]
+
+
 def trim(frames, start, duration):
     """GIF / PNG 序列的裁剪 (视频的裁剪交给 ffmpeg 自己做, 更快)。"""
     if not start and not duration:
@@ -183,9 +256,21 @@ def trim(frames, start, duration):
     return out
 
 
+def trim_frames(frames, start_frame, end_frame):
+    """按帧号截取 (含两端); 用于 GIF / 图片序列。"""
+    if start_frame is None and end_frame is None:
+        return frames
+    a = 0 if start_frame is None else int(start_frame)
+    b = len(frames) - 1 if end_frame is None else int(end_frame)
+    out = frames[a:b + 1]
+    if not out:
+        die("按帧裁剪之后一帧都不剩")
+    return out
+
+
 def build(frames, args, verbose):
     """量化 + 编码, 返回 (qgf 字节, 统计)。"""
-    px = [(qgf_build.to_rgb565(img), d) for img, d in frames]
+    px = [(qgf_build.to_rgb565(img, dither=args.dither), d) for img, d in frames]
     kinds = {}
 
     def note(i, kind, n):
@@ -208,17 +293,27 @@ def main():
     ap.add_argument("--uf2", nargs="?", const="", metavar="PATH",
                     help="同时写一个烧到 boot 区的 UF2 (不给路径就与 QGF 同名)")
     ap.add_argument("--fps", type=float, default=0,
-                    help="重采样帧率; GIF 默认沿用自带时序, 视频/序列默认 20")
+                    help="重采样帧率; GIF 默认沿用自带时序; "
+                         "视频在 --start-frame/--end-frame 下默认片源帧率, 否则默认 20")
     ap.add_argument("--hold", type=int, default=1500,
                     help="单张图停留的毫秒数 (默认 1500)")
+    ap.add_argument("--end-hold", type=int, default=0, metavar="MS",
+                    help="末帧额外停留毫秒数 (常与 --fade-out 连用)")
     ap.add_argument("--fade", type=int, default=0, metavar="MS",
                     help="头尾各加这么多毫秒的淡入淡出 (等于同时给 --fade-in/--fade-out)")
     ap.add_argument("--fade-in", type=int, default=-1, metavar="MS", help="淡入毫秒数")
     ap.add_argument("--fade-out", type=int, default=-1, metavar="MS", help="淡出毫秒数")
     ap.add_argument("--fit", choices=["cover", "contain", "stretch"], default="cover",
-                    help="cover=填满裁边(默认) / contain=整幅补黑边 / stretch=拉伸")
+                    help="cover=居中裁方填满(默认) / contain=整幅补黑边 / stretch=拉伸")
+    ap.add_argument("--dither", choices=["bayer", "fs", "none"], default="bayer",
+                    help="RGB888→RGB565 抖动: bayer=有序8x8(默认, 动画友好); "
+                         "fs=Floyd-Steinberg(更匀但可能闪); none=直接截断")
     ap.add_argument("--start", type=float, default=0, help="从第几秒开始")
     ap.add_argument("--duration", type=float, default=0, help="取多少秒")
+    ap.add_argument("--start-frame", type=int, default=None, metavar="N",
+                    help="从第 N 帧开始 (含; 视频走 ffmpeg select, 0-based)")
+    ap.add_argument("--end-frame", type=int, default=None, metavar="N",
+                    help="到第 N 帧结束 (含)")
     ap.add_argument("--max-bytes", type=int, default=BOOT_BYTES,
                     help=f"体积上限 (默认 {BOOT_BYTES} = 整个 boot 区)")
     ap.add_argument("--no-fit-budget", action="store_true",
@@ -237,7 +332,13 @@ def main():
     by_ffmpeg = not os.path.isdir(args.input) and ext in VIDEO_EXT and ext != ".gif"
     frames = collect(args)
     if not by_ffmpeg:                       # 视频的裁剪已经由 ffmpeg 做过了
-        frames = trim(frames, args.start, args.duration)
+        frames = trim_frames(frames, args.start_frame, args.end_frame)
+        if args.start_frame is None and args.end_frame is None:
+            frames = trim(frames, args.start, args.duration)
+
+    if args.end_hold:
+        frames = end_hold(frames, args.end_hold)
+        print(f">> 末帧额外停留 {args.end_hold} ms")
 
     ms_in = args.fade if args.fade_in < 0 else args.fade_in
     ms_out = args.fade if args.fade_out < 0 else args.fade_out
@@ -247,7 +348,8 @@ def main():
         print(f">> 淡入 {ms_in} ms / 淡出 {ms_out} ms, 每 {step} ms 一帧")
 
     total_ms = sum(d for _, d in frames)
-    print(f">> {len(frames)} 帧, {total_ms / 1000:.2f} s, {SIZE}x{SIZE} ({args.fit})")
+    print(f">> {len(frames)} 帧, {total_ms / 1000:.2f} s, {SIZE}x{SIZE} "
+          f"({args.fit}, dither={args.dither})")
 
     qgf, kinds = build(frames, args, args.verbose)
     # 装不下就抽帧: 每一轮丢掉一半, 并把时长补回留下的帧, 播放速度不变。
@@ -265,6 +367,7 @@ def main():
             f"(试试 --fps 更低 / --duration 更短)")
 
     out = args.out or os.path.splitext(args.input)[0].rstrip(os.sep) + ".qgf"
+    os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
     with open(out, "wb") as f:
         f.write(qgf)
 
