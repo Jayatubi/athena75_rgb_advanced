@@ -51,6 +51,9 @@ static THD_FUNCTION(c1_main_task_wrapper, arg)
 void c1_main_task(void)
 {
 #ifdef QUANTUM_PAINTER_ENABLE
+    // USB callbacks run on core0 and only publish a desired power state.
+    // Reconcile it here before deciding whether rendering may continue.
+    lcd_usb_power_task_core1();
     if (lcd_is_on()) {
         qp_internal_task();
         display_task_user();

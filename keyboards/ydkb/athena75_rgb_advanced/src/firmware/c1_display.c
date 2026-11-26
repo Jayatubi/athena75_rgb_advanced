@@ -36,6 +36,10 @@ painter_device_t display;
 static bool now_lcd_off = 0;
 static volatile bool lcd_idle_off = 0; // transient idle auto-sleep state (not persisted)
 static volatile bool lcd_usb_off  = 0; // transient USB suspend / offline (not persisted)
+// Written by USB callbacks on core0, consumed by lcd_usb_power_task_core1().
+// Keeping the actual QP/SPI transition on core1 prevents both cores from driving
+// the display bus at once during the rapid suspend/reset cycles of a host reboot.
+static volatile bool lcd_usb_sleep_requested = false;
 static volatile uint32_t lcd_idle_wake_grace_until = 0; // block re-sleep briefly after wake
 static volatile bool c1_idle_policy_armed = false; // false until boot splash / persisted LCD apply
 static volatile uint8_t lcd_sleep_code = 0; // 0=5m default, 1=1m, 2=10m, 3=15m, 4=never
@@ -265,25 +269,40 @@ void c1_lcd_apply_persisted(void) {
     c1_idle_policy_armed = true;
 }
 
-// USB suspend / host sleep / cable unplug: hard-off like idle countdown (BL + panel).
+// USB callbacks run on core0. They only publish the desired state; core1 owns
+// every QP/SPI operation and performs the transition at a display-task boundary.
 void lcd_usb_sleep_enter(void) {
-    lcd_backlight_set(false);
-    if (user_eeconfig.lcd_off) return;
-    if (!lcd_usb_off) {
-        lcd_usb_off = true;
-        if (!lcd_idle_off) lcd_panel_apply_hard_off();
-    }
-    lcd_backlight_set(false);
+    lcd_usb_sleep_requested = true;
 }
 
 void lcd_usb_sleep_leave(void) {
-    if (!lcd_usb_off) return;
-    lcd_usb_off = false;
-    if (user_eeconfig.lcd_off || lcd_idle_off) {
+    lcd_usb_sleep_requested = false;
+}
+
+void lcd_usb_power_task_core1(void) {
+    if (lcd_usb_sleep_requested) {
+        if (!lcd_usb_off) {
+            // Publish the off state before touching the panel so the compositor
+            // remains stopped for the whole shutdown transaction.
+            lcd_usb_off = true;
+            if (!user_eeconfig.lcd_off && !lcd_idle_off) {
+                lcd_panel_apply_hard_off();
+            }
+        }
         lcd_backlight_set(false);
         return;
     }
-    lcd_switch(true);
+
+    if (!lcd_usb_off) return;
+
+    // Keep lcd_usb_off asserted until reinitialisation and the black wake frame
+    // are complete. This prevents rendering from interleaving with qp_init().
+    if (!user_eeconfig.lcd_off && !lcd_idle_off) {
+        lcd_switch(true);
+    } else {
+        lcd_backlight_set(false);
+    }
+    lcd_usb_off = false;
 }
 
 #ifdef LCD_IDLE_TIMEOUT

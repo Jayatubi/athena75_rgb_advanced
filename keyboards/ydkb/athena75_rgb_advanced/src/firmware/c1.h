@@ -15,9 +15,11 @@ bool lcd_is_on(void);
 bool lcd_idle_panel_asleep(void);
 bool lcd_transient_panel_asleep(void);
 
-// USB suspend / unplug (core0): same hard-off as idle countdown (backlight + panel).
+// USB callbacks on core0 only publish the desired state. Core1 consumes it at a
+// display-task boundary so QP/SPI is never driven concurrently by both cores.
 void lcd_usb_sleep_enter(void);
 void lcd_usb_sleep_leave(void);
+void lcd_usb_power_task_core1(void);
 bool c1_lcd_auto_sleep_armed(void);
 
 // Call when idle auto-sleep wakes the panel (core1): resets the shared idle
